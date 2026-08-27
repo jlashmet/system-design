@@ -1,9 +1,0 @@
-spring:
-  application:
-    name: ticketmaster
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info

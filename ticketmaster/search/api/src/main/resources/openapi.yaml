@@ -1,0 +1,20 @@
+openapi: 3.1.0
+info:
+  title: Ticketmaster Search API
+  version: 0.0.1
+paths:
+  /events/search:
+    get:
+      summary: Search events
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: city
+          schema: { type: string }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        '200': { description: Search results }

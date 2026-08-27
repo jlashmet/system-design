@@ -1,0 +1,16 @@
+openapi: 3.1.0
+info:
+  title: Ticketmaster Events API
+  version: 0.0.1
+paths:
+  /events/{eventId}:
+    get:
+      summary: Get event details
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Event details }
+        '404': { description: Event not found }

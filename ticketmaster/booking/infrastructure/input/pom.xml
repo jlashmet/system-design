@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
+    <artifactId>booking-infrastructure-input</artifactId>
+    <dependencies>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-api</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-domain</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-application</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-common</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+    </dependencies>
+</project>

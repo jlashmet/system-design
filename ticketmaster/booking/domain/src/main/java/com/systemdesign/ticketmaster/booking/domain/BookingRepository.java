@@ -1,0 +1,12 @@
+package com.systemdesign.ticketmaster.booking.domain;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+
+public interface BookingRepository {
+    Optional<Booking> findById(BookingId bookingId);
+    Optional<Booking> findByCheckoutIdempotencyKey(String idempotencyKey);
+    void savePaymentIntent(Booking booking);
+    List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit);
+}

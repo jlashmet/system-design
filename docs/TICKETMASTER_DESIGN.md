@@ -1,6 +1,6 @@
 # Ticketmaster System Design
 
-This document captures the Ticketmaster system-design discussion and decisions made so far. It is intentionally interview-focused: requirements first, then the architectural consequences and tradeoffs.
+This document captures the Ticketmaster system-design discussion and the decisions made so far. It is intentionally interview-focused: requirements first, then the architectural consequences and tradeoffs.
 
 ## Scope
 
@@ -32,6 +32,101 @@ This document captures the Ticketmaster system-design discussion and decisions m
 - Search and seat-map views may be slightly stale.
 - The authoritative hold operation must be strongly consistent.
 - A user should hold all requested seats or none of them; partial fulfillment is not assumed.
+- Waiting-room ordering only needs to be approximately fair. We do not require a globally exact real-world arrival order.
+
+## High-Level Architecture
+
+```text
+                              +------------------+
+                              | CDN / CloudFront |
+                              +--------+---------+
+                                       |
+                                       v
++---------+                  +---------+----------+
+| Client  |----------------->| Ticketmaster APIs |
++---------+                  +---------+----------+
+                                       |
+              +------------------------+-------------------------+
+              |                        |                         |
+              v                        v                         v
+       Event / Search             Waiting Room             Holds / Booking
+              |                        |                         |
+        +-----+-----+                  |                         v
+        |           |                  |                Authoritative Seat
+        v           v                  |                Inventory - DynamoDB
+    DynamoDB    OpenSearch             |                         |
+   metadata      search                |                         v
+                                       |                    Payment Provider
+                                       |
+                                       v
+                              Seat Map Read Model
+                                  DynamoDB
+```
+
+The system separates highly available read paths from the consistency-sensitive booking path. Read-side data may be eventually consistent; authoritative seat acquisition may not.
+
+## Event Metadata: DynamoDB
+
+Canonical event and venue metadata lives in DynamoDB. The access patterns are simple and key-oriented, and introducing a relational database solely for this metadata does not buy us enough to justify another datastore.
+
+Example:
+
+```text
+Event
+-----
+PK = EVENT#123
+name
+venueId
+startsAt
+category
+status
+description
+```
+
+Physical venue data such as sections and seat geometry can also be stored in DynamoDB using access-pattern-oriented keys.
+
+Changes to event metadata asynchronously update OpenSearch.
+
+```text
+Event DynamoDB
+      |
+      | change/event
+      v
+ OpenSearch
+```
+
+DynamoDB is the source of truth; OpenSearch is the search projection.
+
+## Search Technology: OpenSearch
+
+OpenSearch handles event discovery because search requires text search, filtering, high read throughput, and low latency while tolerating eventual consistency.
+
+A search document can be denormalized around fields such as:
+
+```text
+eventId
+name
+performers
+venue
+city
+startsAt
+category
+```
+
+Search results are not authoritative for inventory availability.
+
+## CDN Usage
+
+A CDN such as CloudFront sits in front of highly cacheable content and removes read load before requests reach the application tier.
+
+Good CDN candidates include:
+
+- event images and other static assets;
+- venue maps and static seat-map geometry;
+- event-detail responses when their cacheability permits it;
+- frontend application assets.
+
+Live seat availability is not treated as authoritative CDN data. The seat-map DynamoDB projection already serves as the intentionally stale read model, while the authoritative inventory table decides whether a hold succeeds.
 
 ## Seat Hold Model
 
@@ -55,88 +150,32 @@ A seat that is actively held cannot be held or booked by another user.
 
 ### Expiration Semantics
 
-Correctness does not depend on a background cleanup job running exactly on time. The inventory item contains an expiration timestamp.
+Correctness does not require an expiration cleanup worker.
 
-A seat is logically claimable when either:
+The inventory item contains an expiration timestamp. A seat is logically claimable when either:
 
 - its status is `AVAILABLE`, or
 - its status is `HELD` and `holdExpiresAt <= now`.
 
-A background expiration process may later clean up expired holds and return their stored status to `AVAILABLE`, but that process is housekeeping rather than the correctness mechanism.
+Conceptually:
+
+```text
+if status == AVAILABLE
+   OR (status == HELD AND holdExpiresAt <= now)
+then
+   acquire seat
+else
+   reject
+```
+
+An expired `HELD` value may remain stored indefinitely without preventing the seat from being reclaimed. DynamoDB TTL can optionally remove old hold/workflow records later for storage housekeeping, but TTL or a cleanup process is not part of the correctness mechanism.
 
 Both the hold and the inventory item may contain the expiration time. This is deliberate denormalization:
 
 - the `Hold` owns the checkout workflow and grouping of seats;
 - the inventory item contains enough information to make an atomic availability decision without consulting another record.
 
-## Waiting Room / Admission Control
-
-A popular event creates a hot-event problem: millions of users may simultaneously target the same inventory pool. We do not want all of those users reaching the consistency-sensitive booking path.
-
-A per-event waiting room provides admission control:
-
-```text
-10M interested users
-        |
-        v
-  Waiting Room
-        |
-        | controlled admission
-        v
- Active shoppers
-        |
-        v
- Seat hold / booking path
-```
-
-The waiting room is not the mechanism that prevents double booking. Its job is to protect downstream capacity and reduce contention. The inventory store still provides the authoritative concurrency control.
-
-Important properties:
-
-- admission can be enabled for individual hot events rather than the entire site;
-- queue position may be approximate;
-- admission itself must be authoritative;
-- an admitted user receives a short-lived admission token;
-- admission rate can be reduced when downstream latency, saturation, or error rates rise and increased when capacity is healthy.
-
-## High-Level Architecture
-
-```text
-                         +----------------+
-                         |   Waiting Room |
-                         +--------+-------+
-                                  |
-                                  v
-+---------+       +---------------+---------------+
-| Client  |------>|       Ticketmaster APIs       |
-+---------+       +---------------+---------------+
-                                  |
-             +--------------------+--------------------+
-             |                    |                    |
-             v                    v                    v
-        Event Reads           Search             Holds/Booking
-             |                    |                    |
-             v                    v                    v
-        Read Models          OpenSearch       Authoritative
-                                              Seat Inventory
-```
-
-The system separates read models from the authoritative booking model. Read-side data is allowed to be eventually consistent; the hold operation is not.
-
 ## Core Data Model
-
-### Event
-
-```text
-Event
------
-eventId
-name
-venueId
-startsAt
-category
-status
-```
 
 ### Seat
 
@@ -178,8 +217,9 @@ Hold
 holdId
 userId
 eventId
-status              ACTIVE | EXPIRED | CONVERTED
+status              ACTIVE | CHECKOUT_IN_PROGRESS | CONVERTED
 expiresAt
+checkoutExpiresAt   nullable
 createdAt
 seatIds
 ```
@@ -196,9 +236,173 @@ userId
 eventId
 holdId
 status              PENDING_PAYMENT | CONFIRMED | FAILED
+paymentIntentId      nullable
+nextReconcileAt      nullable
+reconcileShard       nullable
 totalAmount
 createdAt
 ```
+
+## Authoritative Seat Inventory: DynamoDB
+
+The authoritative inventory table is designed around exact event-seat acquisition rather than whole-event queries.
+
+### Avoid This Partition Key
+
+```text
+PK = EVENT#123
+SK = SEAT#A10
+```
+
+For a very popular event, every authoritative seat operation would use the same partition-key value, creating an undesirable hot-key pattern.
+
+### Current Authoritative Key
+
+Give each event-seat its own distributed key:
+
+```text
+PK = EVENT#123#SEAT#A10
+PK = EVENT#123#SEAT#A11
+PK = EVENT#123#SEAT#A12
+```
+
+Conceptually the key is derived from both `eventId` and `seatId`.
+
+The primary access pattern is:
+
+> Given an event and a seat, can this seat be atomically acquired?
+
+### Atomic Seat Acquisition
+
+A seat claim uses a conditional write. It succeeds only when the seat is currently available or its previous hold has expired.
+
+If two users compete for the same seat, only one conditional write succeeds.
+
+### Multi-Seat Holds
+
+A user commonly selects several seats. Because those items may be distributed across different DynamoDB partition keys, the hold uses a DynamoDB transactional write so that all seat claims succeed or none do.
+
+Typical purchases contain only a small number of seats, so this is a bounded multi-item transaction rather than a transaction over an entire venue.
+
+## Seat Map Read Model: Second DynamoDB Table
+
+Redis is not required for the seat-map availability path.
+
+Use a separate DynamoDB table whose key design is optimized for reading a section of an event.
+
+```text
+SeatMapBySection
+----------------
+PK = EVENT#123#SECTION#101
+SK = SEAT#A10
+status
+price
+row
+number
+```
+
+The two DynamoDB tables have different responsibilities:
+
+```text
+AuthoritativeSeatInventory
+    source of truth
+    optimized for seat-level conditional writes
+
+SeatMapBySection
+    eventually consistent projection
+    optimized for section-level queries
+```
+
+The UI reads the seat-map projection. If it displays A10 as available but another user has already acquired A10, the authoritative hold request fails and the UI refreshes.
+
+This is an intentional consistency tradeoff.
+
+### Keeping the Projection Updated
+
+```text
+AuthoritativeSeatInventory
+          |
+          | DynamoDB Streams
+          v
+   Projection Consumer
+          |
+          v
+    SeatMapBySection
+```
+
+Projection delay or temporary failure is acceptable. It may make the UI stale, but it cannot cause double booking because every hold is checked against authoritative inventory.
+
+The projection can be rebuilt from durable inventory state if necessary.
+
+## Waiting Room / Admission Control
+
+The waiting room is not required for inventory correctness. Its purpose is to protect the rest of the system during extreme flash crowds and to control how many users can actively compete for seats.
+
+It can be enabled only for sufficiently hot events.
+
+### No Physical Queue Required
+
+We do not require exact FIFO ordering, so we do not need SQS, Kafka, or a globally serialized sequence number.
+
+Each waiting user gets a server-assigned wall-clock timestamp and a separately keyed DynamoDB item:
+
+```text
+WaitingRoomUser
+---------------
+PK = EVENT#123#USER#456
+joinedAt = 2026-08-27T21:00:03.482931Z
+```
+
+The timestamp must be assigned by our server, not the browser. `System.nanoTime()` is not suitable because values from different JVMs cannot be compared globally.
+
+Each event maintains a small admission record:
+
+```text
+EventAdmission
+--------------
+PK = EVENT#123
+admittedThrough = 2026-08-27T21:00:02.750000Z
+```
+
+Admission is simply:
+
+```text
+user.joinedAt <= event.admittedThrough
+```
+
+This gives approximately arrival-ordered admission without maintaining a physical queue or sequence generator. Requests arriving on different servers within a very small clock-skew window may be reordered, which is acceptable for this design.
+
+### Controlling Admission Rate
+
+We deliberately do not maintain a histogram or exact count of users between timestamps.
+
+Instead, the admission controller advances `admittedThrough` conservatively and uses downstream health as feedback.
+
+Useful signals include:
+
+- active admitted shoppers;
+- hold-request rate and latency;
+- conditional-write failure/error rate;
+- DynamoDB throttling/saturation;
+- payment-provider latency and error rate;
+- application/API saturation.
+
+Conceptually:
+
+```text
+healthy downstream
+    -> advance admittedThrough faster
+
+near capacity
+    -> advance slowly or hold steady
+
+overloaded
+    -> stop advancing
+```
+
+Small, frequent watermark movements reduce the risk of admitting a large burst at once. The tradeoff is that admission rate is approximate rather than exact.
+
+An admitted user receives a short-lived admission token so the booking APIs can verify that the user was admitted without repeatedly performing complex queue logic.
 
 ## APIs Discussed
 
@@ -216,11 +420,9 @@ Event detail reads are highly cacheable/eventually consistent and are not the au
 GET /events/search?q=taylor&city=los-angeles&from=...&to=...
 ```
 
-Search results can lag the transactional data. Search is not authoritative for whether a seat can actually be acquired.
+Search results can lag DynamoDB. Search is not authoritative for whether a seat can actually be acquired.
 
 ### View Seat Map
-
-Rather than always returning every seat with event details, load availability at a section level.
 
 ```http
 GET /events/{eventId}/sections
@@ -251,208 +453,190 @@ The operation is all-or-nothing. If any requested seat cannot be acquired, the h
 POST /holds/{holdId}/checkout
 ```
 
-Checkout should use an idempotency key so retries do not charge the customer twice or create duplicate bookings.
+Checkout uses an idempotency key so retries do not create duplicate booking/payment workflows.
 
-## Search Technology: OpenSearch
+## Checkout and Payment Workflow
 
-OpenSearch is the current choice for event discovery because search requires text search, filtering, high read throughput, and low latency while tolerating eventual consistency.
+Payment is an external system and cannot participate in the same ACID transaction as DynamoDB. Checkout is therefore a durable, recoverable workflow.
 
-A search document can be denormalized around fields such as:
+### Start Checkout
 
-```text
-eventId
-name
-performers
-venue
-city
-startsAt
-category
-```
-
-The search index is a projection, not the system of record.
-
-## Seat Inventory: DynamoDB Direction
-
-We debated PostgreSQL versus DynamoDB for the consistency-sensitive seat inventory.
-
-PostgreSQL provides a simple transactional model for row-level claims and multi-seat transactions, but it does not inherently remove hot-event contention. Many competing requests for the same logical seat still serialize somewhere, regardless of database technology.
-
-The current direction is DynamoDB because we can distribute authoritative event-seat items across partition keys rather than placing every seat for an event behind one `eventId` partition key.
-
-### Avoid This Partition Key
+When the user begins checkout, atomically transition the hold into checkout and create a pending booking before money can move.
 
 ```text
-PK = EVENT#123
-SK = SEAT#A10
+DynamoDB transaction
+--------------------
+Hold: ACTIVE -> CHECKOUT_IN_PROGRESS
+Booking: create PENDING_PAYMENT
+Seats: remain reserved for the checkout window
 ```
 
-For a very popular event, every authoritative seat operation would use the same partition-key value, creating an undesirable hot-key pattern.
+Once checkout has started, the normal short seat-hold expiration must not expire underneath an in-flight payment. `CHECKOUT_IN_PROGRESS` uses its own bounded checkout deadline.
 
-### Current Authoritative Key Direction
+### Payment Intent Lifecycle
 
-Give each event-seat a distributed key:
+The intended flow is:
 
 ```text
-PK = EVENT#123#SEAT#A10
-PK = EVENT#123#SEAT#A11
-PK = EVENT#123#SEAT#A12
+1. Create Booking(PENDING_PAYMENT)
+2. Create Payment Intent at provider
+3. Persist paymentIntentId on Booking
+4. Confirm / execute Payment Intent
+5. Learn final provider status
+6. Finalize booking
 ```
 
-Conceptually the key is derived from both `eventId` and `seatId`.
+Creating the intent does not mean the customer has been charged. If checkout is abandoned before confirmation, the unused intent can follow the provider's normal expiration/cancellation lifecycle.
 
-This optimizes the authoritative table around its primary access pattern:
+Creating the payment intent should use the `bookingId` as an idempotency key where the provider supports it. This closes the crash window in which the provider creates the intent but our service fails before persisting its ID: retrying the create operation recovers the same intent instead of creating a second one.
 
-> Given an event and a seat, can this seat be atomically acquired?
+### Finalizing a Successful Payment
 
-The authoritative table does not need to be optimized for returning every seat in an event.
-
-### Atomic Seat Acquisition
-
-A seat claim uses a conditional write. It succeeds only when the seat is currently available or its previous hold has expired.
-
-Conceptually:
+Once the provider reports success, finalize our internal state idempotently:
 
 ```text
-if status == AVAILABLE
-   OR (status == HELD AND holdExpiresAt <= now)
-then
-   set status = HELD
-   set holdId
-   set holdExpiresAt
-else
-   fail
+DynamoDB transaction
+--------------------
+Booking: PENDING_PAYMENT -> CONFIRMED
+Hold: CHECKOUT_IN_PROGRESS -> CONVERTED
+Seats: HELD -> BOOKED
 ```
 
-If two users compete for the same seat, only one conditional write succeeds.
+If payment fails or is canceled, mark the booking failed and allow the seats to become available again.
 
-### Multi-Seat Holds
+The same idempotent finalization logic is shared by the synchronous payment path, payment webhooks, and reconciliation workers so races between them are safe.
 
-A user commonly selects several seats. Because those items may be distributed across different DynamoDB partition keys, the hold must use a DynamoDB transactional write so that all seat claims succeed or none do.
+### Payment Reconciliation
 
-Typical purchases contain only a small number of seats, so this is a bounded multi-item transaction rather than a transaction over an entire venue.
-
-## Seat Map Read Model: Second DynamoDB Table
-
-We do not currently need Redis for the seat map.
-
-Instead, use a separate DynamoDB table whose key design is optimized for reading a section of an event.
+A failure can occur after the provider successfully completes payment but before our database is marked `CONFIRMED`.
 
 Example:
 
 ```text
-SeatMapBySection
-----------------
-PK = EVENT#123#SECTION#101
-SK = SEAT#A10
-status
-price
-row
-number
+Payment Intent = SUCCEEDED
+        |
+        X application failure
+        |
+Booking remains PENDING_PAYMENT
 ```
 
-The two DynamoDB tables have different responsibilities:
+Therefore pending bookings must be queryable without scanning the entire Booking table.
+
+Use a sparse/sharded reconciliation GSI:
 
 ```text
-AuthoritativeSeatInventory
-    source of truth
-    optimized for seat-level conditional writes
+Booking
+-------
+status = PENDING_PAYMENT
+paymentIntentId = PI789
+nextReconcileAt = ...
+reconcileShard = hash(bookingId) % N
 
-SeatMapBySection
-    eventually consistent projection
-    optimized for section-level queries
+GSI PaymentReconciliation
+-------------------------
+PK = reconcileShard
+SK = nextReconcileAt#bookingId
 ```
 
-The UI reads the seat-map projection. If it displays A10 as available but another user has already acquired A10, the authoritative hold request fails and the UI refreshes.
-
-This is an intentional consistency tradeoff.
-
-## Keeping the Read Projection Updated
-
-A natural DynamoDB-native design is:
+Reconciliation workers query due items across the bounded set of shards, retrieve the authoritative payment status from the provider, and converge our state:
 
 ```text
-AuthoritativeSeatInventory
-          |
-          | DynamoDB Streams
-          v
-   Projection Consumer
-          |
-          v
-    SeatMapBySection
+provider = SUCCEEDED
+    -> finalize booking
+
+provider = FAILED / CANCELED
+    -> mark failed and release seats
+
+provider = PROCESSING / PENDING
+    -> reschedule reconciliation
 ```
 
-When a seat transitions from `AVAILABLE` to `HELD`, `HELD` to `BOOKED`, or an expired hold is reclaimed, the stream drives the eventually consistent read projection.
+Once a booking reaches a terminal state, remove the sparse-index attributes so it naturally disappears from the reconciliation index.
 
-The projection is not authoritative and can be rebuilt from durable state if necessary.
+The normal path remains webhook/synchronous completion; reconciliation is the recovery path for missed or ambiguous outcomes.
 
-## Expired Hold Cleanup
+## Multi-Region Strategy
 
-Although expired seats are logically claimable based on `holdExpiresAt`, a background process should still clean old state.
+The read side can be highly available across regions, but the authoritative inventory path favors consistency over availability.
 
-Its responsibilities include:
+### Active-Active Read Paths
 
-- marking expired `Hold` records as `EXPIRED`;
-- clearing stale `holdId` / expiration metadata where useful;
-- updating the read projection through the normal stream/change path.
+Multiple regions may independently serve:
 
-Failure or delay of this process must not prevent an expired seat from being acquired.
+- CDN-backed content;
+- event metadata reads;
+- OpenSearch queries;
+- seat-map projection reads;
+- waiting-room checks.
 
-## Payment / Booking Workflow
+These paths tolerate eventual consistency.
 
-Payment cannot participate in the same ACID transaction as the inventory database, so checkout is a recoverable workflow rather than a distributed database transaction.
+### Single Writer per Event for Booking
+
+Do not allow two regions to independently mutate authoritative inventory for the same event.
+
+Each event has a home booking region:
 
 ```text
-ACTIVE HOLD
-    |
-    v
-create Booking(PENDING_PAYMENT)
-    |
-    v
-call payment provider
-    |
-    +----------------+
-    |                |
- success           failure
-    |                |
-    v                v
-CONFIRMED          FAILED
-    |                |
-    v                v
-seats BOOKED      release hold
+EVENT#123 -> us-west-2
+EVENT#456 -> us-east-1
 ```
 
-Retries must be idempotent, and reconciliation is needed for ambiguous external payment outcomes.
+All authoritative operations for a given event route to that event's home region:
 
-The price should be captured at hold time so checkout uses the price the user selected rather than a subsequently changed value.
+- acquire/hold seats;
+- release/reclaim seats;
+- begin checkout;
+- convert seats to booked.
+
+Different events may have different home regions, distributing system-wide load without introducing concurrent writers for the same inventory.
+
+```text
+Event A -> West
+Event B -> East
+Event C -> West
+Event D -> Europe
+```
+
+If an event's booking region becomes unavailable, the initial design chooses consistency over availability: stop new authoritative seat mutations for that event rather than risk two regions accepting the same seat.
+
+A more advanced design could add controlled regional failover using a strongly coordinated ownership/fencing mechanism. The key invariant would remain:
+
+> At most one region may be the authoritative writer for an event at a time.
 
 ## Current Technology Direction
 
 | Concern | Current Direction | Why |
 | --- | --- | --- |
-| Event search | OpenSearch | Full-text search, filtering, read throughput, eventual consistency is acceptable |
+| CDN / static delivery | CloudFront or equivalent CDN | Absorb read traffic for static/cacheable content |
+| Event metadata source of truth | DynamoDB | Simple key-oriented access patterns; already part of the architecture |
+| Event search | OpenSearch | Full-text search, filtering, read throughput; eventual consistency acceptable |
 | Authoritative seat inventory | DynamoDB | Conditional writes and distributed event-seat keys |
+| Holds / bookings | DynamoDB | Fits transactional workflow with authoritative inventory and query-specific indexes |
 | Seat-map read model | DynamoDB | Query-efficient section projection without adding Redis |
 | Projection updates | DynamoDB Streams | Native change feed from authoritative inventory |
-| Waiting room | TBD | Needs high-scale per-event admission control; technology not selected yet |
-| Event metadata source of truth | TBD | Not yet settled |
-| Holds / bookings storage | TBD | Not yet settled; may use DynamoDB but still needs explicit discussion |
-| Payments | External provider | Requires idempotency and recovery rather than distributed ACID |
+| Waiting room | DynamoDB timestamp + admission watermark | No physical queue or global sequence needed; approximate fairness is acceptable |
+| Payments | External provider with Payment Intent | Durable provider-side state plus idempotency and reconciliation |
+| Multi-region booking | Single writer/home region per event | Prevent cross-region double booking; consistency over availability |
 
-## Key Tradeoffs Established So Far
+## Key Tradeoffs Established
 
 1. **Availability versus consistency:** event/search/read models can be stale; seat acquisition cannot.
-2. **Waiting room versus database correctness:** admission control limits load, but the inventory conditional write prevents double booking.
-3. **Hot event versus hot seat:** distributing seats avoids concentrating an entire event behind one partition key, but many users targeting the exact same seat still contend on one logical item. No datastore removes that fundamental serialization requirement.
-4. **Write model versus read model:** do not choose the authoritative key merely to support the seat-map query. Use separate models optimized for their respective access patterns.
-5. **No Redis by default:** a second DynamoDB projection table can serve the seat map, avoiding another datastore unless a later requirement justifies it.
-6. **Expiration timestamp versus expiration job:** the timestamp determines correctness; the job performs cleanup.
+2. **Waiting room versus database correctness:** admission control limits load, but DynamoDB conditional writes prevent double booking.
+3. **Approximate fairness versus global sequencing:** timestamp-watermark admission avoids SQS/Kafka/global sequencing because exact request ordering is not a requirement.
+4. **Hot event versus hot seat:** distributing inventory by event+seat avoids concentrating the entire event behind one partition key; competition for the exact same seat still serializes logically.
+5. **Write model versus read model:** the authoritative table is optimized for exact seat claims while a separate section-oriented DynamoDB table serves seat-map queries.
+6. **No Redis by default:** the second DynamoDB table is sufficient for the seat map unless another requirement later justifies Redis.
+7. **Expiration timestamp versus cleanup:** the timestamp determines whether an old hold is reclaimable; no cleanup worker is required for correctness.
+8. **Payment state is distributed:** Payment Intent state at the provider and Booking state in DynamoDB converge through idempotent completion, webhooks, and reconciliation rather than distributed ACID.
+9. **Multi-region reads versus writes:** reads may be active-active, while each event has one authoritative booking writer region.
+10. **CDN versus live inventory:** cache stable/read-heavy content aggressively, but never use CDN state as the authority for seat acquisition.
 
-## Open Questions for the Next Design Discussion
+## Remaining Design Questions
 
-- What should be the source of truth for event and venue metadata?
-- Should `Hold` and `Booking` also live in DynamoDB, or would another datastore give us useful transactional/query properties?
-- What exact DynamoDB item/table design should we use for atomic multi-seat holds and hold metadata?
-- What technology and data model should back the waiting room?
-- How should event and seat-map projections be rebuilt after failure?
-- What availability, durability, and multi-region strategy do we want for the authoritative booking path?
-- What are the expected peak hold attempts per second after waiting-room admission control?
+The major architecture is now settled. Remaining interview follow-ups are mostly about operational detail and capacity validation:
+
+- What exact downstream thresholds should control how quickly `admittedThrough` advances?
+- What controlled fencing/ownership mechanism would we use if automatic booking-region failover became a requirement?
+- What are the expected peak hold attempts per second after admission control, and how much headroom should each tier maintain?
+- What retention/TTL policies should apply to completed bookings, old holds, and waiting-room records?

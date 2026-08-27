@@ -5,6 +5,8 @@ info:
 paths:
   /events/{eventId}:
     get:
+      tags: [Events]
+      operationId: getEvent
       summary: Get event details
       parameters:
         - in: path
@@ -12,5 +14,22 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Event details }
+        '200':
+          description: Event details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventResponse' }
         '404': { description: Event not found }
+components:
+  schemas:
+    EventResponse:
+      type: object
+      required: [eventId, name, venueId, startsAt, category, status]
+      properties:
+        eventId: { type: string }
+        name: { type: string }
+        venueId: { type: string }
+        startsAt: { type: string, format: date-time }
+        category: { type: string }
+        status: { type: string }
+        description: { type: string }

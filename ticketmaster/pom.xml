@@ -30,6 +30,7 @@
         <floci.testcontainers.version>2.15.0</floci.testcontainers.version>
         <opensearch.java.version>3.9.0</opensearch.java.version>
         <archunit.version>1.5.0</archunit.version>
+        <openapi.generator.version>7.24.0</openapi.generator.version>
     </properties>
 
     <dependencyManagement>

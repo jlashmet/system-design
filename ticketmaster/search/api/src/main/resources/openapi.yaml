@@ -5,16 +5,51 @@ info:
 paths:
   /events/search:
     get:
+      tags: [Search]
+      operationId: searchEvents
       summary: Search events
       parameters:
         - in: query
           name: q
-          schema: { type: string }
+          schema: { type: string, default: '' }
         - in: query
           name: city
-          schema: { type: string }
+          schema: { type: string, default: '' }
+        - in: query
+          name: startsAfter
+          schema: { type: string, format: date-time }
+        - in: query
+          name: startsBefore
+          schema: { type: string, format: date-time }
         - in: query
           name: cursor
-          schema: { type: string }
+          schema: { type: string, default: '' }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
-        '200': { description: Search results }
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchPageResponse' }
+components:
+  schemas:
+    SearchEventResponse:
+      type: object
+      required: [eventId, name, venue, city, startsAt, category]
+      properties:
+        eventId: { type: string }
+        name: { type: string }
+        venue: { type: string }
+        city: { type: string }
+        startsAt: { type: string, format: date-time }
+        category: { type: string }
+    SearchPageResponse:
+      type: object
+      required: [events, nextCursor]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/SearchEventResponse' }
+        nextCursor: { type: string }

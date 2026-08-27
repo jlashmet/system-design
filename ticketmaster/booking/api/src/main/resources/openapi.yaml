@@ -5,6 +5,8 @@ info:
 paths:
   /events/{eventId}/sections/{sectionId}/seats:
     get:
+      tags: [Booking]
+      operationId: getSectionSeats
       summary: View the eventually consistent seat map for a section
       parameters:
         - in: path
@@ -16,26 +18,154 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Section seat map }
+        '200':
+          description: Section seat map
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SeatMapSeatResponse' }
   /events/{eventId}/holds:
     post:
+      tags: [Booking]
+      operationId: createHold
       summary: Temporarily hold a set of seats
       parameters:
         - in: path
           name: eventId
           required: true
           schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateHoldRequest' }
       responses:
-        '201': { description: Hold created }
+        '201':
+          description: Hold created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldResponse' }
         '409': { description: One or more seats are unavailable }
   /holds/{holdId}/checkout:
     post:
+      tags: [Booking]
+      operationId: startCheckout
       summary: Start checkout for an active hold
       parameters:
         - in: path
           name: holdId
           required: true
           schema: { type: string }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
       responses:
-        '200': { description: Checkout started }
+        '200':
+          description: Checkout started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckoutResponse' }
         '409': { description: Hold is expired or not active }
+  /events/{eventId}/waiting-room:
+    post:
+      tags: [WaitingRoom]
+      operationId: joinWaitingRoom
+      summary: Join a hot event waiting room
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-User-Id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Existing or newly-created waiting-room entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WaitingRoomEntryResponse' }
+    get:
+      tags: [WaitingRoom]
+      operationId: getAdmissionStatus
+      summary: Check whether the user has been admitted
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-User-Id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current admission status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdmissionStatusResponse' }
+components:
+  schemas:
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: { type: number }
+        currency: { type: string }
+    SeatMapSeatResponse:
+      type: object
+      required: [seatId, sectionId, row, number, price, status]
+      properties:
+        seatId: { type: string }
+        sectionId: { type: string }
+        row: { type: string }
+        number: { type: string }
+        price: { $ref: '#/components/schemas/Money' }
+        status: { type: string }
+    CreateHoldRequest:
+      type: object
+      required: [userId, seatIds, totalPrice]
+      properties:
+        userId: { type: string }
+        seatIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string }
+        totalPrice: { $ref: '#/components/schemas/Money' }
+    HoldResponse:
+      type: object
+      required: [holdId, eventId, userId, seatIds, status, expiresAt]
+      properties:
+        holdId: { type: string }
+        eventId: { type: string }
+        userId: { type: string }
+        seatIds:
+          type: array
+          items: { type: string }
+        status: { type: string }
+        expiresAt: { type: string, format: date-time }
+    CheckoutResponse:
+      type: object
+      required: [bookingId, status, paymentIntentId]
+      properties:
+        bookingId: { type: string }
+        status: { type: string }
+        paymentIntentId: { type: string }
+    WaitingRoomEntryResponse:
+      type: object
+      required: [eventId, userId, joinedAt]
+      properties:
+        eventId: { type: string }
+        userId: { type: string }
+        joinedAt: { type: string, format: date-time }
+    AdmissionStatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [WAITING, ADMITTED]

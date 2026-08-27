@@ -222,8 +222,8 @@ The project follows consistent Maven coordinate naming conventions across all mo
 - Pattern: `{module-name}-infrastructure-{submodule}`
 - Examples:
   - `account-verification-infrastructure-common`
-  - `data-aggregation-infrastructure-common`
-  - `financial-insights-infrastructure-common`
+  - `account-verification-infrastructure-input`
+  - `account-verification-infrastructure-output`
 
 **Architecture Modules** (architecture tests):
 - Pattern: `{module-name}-architecture`

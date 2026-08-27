@@ -3,6 +3,20 @@ info:
   title: Ticketmaster Booking API
   version: 0.0.1
 paths:
+  /events/{eventId}/sections/{sectionId}/seats:
+    get:
+      summary: View the eventually consistent seat map for a section
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: sectionId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Section seat map }
   /events/{eventId}/holds:
     post:
       summary: Temporarily hold a set of seats

@@ -1,0 +1,47 @@
+package com.systemdesign.ticketmaster.booking.infrastructure.input;
+
+import com.systemdesign.ticketmaster.booking.application.ProjectSeatMapHandler;
+import com.systemdesign.ticketmaster.booking.domain.EventId;
+import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.SeatId;
+import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
+import com.systemdesign.ticketmaster.booking.domain.SeatStatus;
+import com.systemdesign.ticketmaster.booking.domain.SectionId;
+import java.math.BigDecimal;
+import java.util.Currency;
+import java.util.Map;
+import java.util.Objects;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.StreamRecord;
+
+public final class DynamoSeatInventoryStreamProjector {
+    private final ProjectSeatMapHandler handler;
+
+    public DynamoSeatInventoryStreamProjector(ProjectSeatMapHandler handler) {
+        this.handler = Objects.requireNonNull(handler, "handler");
+    }
+
+    public void project(StreamRecord record) {
+        Objects.requireNonNull(record, "record");
+        if (!record.hasNewImage()) return;
+        Map<String, AttributeValue> image = record.newImage();
+        if (!"SEAT".equals(string(image, "entityType"))) return;
+        handler.handle(new SeatMapSeat(
+                new EventId(string(image, "eventId")),
+                new SectionId(string(image, "sectionId")),
+                new SeatId(string(image, "seatId")),
+                string(image, "row"),
+                string(image, "number"),
+                new Price(new BigDecimal(string(image, "priceAmount")),
+                        Currency.getInstance(string(image, "priceCurrency"))),
+                SeatStatus.valueOf(string(image, "status"))));
+    }
+
+    private static String string(Map<String, AttributeValue> image, String name) {
+        AttributeValue value = image.get(name);
+        if (value == null || value.s() == null || value.s().isBlank()) {
+            throw new IllegalArgumentException("seat stream image is missing " + name);
+        }
+        return value.s();
+    }
+}

@@ -1,0 +1,27 @@
+name: Ticketmaster Verify
+
+on:
+  push:
+    paths:
+      - 'ticketmaster/**'
+      - '.github/workflows/ticketmaster-verify.yml'
+  pull_request:
+    paths:
+      - 'ticketmaster/**'
+      - '.github/workflows/ticketmaster-verify.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify Ticketmaster
+        run: mvn -f ticketmaster/pom.xml --batch-mode verify

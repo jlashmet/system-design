@@ -3,4 +3,12 @@
     <modelVersion>4.0.0</modelVersion>
     <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
     <artifactId>booking-architecture</artifactId>
+    <dependencies>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-domain</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-application</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-common</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-input</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-output</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
+    </dependencies>
 </project>

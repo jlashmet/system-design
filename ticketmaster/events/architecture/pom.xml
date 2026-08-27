@@ -1,2 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent><artifactId>events-architecture</artifactId></project>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
+    <artifactId>events-architecture</artifactId>
+    <dependencies>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-domain</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-application</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-infrastructure-common</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-infrastructure-input</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>events-infrastructure-output</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
+    </dependencies>
+</project>

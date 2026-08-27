@@ -1,0 +1,50 @@
+package com.systemdesign.ticketmaster.search.bootstrap;
+
+import com.systemdesign.ticketmaster.search.application.SearchEventsHandler;
+import com.systemdesign.ticketmaster.search.domain.EventSearchGateway;
+import com.systemdesign.ticketmaster.search.infrastructure.output.OpenSearchEventSearchGateway;
+import java.net.URI;
+import org.apache.hc.core5.http.HttpHost;
+import org.opensearch.client.json.jackson.JacksonJsonpMapper;
+import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.transport.httpclient5.ApacheHttpClient5Transport;
+import org.opensearch.client.transport.httpclient5.ApacheHttpClient5TransportBuilder;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+
+@SpringBootApplication(scanBasePackages = "com.systemdesign.ticketmaster.search.infrastructure.input")
+public class SearchServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SearchServiceApplication.class, args);
+    }
+
+    @Bean(destroyMethod = "close")
+    ApacheHttpClient5Transport openSearchTransport(
+            @Value("${ticketmaster.search.endpoint:http://localhost:9200}") String endpoint) {
+        URI uri = URI.create(endpoint);
+        int port = uri.getPort() >= 0 ? uri.getPort() : ("https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80);
+        HttpHost host = new HttpHost(uri.getScheme(), uri.getHost(), port);
+        return ApacheHttpClient5TransportBuilder.builder(host)
+                .setMapper(new JacksonJsonpMapper())
+                .build();
+    }
+
+    @Bean
+    OpenSearchClient openSearchClient(ApacheHttpClient5Transport transport) {
+        return new OpenSearchClient(transport);
+    }
+
+    @Bean
+    EventSearchGateway eventSearchGateway(
+            OpenSearchClient openSearchClient,
+            @Value("${ticketmaster.search.index-name:events}") String indexName) {
+        return new OpenSearchEventSearchGateway(openSearchClient, indexName);
+    }
+
+    @Bean
+    SearchEventsHandler searchEventsHandler(EventSearchGateway eventSearchGateway) {
+        return new SearchEventsHandler(eventSearchGateway);
+    }
+}

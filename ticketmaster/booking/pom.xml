@@ -15,5 +15,6 @@
         <module>application</module>
         <module>infrastructure</module>
         <module>architecture</module>
+        <module>bootstrap</module>
     </modules>
 </project>

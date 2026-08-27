@@ -10,6 +10,9 @@ import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 
 public final class ReconcileBookingHandler {
@@ -17,13 +20,21 @@ public final class ReconcileBookingHandler {
     private final HoldRepository holdRepository;
     private final CheckoutGateway checkoutGateway;
     private final PaymentGateway paymentGateway;
+    private final Clock clock;
+    private final Duration pendingBackoff;
 
     public ReconcileBookingHandler(BookingRepository bookingRepository, HoldRepository holdRepository,
-                                   CheckoutGateway checkoutGateway, PaymentGateway paymentGateway) {
+                                   CheckoutGateway checkoutGateway, PaymentGateway paymentGateway,
+                                   Clock clock, Duration pendingBackoff) {
         this.bookingRepository = Objects.requireNonNull(bookingRepository, "bookingRepository");
         this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
         this.checkoutGateway = Objects.requireNonNull(checkoutGateway, "checkoutGateway");
         this.paymentGateway = Objects.requireNonNull(paymentGateway, "paymentGateway");
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.pendingBackoff = Objects.requireNonNull(pendingBackoff, "pendingBackoff");
+        if (pendingBackoff.isZero() || pendingBackoff.isNegative()) {
+            throw new IllegalArgumentException("pendingBackoff must be positive");
+        }
     }
 
     public Booking handle(BookingId bookingId) {
@@ -32,7 +43,14 @@ public final class ReconcileBookingHandler {
         if (booking.status() != BookingStatus.PENDING_PAYMENT) return booking;
 
         Booking withIntent = ensurePaymentIntent(booking);
-        PaymentIntentStatus paymentStatus = paymentGateway.getPaymentStatus(withIntent.paymentIntentIdOptional().orElseThrow());
+        PaymentIntentStatus paymentStatus;
+        try {
+            paymentStatus = paymentGateway.getPaymentStatus(withIntent.paymentIntentIdOptional().orElseThrow());
+        } catch (RuntimeException providerFailure) {
+            reschedule(withIntent);
+            throw providerFailure;
+        }
+
         if (paymentStatus == PaymentIntentStatus.SUCCEEDED) {
             Hold hold = loadHold(withIntent).convert();
             Booking confirmed = withIntent.confirm();
@@ -45,7 +63,7 @@ public final class ReconcileBookingHandler {
             checkoutGateway.failBooking(hold, failed);
             return failed;
         }
-        return withIntent;
+        return reschedule(withIntent);
     }
 
     private Booking ensurePaymentIntent(Booking booking) {
@@ -54,6 +72,16 @@ public final class ReconcileBookingHandler {
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
         return withIntent;
+    }
+
+    private Booking reschedule(Booking booking) {
+        Instant nextAttempt = clock.instant().plus(pendingBackoff);
+        if (!nextAttempt.isAfter(booking.nextReconcileAt())) {
+            nextAttempt = booking.nextReconcileAt().plus(pendingBackoff);
+        }
+        Booking rescheduled = booking.rescheduleReconciliation(nextAttempt);
+        bookingRepository.rescheduleReconciliation(rescheduled);
+        return rescheduled;
     }
 
     private Hold loadHold(Booking booking) {

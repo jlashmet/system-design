@@ -50,6 +50,16 @@ public record Booking(
                 intentId, nextReconcileAt, reconcileShard, createdAt);
     }
 
+    public Booking rescheduleReconciliation(Instant nextAttemptAt) {
+        Objects.requireNonNull(nextAttemptAt, "nextAttemptAt");
+        if (status != BookingStatus.PENDING_PAYMENT) throw new IllegalStateException("booking is not pending payment");
+        if (!nextAttemptAt.isAfter(nextReconcileAt)) {
+            throw new IllegalArgumentException("next reconciliation attempt must move forward");
+        }
+        return new Booking(id, userId, eventId, holdId, status, totalPrice, checkoutIdempotencyKey,
+                paymentIntentId, nextAttemptAt, reconcileShard, createdAt);
+    }
+
     public Booking confirm() {
         if (status != BookingStatus.PENDING_PAYMENT) throw new IllegalStateException("booking is not pending payment");
         return new Booking(id, userId, eventId, holdId, BookingStatus.CONFIRMED, totalPrice,

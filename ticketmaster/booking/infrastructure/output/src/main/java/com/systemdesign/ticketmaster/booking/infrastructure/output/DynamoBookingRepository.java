@@ -67,6 +67,28 @@ public final class DynamoBookingRepository implements BookingRepository {
     }
 
     @Override
+    public void rescheduleReconciliation(Booking booking) {
+        Objects.requireNonNull(booking, "booking");
+        if (booking.nextReconcileAt() == null || booking.reconcileShard() == null) {
+            throw new IllegalArgumentException("booking is not scheduled for reconciliation");
+        }
+        dynamoDb.updateItem(UpdateItemRequest.builder()
+                .tableName(tableName)
+                .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
+                .updateExpression("SET #nextReconcileAt = :next")
+                .conditionExpression("#status = :pending AND #reconcileShard = :shard AND #nextReconcileAt < :next")
+                .expressionAttributeNames(Map.of(
+                        "#status", "status",
+                        "#reconcileShard", "reconcileShard",
+                        "#nextReconcileAt", "nextReconcileAt"))
+                .expressionAttributeValues(Map.of(
+                        ":pending", string("PENDING_PAYMENT"),
+                        ":shard", string(DynamoKeys.reconciliationShard(booking.reconcileShard())),
+                        ":next", DynamoItemCodec.number(booking.nextReconcileAt().toEpochMilli())))
+                .build());
+    }
+
+    @Override
     public List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit) {
         Objects.requireNonNull(dueAtOrBefore, "dueAtOrBefore");
         if (shard < 0) throw new IllegalArgumentException("shard must not be negative");

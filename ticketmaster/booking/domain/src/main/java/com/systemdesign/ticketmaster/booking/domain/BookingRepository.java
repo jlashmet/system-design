@@ -8,5 +8,6 @@ public interface BookingRepository {
     Optional<Booking> findById(BookingId bookingId);
     Optional<Booking> findByCheckoutIdempotencyKey(String idempotencyKey);
     void savePaymentIntent(Booking booking);
+    void rescheduleReconciliation(Booking booking);
     List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit);
 }

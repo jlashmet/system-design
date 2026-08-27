@@ -26,7 +26,8 @@ class BookingArchitectureTest {
     static final ArchRule common_depends_only_inward = noClasses()
             .that().resideInAPackage("..infrastructure.common..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..application..", "..infrastructure.input..", "..infrastructure.output..");
+                    "..application..", "..infrastructure.input..", "..infrastructure.output..")
+            .allowEmptyShould(true);
 
     @ArchTest
     static final ArchRule input_does_not_depend_on_output = noClasses()

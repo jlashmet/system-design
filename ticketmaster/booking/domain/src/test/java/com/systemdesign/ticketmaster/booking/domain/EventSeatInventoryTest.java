@@ -41,6 +41,13 @@ class EventSeatInventoryTest {
         thenExpect(SeatUnavailableException.class);
     }
 
+    @Test
+    void checkoutSeatCannotBeReclaimedFromTimestampAlone() {
+        given(new EventSeatInventory(EVENT_ID, SEAT_ID, PRICE, SeatStatus.CHECKOUT, OLD_HOLD, NOW.minusSeconds(1), null));
+        whenHold(NEW_HOLD, NOW, FUTURE);
+        thenExpect(SeatUnavailableException.class);
+    }
+
     private void given(EventSeatInventory seat) {
         this.seat = seat;
         this.result = null;

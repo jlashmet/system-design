@@ -20,11 +20,15 @@ public record EventSeatInventory(
         if (status == SeatStatus.AVAILABLE && (holdId != null || holdExpiresAt != null || bookingId != null)) {
             throw new IllegalArgumentException("available seat cannot have hold or booking state");
         }
-        if (status == SeatStatus.HELD && (holdId == null || holdExpiresAt == null || bookingId != null)) {
-            throw new IllegalArgumentException("held seat requires hold id and expiration only");
+        if ((status == SeatStatus.HELD || status == SeatStatus.CHECKOUT)
+                && (holdId == null || holdExpiresAt == null || bookingId != null)) {
+            throw new IllegalArgumentException("reserved seat requires hold id and expiration only");
         }
         if (status == SeatStatus.BOOKED && bookingId == null) {
             throw new IllegalArgumentException("booked seat requires booking id");
+        }
+        if (status == SeatStatus.BOOKED && holdExpiresAt != null) {
+            throw new IllegalArgumentException("booked seat cannot have an expiration");
         }
     }
 
@@ -47,13 +51,34 @@ public record EventSeatInventory(
         return new EventSeatInventory(eventId, seatId, price, SeatStatus.HELD, newHoldId, expiresAt, null);
     }
 
-    public EventSeatInventory book(HoldId expectedHoldId, BookingId newBookingId, Instant now) {
+    public EventSeatInventory startCheckout(HoldId expectedHoldId, Instant now, Instant checkoutExpiresAt) {
         Objects.requireNonNull(expectedHoldId, "expectedHoldId");
-        Objects.requireNonNull(newBookingId, "newBookingId");
         Objects.requireNonNull(now, "now");
+        Objects.requireNonNull(checkoutExpiresAt, "checkoutExpiresAt");
         if (status != SeatStatus.HELD || !expectedHoldId.equals(holdId) || !holdExpiresAt.isAfter(now)) {
             throw new SeatUnavailableException(seatId);
         }
+        if (!checkoutExpiresAt.isAfter(now)) {
+            throw new IllegalArgumentException("checkout expiration must be in the future");
+        }
+        return new EventSeatInventory(eventId, seatId, price, SeatStatus.CHECKOUT,
+                holdId, checkoutExpiresAt, null);
+    }
+
+    public EventSeatInventory book(HoldId expectedHoldId, BookingId newBookingId) {
+        Objects.requireNonNull(expectedHoldId, "expectedHoldId");
+        Objects.requireNonNull(newBookingId, "newBookingId");
+        if (status != SeatStatus.CHECKOUT || !expectedHoldId.equals(holdId)) {
+            throw new SeatUnavailableException(seatId);
+        }
         return new EventSeatInventory(eventId, seatId, price, SeatStatus.BOOKED, holdId, null, newBookingId);
+    }
+
+    public EventSeatInventory releaseCheckout(HoldId expectedHoldId) {
+        Objects.requireNonNull(expectedHoldId, "expectedHoldId");
+        if (status != SeatStatus.CHECKOUT || !expectedHoldId.equals(holdId)) {
+            throw new SeatUnavailableException(seatId);
+        }
+        return available(eventId, seatId, price);
     }
 }

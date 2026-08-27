@@ -43,8 +43,8 @@ public final class DynamoHoldRepository implements HoldRepository {
     public void createWithSeatClaims(Hold hold, Instant now) {
         Objects.requireNonNull(hold, "hold");
         Objects.requireNonNull(now, "now");
-        if (hold.seatIds().size() > 99) {
-            throw new IllegalArgumentException("a hold cannot contain more than 99 seats");
+        if (hold.seatIds().size() > 97) {
+            throw new IllegalArgumentException("a hold cannot contain more than 97 seats");
         }
 
         List<TransactWriteItem> writes = new ArrayList<>();
@@ -144,11 +144,11 @@ public final class DynamoHoldRepository implements HoldRepository {
     }
 
     private static String seatPk(EventId eventId, SeatId seatId) {
-        return "EVENT#" + eventId.value() + "#SEAT#" + seatId.value();
+        return DynamoKeys.seatPk(eventId, seatId);
     }
 
     private static String holdPk(HoldId holdId) {
-        return "HOLD#" + holdId.value();
+        return DynamoKeys.holdPk(holdId);
     }
 
     private static AttributeValue string(String value) {

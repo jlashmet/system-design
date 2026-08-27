@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.booking.application;
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
@@ -56,8 +57,14 @@ public final class StartCheckoutHandler {
         Booking booking = Booking.pending(bookingId, checkoutHold, command.idempotencyKey(), now,
                 now.plus(reconciliationDelay), shard);
 
-        checkoutGateway.startCheckout(checkoutHold, booking);
-        return ensurePaymentIntent(booking);
+        try {
+            checkoutGateway.startCheckout(checkoutHold, booking);
+            return ensurePaymentIntent(booking);
+        } catch (CheckoutConflictException conflict) {
+            return bookingRepository.findByCheckoutIdempotencyKey(command.idempotencyKey())
+                    .map(this::ensurePaymentIntent)
+                    .orElseThrow(() -> conflict);
+        }
     }
 
     private StartCheckoutResult ensurePaymentIntent(Booking booking) {

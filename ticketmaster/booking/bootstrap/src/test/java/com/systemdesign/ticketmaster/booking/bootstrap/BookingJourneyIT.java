@@ -120,6 +120,7 @@ class BookingJourneyIT {
         checkout = startCheckoutHandler.handle(new StartCheckoutCommand(
                 EVENT_ID,
                 hold.id(),
+                USER_ID,
                 "journey-checkout-key"));
         paymentGateway.succeedPayment(checkout.booking().id());
         confirmed = reconcileBookingHandler.handle(EVENT_ID, checkout.booking().id());

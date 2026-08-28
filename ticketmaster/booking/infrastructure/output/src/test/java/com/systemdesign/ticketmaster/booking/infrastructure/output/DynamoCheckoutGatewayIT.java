@@ -9,8 +9,8 @@ import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
-import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
+import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import io.floci.testcontainers.FlociContainer;
 import java.math.BigDecimal;
@@ -48,7 +48,7 @@ class DynamoCheckoutGatewayIT {
     private static final Instant NOW = Instant.parse("2026-08-27T22:00:00Z");
     private static final EventId EVENT_ID = new EventId("event-123");
     private static final UserId USER_ID = new UserId("user-456");
-    private static final Price PRICE = new Price(new BigDecimal("200.00"), Currency.getInstance("USD"));
+    private static final Price SEAT_PRICE = new Price(new BigDecimal("100.00"), Currency.getInstance("USD"));
 
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
@@ -61,6 +61,7 @@ class DynamoCheckoutGatewayIT {
     private Hold activeHold;
     private Hold checkoutHold;
     private Booking pendingBooking;
+    private Hold laterHold;
     private Throwable thrown;
 
     @AfterEach
@@ -95,18 +96,20 @@ class DynamoCheckoutGatewayIT {
     }
 
     @Test
-    void checkoutSeatCannotBeStolenAfterCheckoutDeadline() {
+    void checkoutSeatCanBeReclaimedAfterCheckoutDeadlineWithoutCleanup() {
         givenStartedCheckout("A10");
         whenAttemptNewHoldAfterCheckoutDeadline();
-        thenExpectSeatClaimConflictAndOriginalCheckout("A10");
+        thenExpectReclaimedByLaterHold("A10");
     }
 
     private void givenActiveHold(String... seatIds) {
         initializeDynamo();
         for (String seatId : seatIds) putAvailableSeat(seatId);
-        activeHold = Hold.active(new HoldId("hold-1"), USER_ID, EVENT_ID, seatIds(seatIds), PRICE,
+        Set<SeatId> requestedSeats = seatIds(seatIds);
+        SeatPriceQuote quote = holdRepository.quoteSeatPrices(EVENT_ID, requestedSeats);
+        activeHold = Hold.active(new HoldId("hold-1"), USER_ID, EVENT_ID, requestedSeats, quote.totalPrice(),
                 NOW, NOW.plus(5, ChronoUnit.MINUTES));
-        holdRepository.createWithSeatClaims(activeHold, NOW);
+        holdRepository.createWithSeatClaims(activeHold, quote, NOW);
         checkoutHold = activeHold.startCheckout(NOW.plusSeconds(10), NOW.plus(70, ChronoUnit.SECONDS));
         pendingBooking = Booking.pending(new BookingId("booking-1"), checkoutHold, "idempotency-1",
                 NOW.plusSeconds(10), NOW.plusSeconds(40), 3);
@@ -146,10 +149,12 @@ class DynamoCheckoutGatewayIT {
     }
 
     private void whenAttemptNewHoldAfterCheckoutDeadline() {
-        Hold laterHold = Hold.active(new HoldId("hold-2"), new UserId("user-789"), EVENT_ID,
-                Set.of(new SeatId("A10")), PRICE, NOW.plusSeconds(80), NOW.plusSeconds(380));
+        Set<SeatId> requestedSeats = Set.of(new SeatId("A10"));
+        SeatPriceQuote quote = holdRepository.quoteSeatPrices(EVENT_ID, requestedSeats);
+        laterHold = Hold.active(new HoldId("hold-2"), new UserId("user-789"), EVENT_ID,
+                requestedSeats, quote.totalPrice(), NOW.plusSeconds(80), NOW.plusSeconds(380));
         try {
-            holdRepository.createWithSeatClaims(laterHold, NOW.plusSeconds(80));
+            holdRepository.createWithSeatClaims(laterHold, quote, NOW.plusSeconds(80));
         } catch (Throwable error) {
             thrown = error;
         }
@@ -165,7 +170,7 @@ class DynamoCheckoutGatewayIT {
                 .containsExactly(pendingBooking);
         for (String seatId : seatIds) {
             Map<String, AttributeValue> item = seatItem(seatId);
-            assertThat(item.get("status").s()).isEqualTo("CHECKOUT");
+            assertThat(item.get("status").s()).isEqualTo("HELD");
             assertThat(item.get("holdId").s()).isEqualTo(activeHold.id().value());
             assertThat(Long.parseLong(item.get("holdExpiresAt").n()))
                     .isEqualTo(checkoutHold.checkoutExpiresAt().toEpochMilli());
@@ -199,11 +204,13 @@ class DynamoCheckoutGatewayIT {
         }
     }
 
-    private void thenExpectSeatClaimConflictAndOriginalCheckout(String seatId) {
-        assertThat(thrown).isInstanceOf(SeatClaimConflictException.class);
+    private void thenExpectReclaimedByLaterHold(String seatId) {
+        assertThat(thrown).isNull();
+        assertThat(holdRepository.findById(laterHold.id())).contains(laterHold);
         Map<String, AttributeValue> item = seatItem(seatId);
-        assertThat(item.get("status").s()).isEqualTo("CHECKOUT");
-        assertThat(item.get("holdId").s()).isEqualTo(activeHold.id().value());
+        assertThat(item.get("status").s()).isEqualTo("HELD");
+        assertThat(item.get("holdId").s()).isEqualTo(laterHold.id().value());
+        assertThat(Long.parseLong(item.get("holdExpiresAt").n())).isEqualTo(laterHold.expiresAt().toEpochMilli());
     }
 
     private void initializeDynamo() {
@@ -241,7 +248,11 @@ class DynamoCheckoutGatewayIT {
                 .item(Map.of(
                         "pk", string(DynamoKeys.seatPk(EVENT_ID, new SeatId(seatId))),
                         "entityType", string("SEAT"),
-                        "status", string("AVAILABLE")))
+                        "eventId", string(EVENT_ID.value()),
+                        "seatId", string(seatId),
+                        "status", string("AVAILABLE"),
+                        "priceAmount", string(SEAT_PRICE.amount().toPlainString()),
+                        "priceCurrency", string(SEAT_PRICE.currency().getCurrencyCode())))
                 .build());
     }
 

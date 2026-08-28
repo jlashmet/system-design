@@ -69,9 +69,12 @@ final class DynamoItemCodec {
 
     static Map<String, AttributeValue> idempotencyItem(Booking booking) {
         return Map.of(
-                PK, string(DynamoKeys.idempotencyPk(booking.checkoutIdempotencyKey())),
+                PK, string(DynamoKeys.idempotencyPk(
+                        booking.eventId(), booking.holdId(), booking.checkoutIdempotencyKey())),
                 "entityType", string("CHECKOUT_IDEMPOTENCY"),
                 "bookingId", string(booking.id().value()),
+                "eventId", string(booking.eventId().value()),
+                "holdId", string(booking.holdId().value()),
                 "idempotencyKey", string(booking.checkoutIdempotencyKey()));
     }
 

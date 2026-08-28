@@ -23,10 +23,10 @@ class EnableAdmissionHandlerTest {
     private EventAdmission admission;
 
     @Test
-    void createsClosedWatermarkAtStartupTimeWhenWaitingRoomIsNotYetEnabled() {
+    void createsClosedWatermarkImmediatelyBeforeStartupTimeWhenWaitingRoomIsNotYetEnabled() {
         givenWaitingRoomDisabled();
         whenAdmissionIsEnabled();
-        thenExpectClosedWatermarkAtStartupTime();
+        thenExpectClosedWatermarkImmediatelyBeforeStartupTime();
     }
 
     @Test
@@ -53,8 +53,8 @@ class EnableAdmissionHandlerTest {
         admission = handler.handle(new EnableAdmissionCommand(EVENT_ID));
     }
 
-    private void thenExpectClosedWatermarkAtStartupTime() {
-        assertThat(admission.admittedThrough()).isEqualTo(NOW);
+    private void thenExpectClosedWatermarkImmediatelyBeforeStartupTime() {
+        assertThat(admission.admittedThrough()).isEqualTo(NOW.minusMillis(1));
         assertThat(repository.admission).isEqualTo(admission);
         assertThat(repository.advanceCalls).isOne();
     }

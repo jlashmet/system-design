@@ -22,8 +22,13 @@ public final class HttpEventWriteAuthority implements EventWriteAuthority {
     private final String localRegion;
     private final Duration requestTimeout;
 
-    public HttpEventWriteAuthority(HttpClient httpClient, ObjectMapper objectMapper, URI controlPlaneBaseUri,
+    public HttpEventWriteAuthority(HttpClient httpClient, URI controlPlaneBaseUri,
                                    String localRegion, Duration requestTimeout) {
+        this(httpClient, new ObjectMapper(), controlPlaneBaseUri, localRegion, requestTimeout);
+    }
+
+    HttpEventWriteAuthority(HttpClient httpClient, ObjectMapper objectMapper, URI controlPlaneBaseUri,
+                            String localRegion, Duration requestTimeout) {
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.controlPlaneBaseUri = Objects.requireNonNull(controlPlaneBaseUri, "controlPlaneBaseUri");

@@ -5,6 +5,7 @@ import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
+import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
@@ -41,13 +42,33 @@ public final class ReconcileBookingHandler {
         }
     }
 
+    /**
+     * Reconciliation-scheduler entry point. The Booking itself determines the event ownership scope.
+     */
     public Booking handle(BookingId bookingId) {
-        Booking booking = bookingRepository.findById(Objects.requireNonNull(bookingId, "bookingId"))
-                .orElseThrow(() -> new IllegalArgumentException("booking not found: " + bookingId.value()));
+        Booking booking = loadBooking(bookingId);
         if (booking.status() != BookingStatus.PENDING_PAYMENT) return booking;
-
         eventWriteAuthority.assertMayWrite(booking.eventId());
+        return reconcileAuthorized(booking);
+    }
 
+    /**
+     * Region-routable provider-completion entry point. A verified provider adapter can carry the
+     * event ID as routing metadata without trusting the callback's payment status. Booking still
+     * re-reads the provider through PaymentGateway before finalizing anything.
+     */
+    public Booking handle(EventId eventId, BookingId bookingId) {
+        Objects.requireNonNull(eventId, "eventId");
+        eventWriteAuthority.assertMayWrite(eventId);
+        Booking booking = loadBooking(bookingId);
+        if (!booking.eventId().equals(eventId)) {
+            throw new IllegalArgumentException("booking does not belong to event " + eventId.value());
+        }
+        if (booking.status() != BookingStatus.PENDING_PAYMENT) return booking;
+        return reconcileAuthorized(booking);
+    }
+
+    private Booking reconcileAuthorized(Booking booking) {
         Booking withIntent = ensurePaymentIntent(booking);
         Hold hold = loadHold(withIntent);
         PaymentIntentStatus paymentStatus = getPaymentStatusOrReschedule(withIntent);
@@ -72,6 +93,11 @@ public final class ReconcileBookingHandler {
         }
 
         return reschedule(withIntent);
+    }
+
+    private Booking loadBooking(BookingId bookingId) {
+        return bookingRepository.findById(Objects.requireNonNull(bookingId, "bookingId"))
+                .orElseThrow(() -> new IllegalArgumentException("booking not found: " + bookingId.value()));
     }
 
     private PaymentIntentStatus getPaymentStatusOrReschedule(Booking booking) {

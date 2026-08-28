@@ -101,14 +101,13 @@ public final class StartCheckoutHandler {
 
     private StartCheckoutResult ensurePaymentIntent(Booking booking) {
         if (booking.paymentIntentIdOptional().isPresent()) {
-            String intentId = booking.paymentIntentIdOptional().orElseThrow();
-            return new StartCheckoutResult(booking, new PaymentIntent(intentId, paymentGateway.getPaymentStatus(intentId)));
+            return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
         }
 
         PaymentIntent intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
-        return new StartCheckoutResult(withIntent, intent);
+        return new StartCheckoutResult(withIntent, intent.id());
     }
 
     private static Duration requirePositive(Duration duration, String name) {

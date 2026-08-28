@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
+import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
@@ -34,6 +35,13 @@ public final class BookingExceptionHandler {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
         detail.setTitle("Hold access forbidden");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
+    }
+
+    @ExceptionHandler(HoldNotFoundException.class)
+    ResponseEntity<ProblemDetail> holdNotFound(HoldNotFoundException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
+        detail.setTitle("Hold not found");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
     }
 
     @ExceptionHandler(WaitingRoomDisabledException.class)

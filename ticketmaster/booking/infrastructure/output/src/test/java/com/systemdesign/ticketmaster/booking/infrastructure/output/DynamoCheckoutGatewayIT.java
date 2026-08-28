@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
@@ -110,7 +111,11 @@ class DynamoCheckoutGatewayIT {
         SeatPriceQuote quote = holdRepository.quoteSeatPrices(EVENT_ID, requestedSeats);
         activeHold = Hold.active(new HoldId("hold-1"), USER_ID, EVENT_ID, requestedSeats, quote.totalPrice(),
                 NOW, NOW.plus(5, ChronoUnit.MINUTES));
-        holdRepository.createWithSeatClaims(activeHold, quote, NOW);
+        holdRepository.createWithSeatClaims(
+                activeHold,
+                quote,
+                NOW,
+                new HoldIdempotencyKey("hold-idempotency-1"));
         checkoutHold = activeHold.startCheckout(NOW.plusSeconds(10), NOW.plus(70, ChronoUnit.SECONDS));
         pendingBooking = Booking.pending(new BookingId("booking-1"), checkoutHold, "idempotency-1",
                 NOW.plusSeconds(10), NOW.plusSeconds(40), 3);
@@ -155,7 +160,11 @@ class DynamoCheckoutGatewayIT {
         laterHold = Hold.active(new HoldId("hold-2"), new UserId("user-789"), EVENT_ID,
                 requestedSeats, quote.totalPrice(), NOW.plusSeconds(80), NOW.plusSeconds(380));
         try {
-            holdRepository.createWithSeatClaims(laterHold, quote, NOW.plusSeconds(80));
+            holdRepository.createWithSeatClaims(
+                    laterHold,
+                    quote,
+                    NOW.plusSeconds(80),
+                    new HoldIdempotencyKey("hold-idempotency-2"));
         } catch (Throwable error) {
             thrown = error;
         }

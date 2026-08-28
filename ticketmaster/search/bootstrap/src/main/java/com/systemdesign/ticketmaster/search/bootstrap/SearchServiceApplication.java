@@ -1,5 +1,6 @@
 package com.systemdesign.ticketmaster.search.bootstrap;
 
+import com.systemdesign.ticketmaster.search.application.DeleteSearchEventHandler;
 import com.systemdesign.ticketmaster.search.application.IndexSearchEventHandler;
 import com.systemdesign.ticketmaster.search.application.SearchEventsHandler;
 import com.systemdesign.ticketmaster.search.domain.EventSearchGateway;
@@ -65,7 +66,14 @@ public class SearchServiceApplication {
     }
 
     @Bean
-    EventSearchProjectionConsumer eventSearchProjectionConsumer(IndexSearchEventHandler handler) {
-        return new EventSearchProjectionConsumer(handler);
+    DeleteSearchEventHandler deleteSearchEventHandler(EventSearchIndex eventSearchIndex) {
+        return new DeleteSearchEventHandler(eventSearchIndex);
+    }
+
+    @Bean
+    EventSearchProjectionConsumer eventSearchProjectionConsumer(
+            IndexSearchEventHandler indexHandler,
+            DeleteSearchEventHandler deleteHandler) {
+        return new EventSearchProjectionConsumer(indexHandler, deleteHandler);
     }
 }

@@ -23,6 +23,12 @@ class EventsArchitectureTest {
                     "..infrastructure..", "..bootstrap..", "org.springframework..", "software.amazon..", "org.opensearch..");
 
     @ArchTest
+    static final ArchRule common_depends_only_inward = noClasses()
+            .that().resideInAPackage("..infrastructure.common..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..application..", "..infrastructure.input..", "..infrastructure.output..", "..bootstrap..");
+
+    @ArchTest
     static final ArchRule input_does_not_depend_on_output = noClasses()
             .that().resideInAPackage("..infrastructure.input..")
             .should().dependOnClassesThat().resideInAPackage("..infrastructure.output..");

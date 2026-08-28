@@ -16,31 +16,52 @@ import org.junit.jupiter.api.Test;
 class EnableAdmissionHandlerTest {
     private static final EventId EVENT_ID = new EventId("event-1");
     private static final Instant NOW = Instant.parse("2026-08-28T18:00:00Z");
+    private static final Clock FIXED_CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+
+    private FakeRepository repository;
+    private EnableAdmissionHandler handler;
+    private EventAdmission admission;
 
     @Test
     void createsClosedWatermarkAtStartupTimeWhenWaitingRoomIsNotYetEnabled() {
-        FakeRepository repository = new FakeRepository();
-        EnableAdmissionHandler handler = new EnableAdmissionHandler(
-                repository,
-                Clock.fixed(NOW, ZoneOffset.UTC));
-
-        EventAdmission admission = handler.handle(new EnableAdmissionCommand(EVENT_ID));
-
-        assertThat(admission.admittedThrough()).isEqualTo(NOW);
-        assertThat(repository.admission).isEqualTo(admission);
+        givenWaitingRoomDisabled();
+        whenAdmissionIsEnabled();
+        thenExpectClosedWatermarkAtStartupTime();
     }
 
     @Test
     void preservesExistingAdvancedWatermark() {
-        FakeRepository repository = new FakeRepository();
+        givenExistingAdvancedWatermark();
+        whenAdmissionIsEnabled();
+        thenExpectExistingWatermarkPreserved();
+    }
+
+    private void givenWaitingRoomDisabled() {
+        repository = new FakeRepository();
+        handler = new EnableAdmissionHandler(repository, FIXED_CLOCK);
+        admission = null;
+    }
+
+    private void givenExistingAdvancedWatermark() {
+        repository = new FakeRepository();
         repository.admission = new EventAdmission(EVENT_ID, NOW.plusSeconds(10));
-        EnableAdmissionHandler handler = new EnableAdmissionHandler(
-                repository,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+        handler = new EnableAdmissionHandler(repository, FIXED_CLOCK);
+        admission = null;
+    }
 
-        EventAdmission admission = handler.handle(new EnableAdmissionCommand(EVENT_ID));
+    private void whenAdmissionIsEnabled() {
+        admission = handler.handle(new EnableAdmissionCommand(EVENT_ID));
+    }
 
+    private void thenExpectClosedWatermarkAtStartupTime() {
+        assertThat(admission.admittedThrough()).isEqualTo(NOW);
+        assertThat(repository.admission).isEqualTo(admission);
+        assertThat(repository.advanceCalls).isOne();
+    }
+
+    private void thenExpectExistingWatermarkPreserved() {
         assertThat(admission).isEqualTo(repository.admission);
+        assertThat(admission.admittedThrough()).isEqualTo(NOW.plusSeconds(10));
         assertThat(repository.advanceCalls).isZero();
     }
 

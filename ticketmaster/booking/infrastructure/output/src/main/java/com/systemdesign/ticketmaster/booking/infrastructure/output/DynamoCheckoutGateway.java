@@ -108,14 +108,13 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.seatPk(hold.eventId(), seatId))))
-                .updateExpression("SET #status = :checkout, #holdExpiresAt = :deadline")
+                .updateExpression("SET #holdExpiresAt = :deadline")
                 .conditionExpression("#status = :held AND #holdId = :holdId AND #holdExpiresAt > :now")
                 .expressionAttributeNames(Map.of(
                         "#status", "status",
                         "#holdId", "holdId",
                         "#holdExpiresAt", "holdExpiresAt"))
                 .expressionAttributeValues(Map.of(
-                        ":checkout", string("CHECKOUT"),
                         ":held", string("HELD"),
                         ":holdId", string(hold.id().value()),
                         ":deadline", number(hold.checkoutExpiresAt().toEpochMilli()),
@@ -159,7 +158,7 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.seatPk(hold.eventId(), seatId))))
                 .updateExpression("SET #status = :booked, #bookingId = :bookingId REMOVE #holdExpiresAt")
-                .conditionExpression("#status = :checkout AND #holdId = :holdId")
+                .conditionExpression("#status = :held AND #holdId = :holdId")
                 .expressionAttributeNames(Map.of(
                         "#status", "status",
                         "#bookingId", "bookingId",
@@ -167,7 +166,7 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#holdId", "holdId"))
                 .expressionAttributeValues(Map.of(
                         ":booked", string("BOOKED"),
-                        ":checkout", string("CHECKOUT"),
+                        ":held", string("HELD"),
                         ":bookingId", string(booking.id().value()),
                         ":holdId", string(hold.id().value())))
                 .build();
@@ -178,7 +177,7 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.seatPk(hold.eventId(), seatId))))
                 .updateExpression("SET #status = :available REMOVE #holdId, #holdExpiresAt, #bookingId")
-                .conditionExpression("#status = :checkout AND #holdId = :holdId")
+                .conditionExpression("#status = :held AND #holdId = :holdId")
                 .expressionAttributeNames(Map.of(
                         "#status", "status",
                         "#holdId", "holdId",
@@ -186,7 +185,7 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#bookingId", "bookingId"))
                 .expressionAttributeValues(Map.of(
                         ":available", string("AVAILABLE"),
-                        ":checkout", string("CHECKOUT"),
+                        ":held", string("HELD"),
                         ":holdId", string(hold.id().value())))
                 .build();
     }

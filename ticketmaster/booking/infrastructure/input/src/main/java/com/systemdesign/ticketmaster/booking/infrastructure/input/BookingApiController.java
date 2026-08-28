@@ -65,9 +65,9 @@ public final class BookingApiController implements BookingApi {
     }
 
     @Override
-    public ResponseEntity<CheckoutResponse> startCheckout(String holdId, String idempotencyKey) {
+    public ResponseEntity<CheckoutResponse> startCheckout(String eventId, String holdId, String idempotencyKey) {
         StartCheckoutResult result = startCheckoutHandler.handle(
-                new StartCheckoutCommand(new HoldId(holdId), idempotencyKey));
+                new StartCheckoutCommand(new EventId(eventId), new HoldId(holdId), idempotencyKey));
 
         CheckoutResponse response = new CheckoutResponse();
         response.setBookingId(result.booking().id().value());

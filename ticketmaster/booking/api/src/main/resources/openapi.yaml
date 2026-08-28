@@ -48,12 +48,17 @@ paths:
               schema: { $ref: '#/components/schemas/HoldResponse' }
         '403': { description: Waiting-room admission is enabled for the event and the user is not yet admitted }
         '409': { description: One or more seats are unavailable or changed price before claim }
-  /holds/{holdId}/checkout:
+        '503': { description: This regional booking service cannot establish authority to mutate the event }
+  /events/{eventId}/holds/{holdId}/checkout:
     post:
       tags: [Booking]
       operationId: startCheckout
-      summary: Start checkout for an active hold
+      summary: Start checkout for an active hold in the event's authoritative booking region
       parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
         - in: path
           name: holdId
           required: true
@@ -69,6 +74,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CheckoutResponse' }
         '409': { description: Hold is expired or not active }
+        '503': { description: This regional booking service cannot establish authority to mutate the event }
   /events/{eventId}/waiting-room:
     post:
       tags: [WaitingRoom]

@@ -12,6 +12,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
+import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -124,6 +125,9 @@ public final class DynamoHoldRepository implements HoldRepository {
         try {
             dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
         } catch (TransactionCanceledException e) {
+            if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
+                throw new BookingStorageUnavailableException("hold creation", e);
+            }
             throw new SeatClaimConflictException(hold.eventId(), hold.seatIds());
         }
     }

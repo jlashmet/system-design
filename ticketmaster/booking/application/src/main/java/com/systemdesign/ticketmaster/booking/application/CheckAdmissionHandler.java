@@ -1,6 +1,9 @@
 package com.systemdesign.ticketmaster.booking.application;
 
+import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import java.util.Objects;
 
@@ -13,10 +16,10 @@ public final class CheckAdmissionHandler {
 
     public AdmissionDecision handle(CheckAdmissionQuery query) {
         Objects.requireNonNull(query, "query");
+        EventAdmission admission = repository.findAdmission(query.eventId())
+                .orElseThrow(() -> new WaitingRoomDisabledException(query.eventId()));
         WaitingRoomEntry entry = repository.findEntry(query.eventId(), query.userId())
-                .orElseThrow(() -> new IllegalArgumentException("user has not joined the waiting room"));
-        return repository.findAdmission(query.eventId())
-                .map(admission -> admission.admits(entry) ? AdmissionDecision.ADMITTED : AdmissionDecision.WAITING)
-                .orElse(AdmissionDecision.ADMITTED);
+                .orElseThrow(() -> new WaitingRoomEntryNotFoundException(query.eventId(), query.userId()));
+        return admission.admits(entry) ? AdmissionDecision.ADMITTED : AdmissionDecision.WAITING;
     }
 }

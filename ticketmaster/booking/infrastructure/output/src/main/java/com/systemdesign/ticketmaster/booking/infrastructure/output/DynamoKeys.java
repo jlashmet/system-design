@@ -25,10 +25,11 @@ final class DynamoKeys {
         return "BOOKING#" + bookingId.value();
     }
 
-    static String idempotencyPk(String idempotencyKey) {
+    static String idempotencyPk(EventId eventId, HoldId holdId, String idempotencyKey) {
+        String scoped = eventId.value() + "\u0000" + holdId.value() + "\u0000" + idempotencyKey;
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(idempotencyKey.getBytes(StandardCharsets.UTF_8));
+                    .digest(scoped.getBytes(StandardCharsets.UTF_8));
             return "CHECKOUT_IDEMPOTENCY#" + HexFormat.of().formatHex(digest);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);

@@ -26,7 +26,7 @@ public final class DynamoVenueRepository implements VenueRepository {
         Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
                         .key(Map.of(PK, string(venuePk(venueId))))
-                        .consistentRead(true)
+                        .consistentRead(false)
                         .build())
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();

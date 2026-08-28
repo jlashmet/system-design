@@ -13,6 +13,7 @@ import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandle
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionCapacity;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionHealthGateway;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionRegulationLeaseGateway;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
@@ -25,6 +26,7 @@ import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInve
 import com.systemdesign.ticketmaster.booking.infrastructure.output.CachedEventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.ConfiguredAdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DemoPaymentGateway;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoAdmissionRegulationLeaseGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoBookingRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckoutGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoHoldRepository;
@@ -38,6 +40,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -113,6 +116,13 @@ public class BookingServiceApplication {
             DynamoDbClient dynamoDbClient,
             @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
         return new DynamoWaitingRoomRepository(dynamoDbClient, tableName);
+    }
+
+    @Bean
+    AdmissionRegulationLeaseGateway admissionRegulationLeaseGateway(
+            DynamoDbClient dynamoDbClient,
+            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
+        return new DynamoAdmissionRegulationLeaseGateway(dynamoDbClient, tableName);
     }
 
     @Bean
@@ -238,10 +248,17 @@ public class BookingServiceApplication {
     AdmissionRegulationScheduler admissionRegulationScheduler(
             EnableAdmissionHandler enableAdmissionHandler,
             RegulateAdmissionHandler handler,
+            AdmissionRegulationLeaseGateway leaseGateway,
+            Clock clock,
+            @Value("${ticketmaster.booking.admission.regulator-lease-duration:PT5S}") String leaseDuration,
             @Value("${ticketmaster.booking.admission.event-ids:}") String configuredEventIds) {
         return new AdmissionRegulationScheduler(
                 enableAdmissionHandler,
                 handler,
+                leaseGateway,
+                clock,
+                Duration.parse(leaseDuration),
+                UUID.randomUUID().toString(),
                 parseEventIds(configuredEventIds));
     }
 

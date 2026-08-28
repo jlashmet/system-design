@@ -1,5 +1,6 @@
 package com.systemdesign.ticketmaster.booking.application;
 
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import java.time.Clock;
@@ -16,6 +17,9 @@ public final class JoinWaitingRoomHandler {
 
     public WaitingRoomEntry handle(JoinWaitingRoomCommand command) {
         Objects.requireNonNull(command, "command");
+        if (repository.findAdmission(command.eventId()).isEmpty()) {
+            throw new WaitingRoomDisabledException(command.eventId());
+        }
         return repository.join(new WaitingRoomEntry(command.eventId(), command.userId(), clock.instant()));
     }
 }

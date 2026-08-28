@@ -7,11 +7,14 @@ import com.systemdesign.ticketmaster.events.application.GetEventQuery;
 import com.systemdesign.ticketmaster.events.domain.Event;
 import com.systemdesign.ticketmaster.events.domain.EventId;
 import java.time.ZoneOffset;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public final class EventsApiController implements EventsApi {
+    private static final String EVENT_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
+
     private final GetEventHandler getEventHandler;
 
     public EventsApiController(GetEventHandler getEventHandler) {
@@ -22,7 +25,9 @@ public final class EventsApiController implements EventsApi {
     public ResponseEntity<EventResponse> getEvent(String eventId) {
         return getEventHandler.handle(new GetEventQuery(new EventId(eventId)))
                 .map(EventsApiController::toResponse)
-                .map(ResponseEntity::ok)
+                .map(response -> ResponseEntity.ok()
+                        .header(HttpHeaders.CACHE_CONTROL, EVENT_CACHE_CONTROL)
+                        .body(response))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

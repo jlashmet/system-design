@@ -14,6 +14,8 @@ import java.util.concurrent.ConcurrentMap;
  * implying that a production payment provider has been integrated.
  */
 public final class DemoPaymentGateway implements PaymentGateway {
+    private static final String INTENT_PREFIX = "demo_pi_";
+
     private final ConcurrentMap<String, PaymentIntent> intentsByIdempotencyKey = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PaymentIntentStatus> statusByIntentId = new ConcurrentHashMap<>();
 
@@ -26,7 +28,7 @@ public final class DemoPaymentGateway implements PaymentGateway {
 
         return intentsByIdempotencyKey.computeIfAbsent(idempotencyKey, ignored -> {
             PaymentIntent intent = new PaymentIntent(
-                    "demo_pi_" + bookingId.value(),
+                    intentId(bookingId),
                     PaymentIntentStatus.REQUIRES_PAYMENT_METHOD);
             statusByIntentId.put(intent.id(), intent.status());
             return intent;
@@ -53,5 +55,25 @@ public final class DemoPaymentGateway implements PaymentGateway {
             }
             return PaymentIntentStatus.CANCELED;
         });
+    }
+
+    /**
+     * Development control used only by the disabled-by-default demo endpoint. A production adapter
+     * learns this transition from its payment provider, not from a Ticketmaster client request.
+     */
+    public PaymentIntentStatus succeedPayment(BookingId bookingId) {
+        Objects.requireNonNull(bookingId, "bookingId");
+        String paymentIntentId = intentId(bookingId);
+        return statusByIntentId.compute(paymentIntentId, (ignored, current) -> {
+            if (current == null) throw new IllegalArgumentException("unknown demo payment intent: " + paymentIntentId);
+            if (current == PaymentIntentStatus.CANCELED || current == PaymentIntentStatus.FAILED) {
+                throw new IllegalStateException("demo payment intent is already terminal: " + current);
+            }
+            return PaymentIntentStatus.SUCCEEDED;
+        });
+    }
+
+    private static String intentId(BookingId bookingId) {
+        return INTENT_PREFIX + bookingId.value();
     }
 }

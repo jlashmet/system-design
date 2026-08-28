@@ -9,6 +9,7 @@
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>search-infrastructure-common</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>search-infrastructure-input</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>search-infrastructure-output</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>search-bootstrap</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
     </dependencies>
 </project>

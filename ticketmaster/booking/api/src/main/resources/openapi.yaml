@@ -29,7 +29,7 @@ paths:
     post:
       tags: [Booking]
       operationId: createHold
-      summary: Temporarily hold a set of seats
+      summary: Temporarily hold a set of seats at their current authoritative prices
       parameters:
         - in: path
           name: eventId
@@ -46,7 +46,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HoldResponse' }
-        '409': { description: One or more seats are unavailable }
+        '409': { description: One or more seats are unavailable or changed price before claim }
   /holds/{holdId}/checkout:
     post:
       tags: [Booking]
@@ -127,7 +127,7 @@ components:
         status: { type: string }
     CreateHoldRequest:
       type: object
-      required: [userId, seatIds, totalPrice]
+      required: [userId, seatIds]
       properties:
         userId: { type: string }
         seatIds:
@@ -135,7 +135,6 @@ components:
           minItems: 1
           uniqueItems: true
           items: { type: string }
-        totalPrice: { $ref: '#/components/schemas/Money' }
     HoldResponse:
       type: object
       required: [holdId, eventId, userId, seatIds, status, expiresAt]

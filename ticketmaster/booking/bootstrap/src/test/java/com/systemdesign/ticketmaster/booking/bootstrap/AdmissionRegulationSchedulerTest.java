@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import com.systemdesign.ticketmaster.booking.application.EnableAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionCapacity;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionHealthGateway;
@@ -28,6 +29,26 @@ class AdmissionRegulationSchedulerTest {
     private static final EventId SECOND = new EventId("event-2");
 
     @Test
+    void initializesConfiguredEventsBeforeRegulation() {
+        FakeWaitingRoomRepository repository = new FakeWaitingRoomRepository();
+        RegulateAdmissionHandler handler = new RegulateAdmissionHandler(
+                repository,
+                ignored -> AdmissionCapacity.OVERLOADED,
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                Duration.ofSeconds(2),
+                Duration.ofMillis(500));
+
+        new AdmissionRegulationScheduler(
+                new EnableAdmissionHandler(repository),
+                handler,
+                List.of(FIRST, SECOND));
+
+        assertThat(repository.admissions).containsKeys(FIRST, SECOND);
+        assertThat(repository.admissions.get(FIRST).admittedThrough()).isEqualTo(Instant.EPOCH);
+        assertThat(repository.admissions.get(SECOND).admittedThrough()).isEqualTo(Instant.EPOCH);
+    }
+
+    @Test
     void continuesWithOtherEventsWhenOneRegulationFails() {
         FakeWaitingRoomRepository repository = new FakeWaitingRoomRepository();
         repository.admissions.put(FIRST, new EventAdmission(FIRST, NOW.minusSeconds(10)));
@@ -39,7 +60,10 @@ class AdmissionRegulationSchedulerTest {
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofSeconds(2),
                 Duration.ofMillis(500));
-        AdmissionRegulationScheduler scheduler = new AdmissionRegulationScheduler(handler, List.of(FIRST, SECOND));
+        AdmissionRegulationScheduler scheduler = new AdmissionRegulationScheduler(
+                new EnableAdmissionHandler(repository),
+                handler,
+                List.of(FIRST, SECOND));
 
         assertThatCode(scheduler::regulate).doesNotThrowAnyException();
 

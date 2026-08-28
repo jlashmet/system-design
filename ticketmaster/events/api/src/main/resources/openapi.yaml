@@ -16,6 +16,12 @@ paths:
       responses:
         '200':
           description: Event details
+          headers:
+            Cache-Control:
+              description: CDN/browser caching policy for stable event metadata
+              schema:
+                type: string
+                example: public, max-age=60, stale-while-revalidate=300
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventResponse' }

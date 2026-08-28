@@ -11,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
+import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -195,6 +196,9 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         try {
             dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
         } catch (TransactionCanceledException e) {
+            if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
+                throw new BookingStorageUnavailableException("checkout transaction", e);
+            }
             throw new CheckoutConflictException(hold.id(), e);
         }
     }

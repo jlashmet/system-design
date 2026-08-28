@@ -40,4 +40,18 @@ public final class DemoPaymentGateway implements PaymentGateway {
         if (status == null) throw new IllegalArgumentException("unknown demo payment intent: " + paymentIntentId);
         return status;
     }
+
+    @Override
+    public PaymentIntentStatus cancelPaymentIntent(String paymentIntentId) {
+        Objects.requireNonNull(paymentIntentId, "paymentIntentId");
+        return statusByIntentId.compute(paymentIntentId, (ignored, current) -> {
+            if (current == null) throw new IllegalArgumentException("unknown demo payment intent: " + paymentIntentId);
+            if (current == PaymentIntentStatus.SUCCEEDED
+                    || current == PaymentIntentStatus.FAILED
+                    || current == PaymentIntentStatus.CANCELED) {
+                return current;
+            }
+            return PaymentIntentStatus.CANCELED;
+        });
+    }
 }

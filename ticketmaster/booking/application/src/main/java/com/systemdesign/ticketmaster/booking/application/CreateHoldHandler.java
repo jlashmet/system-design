@@ -4,7 +4,9 @@ import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
+import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
@@ -24,12 +26,8 @@ public final class CreateHoldHandler {
     private final Clock clock;
     private final Duration holdDuration;
 
-    public CreateHoldHandler(
-            EventWriteAuthority eventWriteAuthority,
-            HoldRepository holdRepository,
-            WaitingRoomRepository waitingRoomRepository,
-            Clock clock,
-            Duration holdDuration) {
+    public CreateHoldHandler(EventWriteAuthority eventWriteAuthority, HoldRepository holdRepository,
+                             WaitingRoomRepository waitingRoomRepository, Clock clock, Duration holdDuration) {
         this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
         this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
         this.waitingRoomRepository = Objects.requireNonNull(waitingRoomRepository, "waitingRoomRepository");
@@ -44,8 +42,10 @@ public final class CreateHoldHandler {
         if (seats.size() != command.seatIds().size()) throw new IllegalArgumentException("duplicate seats are not allowed");
 
         eventWriteAuthority.assertMayWrite(command.eventId());
-        requireAdmissionWhenEnabled(command);
+        Hold existing = holdRepository.findByIdempotencyKey(command.idempotencyKey()).orElse(null);
+        if (existing != null) return requireSameRequest(command, seats, existing);
 
+        requireAdmissionWhenEnabled(command);
         SeatPriceQuote quote = holdRepository.quoteSeatPrices(command.eventId(), seats);
         if (!quote.eventId().equals(command.eventId()) || !quote.seatIds().equals(seats)) {
             throw new IllegalStateException("seat price quote does not match requested event and seats");
@@ -54,17 +54,29 @@ public final class CreateHoldHandler {
         Instant now = clock.instant();
         Hold hold = Hold.active(new HoldId(UUID.randomUUID().toString()), command.userId(), command.eventId(),
                 seats, quote.totalPrice(), now, now.plus(holdDuration));
-        holdRepository.createWithSeatClaims(hold, quote, now);
-        return hold;
+        try {
+            holdRepository.createWithSeatClaims(hold, quote, now, command.idempotencyKey());
+            return hold;
+        } catch (SeatClaimConflictException conflict) {
+            return holdRepository.findByIdempotencyKey(command.idempotencyKey())
+                    .map(previous -> requireSameRequest(command, seats, previous))
+                    .orElseThrow(() -> conflict);
+        }
+    }
+
+    private Hold requireSameRequest(CreateHoldCommand command, Set<SeatId> seats, Hold existing) {
+        if (!existing.userId().equals(command.userId()) || !existing.eventId().equals(command.eventId())
+                || !existing.seatIds().equals(seats)) {
+            throw new HoldIdempotencyConflictException(command.idempotencyKey());
+        }
+        return existing;
     }
 
     private void requireAdmissionWhenEnabled(CreateHoldCommand command) {
         waitingRoomRepository.findAdmission(command.eventId()).ifPresent(admission -> {
             WaitingRoomEntry entry = waitingRoomRepository.findEntry(command.eventId(), command.userId())
                     .orElseThrow(() -> new AdmissionRequiredException(command.eventId(), command.userId()));
-            if (!admission.admits(entry)) {
-                throw new AdmissionRequiredException(command.eventId(), command.userId());
-            }
+            if (!admission.admits(entry)) throw new AdmissionRequiredException(command.eventId(), command.userId());
         });
     }
 }

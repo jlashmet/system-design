@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.application.EnableAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionCapacity;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionHealthGateway;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionRegulationLeaseGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
@@ -26,12 +27,15 @@ import org.junit.jupiter.api.Test;
 class AdmissionRegulationSchedulerTest {
     private static final Instant NOW = Instant.parse("2026-08-28T17:00:00Z");
     private static final Clock FIXED_CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+    private static final Duration LEASE_DURATION = Duration.ofSeconds(5);
     private static final EventId FIRST = new EventId("event-1");
     private static final EventId SECOND = new EventId("event-2");
 
     private FakeWaitingRoomRepository repository;
+    private FakeLeaseGateway leaseGateway;
     private TrackingHealthGateway health;
     private AdmissionRegulationScheduler scheduler;
+    private AdmissionRegulationScheduler secondScheduler;
     private Throwable thrown;
 
     @Test
@@ -48,10 +52,19 @@ class AdmissionRegulationSchedulerTest {
         thenExpectOtherEventsStillRegulated();
     }
 
+    @Test
+    void multipleBookingReplicasDoNotMultiplyAdmissionRate() {
+        givenTwoRegulatorsForSameHealthyEvent();
+        whenBothReplicasRegulate();
+        thenExpectOnlyLeaseOwnerAdvancesAdmission();
+    }
+
     private void givenConfiguredEventsWithoutAdmission() {
         repository = new FakeWaitingRoomRepository();
-        health = new TrackingHealthGateway(false);
+        leaseGateway = new FakeLeaseGateway();
+        health = new TrackingHealthGateway(false, AdmissionCapacity.OVERLOADED);
         scheduler = null;
+        secondScheduler = null;
         thrown = null;
     }
 
@@ -59,24 +72,39 @@ class AdmissionRegulationSchedulerTest {
         repository = new FakeWaitingRoomRepository();
         repository.admissions.put(FIRST, new EventAdmission(FIRST, NOW.minusSeconds(10)));
         repository.admissions.put(SECOND, new EventAdmission(SECOND, NOW.minusSeconds(10)));
-        health = new TrackingHealthGateway(true);
-        scheduler = new AdmissionRegulationScheduler(
-                new EnableAdmissionHandler(repository, FIXED_CLOCK),
-                handler(),
-                List.of(FIRST, SECOND));
+        leaseGateway = new FakeLeaseGateway();
+        health = new TrackingHealthGateway(true, AdmissionCapacity.OVERLOADED);
+        scheduler = scheduler("regulator-a", List.of(FIRST, SECOND));
+        secondScheduler = null;
+        thrown = null;
+    }
+
+    private void givenTwoRegulatorsForSameHealthyEvent() {
+        repository = new FakeWaitingRoomRepository();
+        repository.admissions.put(FIRST, new EventAdmission(FIRST, NOW.minusSeconds(10)));
+        leaseGateway = new FakeLeaseGateway();
+        health = new TrackingHealthGateway(false, AdmissionCapacity.HEALTHY);
+        scheduler = scheduler("regulator-a", List.of(FIRST));
+        secondScheduler = scheduler("regulator-b", List.of(FIRST));
         thrown = null;
     }
 
     private void whenSchedulerIsConstructed() {
-        scheduler = new AdmissionRegulationScheduler(
-                new EnableAdmissionHandler(repository, FIXED_CLOCK),
-                handler(),
-                List.of(FIRST, SECOND));
+        scheduler = scheduler("regulator-a", List.of(FIRST, SECOND));
     }
 
     private void whenRegulationRuns() {
         try {
             scheduler.regulate();
+        } catch (Throwable error) {
+            thrown = error;
+        }
+    }
+
+    private void whenBothReplicasRegulate() {
+        try {
+            scheduler.regulate();
+            secondScheduler.regulate();
         } catch (Throwable error) {
             thrown = error;
         }
@@ -95,6 +123,25 @@ class AdmissionRegulationSchedulerTest {
         assertThat(health.assessed).containsExactly(FIRST, SECOND);
     }
 
+    private void thenExpectOnlyLeaseOwnerAdvancesAdmission() {
+        assertThat(thrown).isNull();
+        assertThat(health.assessed).containsExactly(FIRST);
+        assertThat(repository.admissions.get(FIRST).admittedThrough())
+                .isEqualTo(NOW.minusSeconds(8));
+        assertThat(leaseGateway.owner(FIRST)).contains("regulator-a");
+    }
+
+    private AdmissionRegulationScheduler scheduler(String regulatorId, List<EventId> eventIds) {
+        return new AdmissionRegulationScheduler(
+                new EnableAdmissionHandler(repository, FIXED_CLOCK),
+                handler(),
+                leaseGateway,
+                FIXED_CLOCK,
+                LEASE_DURATION,
+                regulatorId,
+                eventIds);
+    }
+
     private RegulateAdmissionHandler handler() {
         return new RegulateAdmissionHandler(
                 repository,
@@ -106,18 +153,44 @@ class AdmissionRegulationSchedulerTest {
 
     private static final class TrackingHealthGateway implements AdmissionHealthGateway {
         private final boolean failFirst;
+        private final AdmissionCapacity capacity;
         private final List<EventId> assessed = new ArrayList<>();
 
-        private TrackingHealthGateway(boolean failFirst) {
+        private TrackingHealthGateway(boolean failFirst, AdmissionCapacity capacity) {
             this.failFirst = failFirst;
+            this.capacity = capacity;
         }
 
         @Override
         public AdmissionCapacity assess(EventId eventId) {
             assessed.add(eventId);
             if (failFirst && eventId.equals(FIRST)) throw new IllegalStateException("synthetic health failure");
-            return AdmissionCapacity.OVERLOADED;
+            return capacity;
         }
+    }
+
+    private static final class FakeLeaseGateway implements AdmissionRegulationLeaseGateway {
+        private final Map<EventId, Lease> leases = new HashMap<>();
+
+        @Override
+        public boolean tryAcquireOrRenew(
+                EventId eventId,
+                String regulatorId,
+                Instant now,
+                Instant leaseExpiresAt) {
+            Lease current = leases.get(eventId);
+            if (current != null && current.expiresAt().isAfter(now) && !current.regulatorId().equals(regulatorId)) {
+                return false;
+            }
+            leases.put(eventId, new Lease(regulatorId, leaseExpiresAt));
+            return true;
+        }
+
+        Optional<String> owner(EventId eventId) {
+            return Optional.ofNullable(leases.get(eventId)).map(Lease::regulatorId);
+        }
+
+        private record Lease(String regulatorId, Instant expiresAt) {}
     }
 
     private static final class FakeWaitingRoomRepository implements WaitingRoomRepository {

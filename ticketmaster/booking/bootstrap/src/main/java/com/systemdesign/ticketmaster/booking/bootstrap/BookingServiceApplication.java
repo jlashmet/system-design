@@ -280,8 +280,8 @@ public class BookingServiceApplication {
     }
 
     @Bean
-    GetSectionSeatsHandler getSectionSeatsHandler(SeatMapRepository seatMapRepository) {
-        return new GetSectionSeatsHandler(seatMapRepository);
+    GetSectionSeatsHandler getSectionSeatsHandler(SeatMapRepository seatMapRepository, Clock clock) {
+        return new GetSectionSeatsHandler(seatMapRepository, clock);
     }
 
     @Bean

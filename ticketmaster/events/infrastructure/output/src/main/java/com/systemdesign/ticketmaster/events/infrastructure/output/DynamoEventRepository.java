@@ -29,7 +29,7 @@ public final class DynamoEventRepository implements EventRepository {
         Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
                         .key(Map.of(PK, string(eventPk(eventId))))
-                        .consistentRead(true)
+                        .consistentRead(false)
                         .build())
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();

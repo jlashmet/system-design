@@ -26,6 +26,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EventResponse' }
         '404': { description: Event not found }
+        '503': { description: Event metadata storage is temporarily unavailable; retry may succeed }
 components:
   schemas:
     EventResponse:

@@ -13,12 +13,13 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 
 class SearchApiControllerTest {
 
     @Test
-    void mapsGeneratedParametersToDomainQueryAndBack() {
+    void mapsGeneratedParametersToDomainQueryAndBackWithSharedCachePolicy() {
         CapturingSearchGateway gateway = new CapturingSearchGateway();
         SearchApiController controller = new SearchApiController(new SearchEventsHandler(gateway));
         OffsetDateTime after = OffsetDateTime.of(2026, 10, 1, 0, 0, 0, 0, ZoneOffset.UTC);
@@ -29,6 +30,8 @@ class SearchApiControllerTest {
 
         assertThat(gateway.query).isEqualTo(new SearchQuery(
                 "Taylor", "Los Angeles", after.toInstant(), before.toInstant(), "cursor-1", 25));
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL))
+                .isEqualTo("public, max-age=15, stale-while-revalidate=30, stale-if-error=120");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getNextCursor()).isEqualTo("cursor-2");
         assertThat(response.getBody().getEvents()).singleElement().satisfies(event -> {

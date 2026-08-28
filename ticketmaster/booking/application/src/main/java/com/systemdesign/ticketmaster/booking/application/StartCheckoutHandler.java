@@ -5,6 +5,7 @@ import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
@@ -16,6 +17,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 public final class StartCheckoutHandler {
+    private final EventWriteAuthority eventWriteAuthority;
     private final HoldRepository holdRepository;
     private final BookingRepository bookingRepository;
     private final CheckoutGateway checkoutGateway;
@@ -25,10 +27,12 @@ public final class StartCheckoutHandler {
     private final Duration reconciliationDelay;
     private final int reconciliationShards;
 
-    public StartCheckoutHandler(HoldRepository holdRepository, BookingRepository bookingRepository,
+    public StartCheckoutHandler(EventWriteAuthority eventWriteAuthority,
+                                HoldRepository holdRepository, BookingRepository bookingRepository,
                                 CheckoutGateway checkoutGateway, PaymentGateway paymentGateway,
                                 Clock clock, Duration checkoutDuration, Duration reconciliationDelay,
                                 int reconciliationShards) {
+        this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
         this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
         this.bookingRepository = Objects.requireNonNull(bookingRepository, "bookingRepository");
         this.checkoutGateway = Objects.requireNonNull(checkoutGateway, "checkoutGateway");
@@ -42,7 +46,9 @@ public final class StartCheckoutHandler {
 
     public StartCheckoutResult handle(StartCheckoutCommand command) {
         Objects.requireNonNull(command, "command");
+        eventWriteAuthority.assertMayWrite(command.eventId());
         return bookingRepository.findByCheckoutIdempotencyKey(command.idempotencyKey())
+                .map(booking -> ensureSameEvent(command, booking))
                 .map(this::ensurePaymentIntent)
                 .orElseGet(() -> startNewCheckout(command));
     }
@@ -51,6 +57,9 @@ public final class StartCheckoutHandler {
         Instant now = clock.instant();
         Hold hold = holdRepository.findById(command.holdId())
                 .orElseThrow(() -> new IllegalArgumentException("hold not found: " + command.holdId().value()));
+        if (!hold.eventId().equals(command.eventId())) {
+            throw new IllegalArgumentException("hold does not belong to event " + command.eventId().value());
+        }
         Hold checkoutHold = hold.startCheckout(now, now.plus(checkoutDuration));
         BookingId bookingId = new BookingId(UUID.randomUUID().toString());
         int shard = Math.floorMod(bookingId.value().hashCode(), reconciliationShards);
@@ -62,9 +71,17 @@ public final class StartCheckoutHandler {
             return ensurePaymentIntent(booking);
         } catch (CheckoutConflictException conflict) {
             return bookingRepository.findByCheckoutIdempotencyKey(command.idempotencyKey())
+                    .map(bookingAfterConflict -> ensureSameEvent(command, bookingAfterConflict))
                     .map(this::ensurePaymentIntent)
                     .orElseThrow(() -> conflict);
         }
+    }
+
+    private Booking ensureSameEvent(StartCheckoutCommand command, Booking booking) {
+        if (!booking.eventId().equals(command.eventId())) {
+            throw new IllegalArgumentException("idempotency key belongs to a different event");
+        }
+        return booking;
     }
 
     private StartCheckoutResult ensurePaymentIntent(Booking booking) {

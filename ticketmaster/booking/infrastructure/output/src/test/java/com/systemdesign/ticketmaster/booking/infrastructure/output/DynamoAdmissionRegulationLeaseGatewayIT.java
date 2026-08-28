@@ -61,7 +61,7 @@ class DynamoAdmissionRegulationLeaseGatewayIT {
     private void givenEnabledAdmission() {
         initialize();
         new DynamoWaitingRoomRepository(dynamoDb, tableName)
-                .advanceAdmission(new EventAdmission(EVENT_ID, NOW));
+                .initializeAdmission(new EventAdmission(EVENT_ID, NOW));
         leaseGateway = new DynamoAdmissionRegulationLeaseGateway(dynamoDb, tableName);
         firstAcquire = false;
         ownerRenewal = false;

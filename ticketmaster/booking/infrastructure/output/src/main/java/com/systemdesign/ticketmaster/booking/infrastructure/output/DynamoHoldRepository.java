@@ -133,8 +133,11 @@ public final class DynamoHoldRepository implements HoldRepository {
         writes.add(TransactWriteItem.builder().put(Put.builder()
                 .tableName(tableName)
                 .item(Map.of(
-                        PK, string(DynamoKeys.holdIdempotencyPk(idempotencyKey)),
+                        PK, string(DynamoKeys.holdIdempotencyPk(hold.eventId(), hold.userId(), idempotencyKey)),
                         "entityType", string("HOLD_IDEMPOTENCY"),
+                        "eventId", string(hold.eventId().value()),
+                        "userId", string(hold.userId().value()),
+                        "idempotencyKey", string(idempotencyKey.value()),
                         "holdId", string(hold.id().value())))
                 .conditionExpression("attribute_not_exists(#pk)")
                 .expressionAttributeNames(Map.of("#pk", PK))
@@ -169,17 +172,23 @@ public final class DynamoHoldRepository implements HoldRepository {
     }
 
     @Override
-    public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey idempotencyKey) {
+    public Optional<Hold> findByIdempotencyKey(
+            EventId eventId, UserId userId, HoldIdempotencyKey idempotencyKey) {
+        Objects.requireNonNull(eventId, "eventId");
+        Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
         Map<String, AttributeValue> mapping = DynamoBookingCall.execute(
                         "hold idempotency lookup",
                         () -> dynamoDb.getItem(GetItemRequest.builder()
                                 .tableName(tableName)
-                                .key(Map.of(PK, string(DynamoKeys.holdIdempotencyPk(idempotencyKey))))
+                                .key(Map.of(PK, string(DynamoKeys.holdIdempotencyPk(eventId, userId, idempotencyKey))))
                                 .consistentRead(true)
                                 .build()))
                 .item();
         if (mapping == null || mapping.isEmpty()) return Optional.empty();
+        requireMappingValue(mapping, "eventId", eventId.value());
+        requireMappingValue(mapping, "userId", userId.value());
+        requireMappingValue(mapping, "idempotencyKey", idempotencyKey.value());
         AttributeValue holdId = mapping.get("holdId");
         if (holdId == null || holdId.s() == null || holdId.s().isBlank()) {
             throw new IllegalStateException("hold idempotency record is missing holdId");
@@ -187,7 +196,23 @@ public final class DynamoHoldRepository implements HoldRepository {
         Hold hold = findById(new HoldId(holdId.s()))
                 .orElseThrow(() -> new IllegalStateException(
                         "hold idempotency record references missing hold " + holdId.s()));
+        if (!hold.eventId().equals(eventId) || !hold.userId().equals(userId)) {
+            throw new IllegalStateException("hold idempotency record resolved outside its event/user scope");
+        }
         return Optional.of(hold);
+    }
+
+    @Override
+    @Deprecated
+    public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey idempotencyKey) {
+        throw new UnsupportedOperationException("hold idempotency lookup requires event and user scope");
+    }
+
+    private static void requireMappingValue(Map<String, AttributeValue> mapping, String name, String expected) {
+        AttributeValue value = mapping.get(name);
+        if (value == null || value.s() == null || !expected.equals(value.s())) {
+            throw new IllegalStateException("hold idempotency record has inconsistent " + name);
+        }
     }
 
     private static void backoffBeforeQuoteRetry(int completedAttempt) {

@@ -1,6 +1,6 @@
 # Ticketmaster System Design
 
-This document captures the Ticketmaster system-design discussion and the decisions made so far. It is intentionally interview-focused: requirements first, then the architectural consequences and tradeoffs.
+This document captures the Ticketmaster system-design discussion and the implementation decisions made so far. It is intentionally interview-focused: requirements first, followed by the architectural consequences, invariants, and tradeoffs.
 
 ## Scope
 
@@ -33,6 +33,7 @@ This document captures the Ticketmaster system-design discussion and the decisio
 - The authoritative hold operation must be strongly consistent.
 - A user should hold all requested seats or none of them; partial fulfillment is not assumed.
 - Seat prices used for a hold are read from authoritative inventory and calculated by the server; the client never supplies the hold total.
+- Hold creation and checkout are idempotent because clients may retry after losing an HTTP response.
 - Ordinary `HELD` seats can be reclaimed lazily after their hold deadline. Seats in `CHECKOUT` are deliberately protected from blind timestamp reclaim because an external payment may still resolve.
 - Waiting-room ordering only needs to be approximately fair. We do not require a globally exact real-world arrival order.
 - A missing `EventAdmission` record means the waiting room is disabled for that event. Enabling a hot-event waiting room therefore creates its admission record before hold traffic is admitted.
@@ -59,7 +60,9 @@ This document captures the Ticketmaster system-design discussion and the decisio
         v           v                  |                Inventory - DynamoDB
     DynamoDB    OpenSearch             |                         |
    metadata      search                |                         v
-                                       |                    Payment Provider
+        |                              |                    Payment Provider
+        |                              |
+        +-> Streams -> SQS FIFO -> Search projection
                                        |
                                        v
                               Seat Map Read Model
@@ -70,7 +73,7 @@ The system separates highly available read paths from the consistency-sensitive 
 
 ## Event Metadata: DynamoDB
 
-Canonical event and venue metadata lives in DynamoDB. The access patterns are simple and key-oriented, and introducing a relational database solely for this metadata does not buy us enough to justify another datastore.
+Canonical event and venue metadata lives in DynamoDB. The access patterns are simple and key-oriented, and introducing a relational database solely for this metadata does not buy enough to justify another datastore.
 
 Example:
 
@@ -92,60 +95,113 @@ name
 city
 ```
 
+Customer-facing Event/Venue reads use eventually consistent DynamoDB reads because this path favors availability and is also cacheable at the CDN.
+
 Physical venue data such as sections and seat geometry can also be stored in DynamoDB using access-pattern-oriented keys.
 
-Changes to event metadata asynchronously update OpenSearch. The Search bounded context does not read the Events table directly. Events enriches its Event with canonical Venue metadata and emits a denormalized projection message; Search consumes that message into its own domain and writes OpenSearch.
+### Events to Search Projection
+
+Search does not read the Events table directly and does not compile against Events Java classes. Events enriches canonical Event metadata with Venue data and emits a denormalized, versioned external projection message.
+
+The implemented production path is:
 
 ```text
-Event change
-     |
-     v
-Events: load Event + Venue
-     |
-     v
-Denormalized search projection
-     |
-     v
-Search projection consumer
-     |
-     v
-OpenSearch
+Events DynamoDB
+      |
+ DynamoDB Stream
+      |
+EventSearchProjectionLambdaHandler
+      |
+  SQS FIFO
+      |
+SearchProjectionSqsLambdaHandler
+      |
+EventSearchProjectionConsumer
+      |
+  OpenSearch
 ```
 
-The transport carrying that low-volume metadata projection is intentionally not part of the core requirements yet. The important boundary is that Search does not compile against Events classes or depend on the Events DynamoDB item schema.
+The Events projection Lambda uses **strongly consistent** Event/Venue reads even though the customer-facing Events API uses eventual reads. A stream callback should not publish an older canonical representation merely because an eventually consistent read replica lagged the write that triggered the stream record.
 
-DynamoDB is the source of truth; OpenSearch is the search projection.
+The SQS message is a bounded-context integration contract rather than a shared Java type. Version 1 contains `UPSERT` and `DELETE` messages. An UPSERT contains fields such as:
+
+```text
+schemaVersion = 1
+type = UPSERT
+eventId
+name
+venue
+city
+startsAtEpochMillis
+category
+```
+
+SQS FIFO is used for the projection transport:
+
+- `messageGroupId = eventId`, preserving order for changes to one event;
+- `messageDeduplicationId = DynamoDB Stream event ID`, suppressing normal producer retries;
+- Search indexes documents by `eventId`, so replay is idempotent even beyond the FIFO deduplication window.
+
+Malformed or unsupported messages fail processing rather than being silently dropped. Production queue configuration should include a DLQ/redrive policy for poison messages.
+
+DynamoDB remains the source of truth; OpenSearch is the search projection.
 
 ## Search Technology: OpenSearch
 
 OpenSearch handles event discovery because search requires text search, filtering, high read throughput, and low latency while tolerating eventual consistency.
 
-A search document can be denormalized around fields such as:
+A search document is denormalized around fields such as:
 
 ```text
 eventId
 name
-performers
 venue
 city
 startsAt
 category
 ```
 
+The current query model supports text, city, date-range filters, cursor/search-after pagination, and a page-size cap of 100. Stable pagination sorts on event start time plus event ID.
+
 Search results are not authoritative for inventory availability.
+
+### Search Latency and AWS Transport
+
+To support the sub-500 ms target, the Search runtime does not inherit a multi-second backend timeout. The current defaults are approximately:
+
+```text
+OpenSearch connect timeout  = 200 ms
+OpenSearch response timeout = 450 ms
+```
+
+A backend timeout/failure becomes a clean `503` rather than allowing requests to hang far beyond the latency objective. Invalid query input/cursors return `400`.
+
+Local and Floci environments use unsigned HTTP. AWS deployments can enable the OpenSearch Java client's `AwsSdk2Transport` so requests are SigV4 signed. The signing service is `es` for Amazon OpenSearch Service or `aoss` for OpenSearch Serverless.
 
 ## CDN Usage
 
 A CDN such as CloudFront sits in front of highly cacheable content and removes read load before requests reach the application tier.
 
-Good CDN candidates include:
+Current HTTP cache intent is explicit:
 
-- event images and other static assets;
-- venue maps and static seat-map geometry;
-- event-detail responses when their cacheability permits it;
-- frontend application assets.
+```text
+GET event detail
+  public, max-age=60, stale-while-revalidate=300
 
-Live seat availability is not treated as authoritative CDN data. The seat-map DynamoDB projection already serves as the intentionally stale read model, while the authoritative inventory table decides whether a hold succeeds.
+GET search
+  public, max-age=5, stale-while-revalidate=30, stale-if-error=60
+
+GET event section directory
+  public, max-age=60, stale-while-revalidate=300
+
+GET live section seats
+POST hold
+POST checkout
+waiting-room state
+  no-store
+```
+
+Live seat availability is never treated as authoritative CDN data. The seat-map DynamoDB projection is already the intentionally stale availability view, while authoritative inventory decides whether a hold succeeds.
 
 ## Seat Hold Model
 
@@ -193,23 +249,17 @@ else
    reject
 ```
 
-An expired `HELD` value may remain stored indefinitely without preventing the seat from being reclaimed. DynamoDB TTL can optionally remove old hold/workflow records later for storage housekeeping, but TTL or a cleanup process is not part of the ordinary hold correctness mechanism.
+An expired `HELD` value may remain stored indefinitely without preventing the seat from being reclaimed. DynamoDB TTL can optionally remove old workflow/history records later for storage housekeeping, but TTL or a cleanup process is not part of ordinary hold correctness.
 
-`CHECKOUT` is intentionally different. Once an external payment may be in flight, reaching `checkoutExpiresAt` does **not** by itself make the seat claimable. Blindly reassigning the seat could race with a late provider success and create a charged customer with no ticket. Checkout expiration is therefore resolved through payment reconciliation: confirm success, or safely cancel/fail the payment before releasing the seats.
-
-Both the hold and the inventory item may contain expiration/deadline state. This is deliberate denormalization:
-
-- the `Hold` owns the checkout workflow and grouping of seats;
-- the inventory item contains enough information to make an atomic availability decision without consulting another record;
-- the protected `CHECKOUT` state signals that payment resolution, not timestamp-only reclaim, controls release.
+`CHECKOUT` is intentionally different. Once an external payment may be in flight, reaching `checkoutExpiresAt` does **not** by itself make the seat claimable. Blindly reassigning the seat could race with a late provider success and create a charged customer with no ticket. Checkout expiration is resolved through payment reconciliation: confirm success, or safely cancel/fail the payment before releasing seats.
 
 ### Authoritative Price Snapshot
 
-The client selects seat IDs, not a total price. Before creating a hold, the booking service strongly reads the requested authoritative seat items and creates a `SeatPriceQuote` from their stored `priceAmount` and `priceCurrency` values.
+The client selects seat IDs, not a total price. Before creating a hold, Booking strongly reads the requested authoritative seat items and creates a `SeatPriceQuote` from stored `priceAmount` and `priceCurrency` values.
 
-The server sums those seat prices and stores that total on the hold. The hold response returns the server-calculated total so the customer can see the amount that has been locked for checkout.
+The server sums those prices and stores the total on the Hold. The response returns that server-calculated snapshot.
 
-The quote read and the seat claim are separate operations, so the transaction also conditions each claimed seat on its quoted price. Conceptually:
+The quote read and seat claim are separate operations, so the transaction also conditions each claimed seat on its quoted price:
 
 ```text
 quote A10 = $100
@@ -223,9 +273,33 @@ TransactWriteItems
   claim A10 only if claimable AND price still $100
   claim A11 only if claimable AND price still $125
   create Hold(totalPrice = $225)
+  create HoldIdempotency -> Hold mapping
 ```
 
-If any price changes between the quote and the transactional claim, the entire hold fails rather than silently selling at a stale price.
+If any price changes between quote and claim, the entire hold fails rather than silently selling at a stale price.
+
+### Hold Creation Idempotency
+
+`POST /events/{eventId}/holds` requires an `Idempotency-Key` because a successful transaction may commit even if the client never receives the `201` response.
+
+The key mapping is written **inside the same DynamoDB transaction** as all seat claims and the Hold:
+
+```text
+TransactWriteItems
+  N x conditional seat claims
+  Put Hold
+  Put HOLD_IDEMPOTENCY#hash(key) -> holdId
+```
+
+On retry:
+
+1. Booking verifies that this deployment is still authorized to write the event.
+2. It strongly reads the idempotency mapping.
+3. If the prior Hold exists and user/event/seat set matches, it returns that original Hold.
+4. If the same key is reused for a materially different request, the API returns `409`.
+5. If a mapping exists but references a missing/corrupt Hold, the repository fails closed rather than pretending the request is new.
+
+Concurrent first attempts using the same idempotency key are safe because only one mapping can be conditionally created. A losing transaction can read the winner's mapping and return the same Hold.
 
 ## Core Data Model
 
@@ -261,8 +335,6 @@ bookingId          nullable
 
 The existence of a `Hold` record alone does not determine seat availability. The authoritative event-seat inventory item does.
 
-`CHECKOUT` is a protected reservation state: it still belongs to the hold, but ordinary expired-hold acquisition cannot steal it while payment state is unresolved.
-
 ### Hold
 
 ```text
@@ -279,7 +351,7 @@ seatIds
 totalPrice
 ```
 
-The hold groups several exclusive seat claims into one checkout workflow and preserves the authoritative server-side price snapshot used by checkout.
+The Hold groups several exclusive seat claims into one checkout workflow and preserves the authoritative server-side price snapshot used by checkout.
 
 ### Booking
 
@@ -309,11 +381,11 @@ PK = EVENT#123
 SK = SEAT#A10
 ```
 
-For a very popular event, every authoritative seat operation would use the same partition-key value, creating an undesirable hot-key pattern.
+For a very popular event, every authoritative seat operation would share the same logical partition-key value.
 
 ### Current Authoritative Key
 
-Give each event-seat its own distributed key:
+Each event-seat gets its own key:
 
 ```text
 PK = EVENT#123#SEAT#A10
@@ -321,44 +393,49 @@ PK = EVENT#123#SEAT#A11
 PK = EVENT#123#SEAT#A12
 ```
 
-Conceptually the key is derived from both `eventId` and `seatId`.
-
-The primary access pattern is:
+The primary authoritative access pattern is:
 
 > Given an event and a seat, can this seat be atomically acquired?
 
 ### Atomic Seat Acquisition
 
-A seat claim uses a conditional write. It succeeds only when the seat is currently available or its ordinary `HELD` reservation has expired, and when the authoritative price still matches the price quoted for this hold attempt.
+A seat claim uses a conditional write. It succeeds only when the seat is available or its ordinary `HELD` reservation has expired, and when the authoritative price still matches the quoted price.
 
-A `CHECKOUT` seat is not claimable through this path even if its checkout deadline has passed; the payment workflow must resolve it first.
+A `CHECKOUT` seat is not claimable through this path even after its checkout deadline; payment resolution must make release safe first.
 
-If two users compete for the same seat, only one conditional write succeeds. If a seat price changes after the quote but before the claim, the claim fails and the caller must refresh/retry instead of receiving a stale price.
+If many users compete for the same seat, only one conditional transaction may win. The Floci integration suite includes an actual concurrent same-seat race as well as overlapping multi-seat races to make this NFR executable.
 
 ### Multi-Seat Holds
 
-A user commonly selects several seats. Because those items may be distributed across different DynamoDB partition keys, the hold uses a DynamoDB transactional write so that all seat claims succeed or none do.
+A user commonly selects several seats. Because those items may live under different partition keys, the hold uses `TransactWriteItems` so all seat claims succeed or none do.
 
-Typical purchases contain only a small number of seats, so this is a bounded multi-item transaction rather than a transaction over an entire venue.
+Typical purchases contain only a small number of seats, so this remains a bounded transaction rather than a transaction over an entire venue.
 
 ## Seat Map Read Model: Second DynamoDB Table
 
 Redis is not required for the seat-map availability path.
 
-Use a separate DynamoDB table whose key design is optimized for reading a section of an event.
+The second DynamoDB table is optimized for section reads:
 
 ```text
-SeatMapBySection
-----------------
+Seat row
+--------
 PK = EVENT#123#SECTION#101
 SK = SEAT#A10
 status
 price
 row
 number
+
+Section directory row
+---------------------
+PK = EVENT#123
+SK = SECTION#101
 ```
 
-The two DynamoDB tables have different responsibilities:
+The section-directory marker makes `GET /events/{eventId}/sections` a query instead of a table scan.
+
+The two tables have different responsibilities:
 
 ```text
 AuthoritativeSeatInventory
@@ -367,45 +444,44 @@ AuthoritativeSeatInventory
 
 SeatMapBySection
     eventually consistent projection
-    optimized for section-level queries
+    optimized for event-section discovery and section seat queries
 ```
 
-The UI reads the seat-map projection. If it displays A10 as available but another user has already acquired A10, the authoritative hold request fails and the UI refreshes.
-
-`HELD` and `CHECKOUT` are both unavailable to another shopper in this projection; the distinction exists for the authoritative payment workflow.
-
-This is an intentional consistency tradeoff.
+The UI may display A10 as available after another user has acquired it. That is acceptable: the authoritative hold request fails and the UI refreshes.
 
 ### Keeping the Projection Updated
 
+The implemented production path is managed by DynamoDB Streams and Lambda:
+
 ```text
-AuthoritativeSeatInventory
+Authoritative Booking DynamoDB
           |
-          | DynamoDB Streams
-          v
-   Projection Consumer
+     DynamoDB Stream
           |
-          v
+ Lambda event-source mapping
+          |
+SeatMapProjectionLambdaHandler
+          |
+DynamoSeatInventoryStreamProjector
+          |
     SeatMapBySection
 ```
 
-Projection delay or temporary failure is acceptable. It may make the UI stale, but it cannot cause double booking because every hold is checked against authoritative inventory.
+The stream must expose `NEW_IMAGE` or `NEW_AND_OLD_IMAGES`. For each seat image, the read-model repository atomically writes the seat row and its event-level section-directory marker in a DynamoDB transaction.
 
-The projection can be rebuilt from durable inventory state if necessary.
+Projection delay or temporary failure can make the UI stale but cannot cause double booking. Projection writes are idempotent, so Lambda can safely retry a failed batch. The read model can also be rebuilt from authoritative inventory if needed.
 
 ## Waiting Room / Admission Control
 
-The waiting room is not required for inventory correctness. Its purpose is to protect the rest of the system during extreme flash crowds and to control how many users can actively compete for seats.
+The waiting room is not required for inventory correctness. Its purpose is to protect the rest of the system during extreme flash crowds and control how many users actively compete for seats.
 
-It can be enabled only for sufficiently hot events. In the current model, an `EventAdmission` record means admission control is enabled for that event; if the record is absent, the waiting room is disabled and hold creation proceeds without an admission check.
-
-Operationally, a hot event must create its initial admission record before hold traffic is opened. The initial watermark can be set earlier than any legitimate join time so nobody is admitted until the controller intentionally advances it.
+It can be enabled only for sufficiently hot events. An `EventAdmission` record means admission control is enabled; if the record is absent, the waiting room is disabled and hold creation proceeds without admission gating.
 
 ### No Physical Queue Required
 
-We do not require exact FIFO ordering, so we do not need SQS, Kafka, or a globally serialized sequence number.
+Exact FIFO admission is not a requirement, so waiting-room state does not need SQS, Kafka, or a global sequence number.
 
-Each waiting user gets a server-assigned wall-clock timestamp and a separately keyed DynamoDB item:
+Each user gets a server-assigned wall-clock timestamp:
 
 ```text
 WaitingRoomUser
@@ -414,9 +490,7 @@ PK = EVENT#123#USER#456
 joinedAt = 2026-08-27T21:00:03.482931Z
 ```
 
-The timestamp must be assigned by our server, not the browser. `System.nanoTime()` is not suitable because values from different JVMs cannot be compared globally.
-
-Each event maintains a small admission record:
+Each event maintains a watermark:
 
 ```text
 EventAdmission
@@ -425,19 +499,17 @@ PK = EVENT#123
 admittedThrough = 2026-08-27T21:00:02.750000Z
 ```
 
-Admission is simply:
+Admission is:
 
 ```text
 user.joinedAt <= event.admittedThrough
 ```
 
-This gives approximately arrival-ordered admission without maintaining a physical queue or sequence generator. Requests arriving on different servers within a very small clock-skew window may be reordered, which is acceptable for this design.
+This is approximately arrival ordered. Small clock-skew reorderings are acceptable.
 
 ### Controlling Admission Rate
 
-We deliberately do not maintain a histogram or exact count of users between timestamps.
-
-Instead, the admission controller advances `admittedThrough` conservatively and uses downstream health as feedback.
+The admission controller advances the watermark conservatively using downstream health rather than maintaining an exact histogram of queued users.
 
 Useful signals include:
 
@@ -445,7 +517,7 @@ Useful signals include:
 - hold-request rate and latency;
 - conditional-write failure/error rate;
 - DynamoDB throttling/saturation;
-- payment-provider latency and error rate;
+- payment-provider latency/error rate;
 - application/API saturation.
 
 Conceptually:
@@ -461,11 +533,11 @@ overloaded
     -> stop advancing
 ```
 
-Small, frequent watermark movements reduce the risk of admitting a large burst at once. The tradeoff is that admission rate is approximate rather than exact.
+The runtime regulator is safe by default: no configured hot-event IDs means it does no work, and the initial bootstrap health adapter defaults to `OVERLOADED`. Failures are isolated per event so one bad regulation attempt does not block other configured events.
 
-The current hold implementation performs strongly consistent reads of `EventAdmission` and the user's waiting-room entry before touching authoritative seat pricing/inventory. Because the watermark only moves forward, admission is monotonic once granted. A short-lived signed admission token could later replace those per-hold waiting-room reads as a performance optimization, but it is not required for correctness or for the current implementation.
+The current hold path strongly reads `EventAdmission` and the user's waiting-room entry before authoritative pricing/inventory. A signed short-lived admission token could later replace these reads as an optimization, but is not required for correctness.
 
-## APIs Discussed
+## APIs
 
 ### View Event
 
@@ -473,15 +545,15 @@ The current hold implementation performs strongly consistent reads of `EventAdmi
 GET /events/{eventId}
 ```
 
-Event detail reads are highly cacheable/eventually consistent and are not the authoritative source for inventory.
+Event detail reads are cacheable/eventually consistent and are not authoritative for inventory.
 
 ### Search Events
 
 ```http
-GET /events/search?q=taylor&city=los-angeles&from=...&to=...
+GET /events/search?q=taylor&city=los-angeles&startsAfter=...&startsBefore=...&cursor=...&limit=20
 ```
 
-Search results can lag DynamoDB. Search is not authoritative for whether a seat can actually be acquired.
+Search results can lag DynamoDB and are not authoritative for seat acquisition.
 
 ### View Seat Map
 
@@ -490,15 +562,16 @@ GET /events/{eventId}/sections
 GET /events/{eventId}/sections/{sectionId}/seats
 ```
 
-These endpoints use the read model and may be slightly stale.
+These endpoints use the eventually consistent read model.
 
 ### Create Hold
 
 ```http
 POST /events/{eventId}/holds
+Idempotency-Key: <client-generated-key>
 ```
 
-Example:
+Example body:
 
 ```json
 {
@@ -507,31 +580,26 @@ Example:
 }
 ```
 
-The request does not contain a total price. The server reads authoritative seat prices, computes the hold total, and returns that price snapshot in `HoldResponse.totalPrice`.
+The request never supplies a total price. Booking reads authoritative prices, computes the total, and returns that snapshot in `HoldResponse.totalPrice`.
 
-For an event with admission control enabled, the hold is rejected before seat pricing/inventory is touched unless the user's waiting-room entry is at or before the current admission watermark.
+For a hot event, the request must also be admitted before pricing/inventory is touched. Before those reads, Booking checks that the event's control-plane owner matches the local region. Missing/unreachable/inconsistent ownership fails closed.
 
-Before waiting-room or inventory access, the regional Booking service also checks that the control-plane owner for the event matches its configured region. A missing owner, unreachable control plane on an uncached lookup, malformed ownership record, or wrong owner fails closed rather than touching regional authoritative state.
-
-The operation is all-or-nothing. If any requested seat cannot be acquired or its price changes after the quote, the hold fails rather than returning a partial group.
+The operation is all-or-nothing. Seat conflict, stale quoted price, or idempotency-key misuse returns a conflict rather than a partial hold.
 
 ### Checkout Hold
 
 ```http
 POST /events/{eventId}/holds/{holdId}/checkout
+Idempotency-Key: <client-generated-key>
 ```
 
-Checkout is event-scoped deliberately. An opaque `holdId` alone is not enough for an edge or regional router to determine the event's authoritative booking region without a separate global hold lookup. Carrying `eventId` allows routing/ownership validation before regional hold state is read.
-
-Checkout uses an idempotency key so retries do not create duplicate booking/payment workflows. The loaded hold or idempotent booking must also belong to the event named in the route.
+Checkout is event-scoped so regional routing/ownership can be validated without a separate global hold lookup. Checkout idempotency prevents duplicate booking/payment workflows.
 
 ## Checkout and Payment Workflow
 
-Payment is an external system and cannot participate in the same ACID transaction as DynamoDB. Checkout is therefore a durable, recoverable workflow.
+Payment is external and cannot participate in the same ACID transaction as DynamoDB. Checkout is therefore a durable, recoverable workflow.
 
 ### Start Checkout
-
-When the user begins checkout, atomically transition the hold and its seats into protected checkout and create a pending booking before money can move.
 
 ```text
 DynamoDB transaction
@@ -541,11 +609,9 @@ Seats: HELD -> CHECKOUT, deadline = checkoutExpiresAt
 Booking: create PENDING_PAYMENT
 ```
 
-Once checkout has started, the normal short seat-hold expiration must not expire underneath an in-flight payment. The `CHECKOUT` seat state uses the bounded checkout deadline for workflow timing but is not blindly reclaimable when that deadline arrives.
+Once checkout begins, normal short hold expiration cannot release seats underneath an in-flight payment.
 
 ### Payment Intent Lifecycle
-
-The intended flow is:
 
 ```text
 1. Create Booking(PENDING_PAYMENT)
@@ -556,43 +622,23 @@ The intended flow is:
 6. Finalize booking
 ```
 
-Creating the intent does not mean the customer has been charged. If checkout is abandoned before confirmation, the unused intent is explicitly resolved by reconciliation at the checkout deadline rather than allowing inventory to race an unresolved payment.
+Creating the payment intent should use `bookingId` as a provider idempotency key where supported. If the provider creates the intent and the application crashes before storing its ID, repeating create returns the same provider intent rather than charging twice.
 
-Creating the payment intent should use the `bookingId` as an idempotency key where the provider supports it. This closes the crash window in which the provider creates the intent but our service fails before persisting its ID: retrying the create operation recovers the same intent instead of creating a second one.
+### Finalizing Success or Failure
 
-### Finalizing a Successful Payment
-
-Once the provider reports success, finalize our internal state idempotently:
+Success converges in one DynamoDB transaction:
 
 ```text
-DynamoDB transaction
---------------------
 Booking: PENDING_PAYMENT -> CONFIRMED
 Hold: CHECKOUT_IN_PROGRESS -> CONVERTED
 Seats: CHECKOUT -> BOOKED
 ```
 
-If payment fails or is safely canceled, mark the booking failed and atomically release the `CHECKOUT` seats to `AVAILABLE`.
-
-The same idempotent finalization logic is shared by the synchronous payment path, payment webhooks, and reconciliation workers so races between them are safe.
+Safe payment failure/cancellation converges similarly by failing the Booking/Hold and releasing the protected seats.
 
 ### Payment Reconciliation
 
-A failure can occur after the provider successfully completes payment but before our database is marked `CONFIRMED`.
-
-Example:
-
-```text
-Payment Intent = SUCCEEDED
-        |
-        X application failure
-        |
-Booking remains PENDING_PAYMENT
-```
-
-Therefore pending bookings must be queryable without scanning the entire Booking table.
-
-Use a sparse/sharded reconciliation GSI:
+Pending bookings are discoverable through a sparse/sharded GSI:
 
 ```text
 Booking
@@ -608,42 +654,33 @@ PK = reconcileShard
 SK = nextReconcileAt#bookingId
 ```
 
-Reconciliation workers query due items across the bounded set of shards, retrieve the authoritative payment status from the provider, and converge our state:
+Workers query due items and resolve provider state:
 
 ```text
 provider = SUCCEEDED
     -> finalize booking
 
 provider = FAILED / CANCELED
-    -> mark failed and release checkout seats
+    -> fail and release seats
 
-provider = PROCESSING / REQUIRES_PAYMENT_METHOD
-AND checkout deadline has not arrived
-    -> reschedule reconciliation
+provider = PROCESSING
+before checkout deadline
+    -> reschedule
 
-provider = PROCESSING / REQUIRES_PAYMENT_METHOD
-AND checkout deadline has arrived
+provider = PROCESSING
+after checkout deadline
     -> request provider cancellation
        |
-       +-> cancellation returns CANCELED / FAILED
-       |      -> mark booking failed and release seats
-       |
-       +-> cancellation races with and returns SUCCEEDED
-       |      -> finalize booking
-       |
-       +-> provider remains ambiguous/non-terminal
-              -> keep seats in CHECKOUT and retry
+       +-> canceled/failed -> fail and release
+       +-> raced to success -> finalize
+       +-> still ambiguous -> keep CHECKOUT protected and retry
 ```
 
-This distinction is important. Releasing inventory merely because a local timer expired is unsafe once an external provider can still complete payment. The provider must first give us a terminal outcome that makes release safe.
-
-Once a booking reaches a terminal state, remove the sparse-index attributes so it naturally disappears from the reconciliation index.
-
-The normal path remains webhook/synchronous completion; reconciliation is the recovery path for missed or ambiguous outcomes and the safe timeout path for abandoned checkout.
+A local timeout is not enough to safely free inventory once payment may be moving. The provider must reach an outcome that makes release safe.
 
 ## Multi-Region Strategy
 
-The read side can be highly available across regions, but the authoritative inventory path favors consistency over availability.
+The read side can be highly available across regions, while authoritative inventory favors consistency over availability.
 
 ### Active-Active Read Paths
 
@@ -668,31 +705,15 @@ EVENT#123 -> us-west-2
 EVENT#456 -> us-east-1
 ```
 
-All authoritative operations for a given event route to that event's home region:
-
-- acquire/hold seats;
-- release/reclaim seats;
-- begin checkout;
-- convert seats to booked.
-
-Different events may have different home regions, distributing system-wide load without introducing concurrent writers for the same inventory.
-
-```text
-Event A -> West
-Event B -> East
-Event C -> West
-Event D -> Europe
-```
-
-A request may arrive at the user's nearest API region and still be forwarded internally to the event's home booking region. The routing decision is explicit metadata rather than an accidental consequence of DNS or load-balancer hashing.
+All authoritative operations for one event route to that region. Different events may be distributed across regions, preserving horizontal system-wide scale without concurrent writers for one event's inventory.
 
 ### Event Ownership Control Plane
 
-The control plane is deliberately separate from the high-volume booking data plane. Its state changes rarely and answers one operational question:
+A small control plane answers:
 
 > Which region is currently allowed to own authoritative booking for this event?
 
-Use a small DynamoDB Global Table configured for Multi-Region Strong Consistency for this ownership metadata.
+Ownership metadata can live in a small DynamoDB MRSC Global Table because it is tiny, low-write, and needs globally coordinated single-item conditional updates:
 
 ```text
 EventOwnership
@@ -702,70 +723,42 @@ ownerRegion = us-west-2
 epoch = 17
 ```
 
-The implemented Control Plane exposes a small read-only routing API:
+The implemented read API is:
 
 ```http
 GET /control-plane/events/{eventId}/ownership
 ```
 
-which returns:
+Booking consumes that through its own `EventWriteAuthority` port and HTTP adapter rather than importing ControlPlane classes. Successful local-owner checks may be cached briefly; failures are never cached.
 
-```json
-{
-  "eventId": "123",
-  "ownerRegion": "us-west-2",
-  "epoch": 17
-}
-```
-
-Booking consumes this through its own `EventWriteAuthority` port and an HTTP output adapter; it does not import Control Plane domain/application Java types. Before hold creation or checkout state access, the regional Booking service verifies that the returned owner matches its configured local region. Missing/inconsistent ownership and control-plane lookup failures fail closed.
-
-The remote ownership lookup is not performed for every hot-path request. Successful local-owner checks are cached per event for a short configurable TTL (five seconds by default), and concurrent first checks for the same event collapse onto one refresh. Failures are never cached. An upstream regional router can use the same ownership mapping to forward requests to the home region, while the Booking-side check remains a defensive guard against misrouting.
-
-Initial assignment creates epoch 1 only if the event does not already have an owner. A transfer is a single conditional compare-and-swap:
+An ownership transfer is a conditional compare-and-swap:
 
 ```text
-expected: ownerRegion = WEST, epoch = 17
-write:    ownerRegion = EAST, epoch = 18
+expected WEST / epoch 17
+write    EAST / epoch 18
 ```
 
-Conceptually:
-
-```text
-UPDATE EVENT#123
-SET ownerRegion = EAST,
-    epoch = 18
-ONLY IF ownerRegion = WEST
-   AND epoch = 17
-```
-
-Two operators or automation processes cannot both successfully transfer the same ownership version. Every successful transfer increments the epoch, so stale routing decisions, retries, and restarted processes can be recognized as old.
-
-The ownership table intentionally performs only single-item conditional writes. It does not need DynamoDB transaction APIs. This matters because the authoritative seat inventory still requires multi-item transactions for multi-seat holds and therefore remains a regional transactional table rather than being moved into the MRSC control table.
+This prevents two transfer actors from successfully changing the same ownership version.
 
 ### Routing Guard versus Hard Fencing
 
-The request-time ownership check and its cache are **routing/defense mechanisms, not the split-brain fence**. They are not atomically coupled to a regional DynamoDB seat transaction. For example, a process could successfully observe `WEST / epoch 17` and ownership could change before its later regional write.
+The owner/epoch check is a routing and defensive guard, **not** the split-brain fence. It is not atomically coupled to a regional DynamoDB seat transaction.
 
-Therefore correctness does not depend on instantaneous cache invalidation or on a read-before-write control-plane call. The controlled failover procedure must first make the old regional writer incapable of mutating authoritative inventory. Only then may ownership move to the new region. A short-lived stale cache on the old region can at worst cause a write attempt against an already-fenced storage path; a stale cache on the new region can temporarily delay availability.
+Therefore correctness does not depend on instantaneous ownership-cache invalidation. Controlled failover must first make the old regional writer incapable of mutating authoritative inventory.
 
-### Controlled Failover and Hard Fencing
-
-The ownership record says who **should** be the writer. It does not by itself make an isolated old regional inventory incapable of accepting writes. A stale process holding `WEST / epoch 17` could otherwise continue mutating its regional table during a partition.
-
-Therefore automatic failover must remain fail-closed until the old writer is actually fenced.
+### Controlled Failover
 
 ```text
 WEST fails or becomes unsafe
         |
         v
-1. Stop new booking for affected events
+1. Stop booking for affected events
         |
         v
-2. Ensure WEST can no longer mutate authoritative inventory
+2. Hard-fence WEST from authoritative writes
         |
         v
-3. Ensure replacement inventory in EAST is caught up / restored
+3. Ensure EAST replacement inventory is safe/caught up/restored
         |
         v
 4. CAS ownership WEST/17 -> EAST/18
@@ -774,11 +767,9 @@ WEST fails or becomes unsafe
 5. Enable EAST booking writes
 ```
 
-The exact hard-fence mechanism is operational rather than a property of the ownership item. Examples include removing the old booking deployment from service and revoking/isolating its storage write path before the replacement writer is enabled.
+The system deliberately accepts temporary booking unavailability during an ambiguous regional failure rather than risk double selling. If near-zero automatic regional failover with zero double booking became a hard requirement, the storage/coordination choice should be reconsidered instead of layering ad-hoc distributed consensus over regional DynamoDB transactions.
 
-The design intentionally accepts a temporary booking outage during regional failover rather than risk split-brain inventory and double selling.
-
-The key invariant remains:
+The invariant is:
 
 > At most one region may be capable of authoritative writes for an event at a time.
 
@@ -786,33 +777,38 @@ The key invariant remains:
 
 | Concern | Current Direction | Why |
 | --- | --- | --- |
-| CDN / static delivery | CloudFront or equivalent CDN | Absorb read traffic for static/cacheable content |
-| Event metadata source of truth | DynamoDB | Simple key-oriented access patterns; already part of the architecture |
-| Event search | OpenSearch | Full-text search, filtering, read throughput; eventual consistency acceptable |
+| CDN / static delivery | CloudFront or equivalent | Absorb stable/read-heavy traffic before application servers |
+| Event metadata | DynamoDB | Simple key-oriented canonical store |
+| Event search | OpenSearch | Full-text/filtering/read throughput; eventual consistency acceptable |
+| Events -> Search projection | DynamoDB Stream -> Lambda -> SQS FIFO -> Lambda | Durable bounded-context integration, per-event ordering, replayable/idempotent |
+| AWS OpenSearch auth | SigV4 `AwsSdk2Transport` | Deployable against Amazon OpenSearch without leaking AWS concerns into domain/application |
 | Authoritative seat inventory | DynamoDB | Conditional writes and distributed event-seat keys |
-| Holds / bookings | DynamoDB | Fits transactional workflow with authoritative inventory and query-specific indexes |
-| Seat-map read model | DynamoDB | Query-efficient section projection without adding Redis |
-| Projection updates | DynamoDB Streams / asynchronous projection messages | Native change feeds where the source item already contains the required data; explicit enrichment at bounded-context boundaries |
-| Waiting room | DynamoDB timestamp + admission watermark | No physical queue or global sequence needed; approximate fairness is acceptable |
-| Payments | External provider with Payment Intent | Durable provider-side state, idempotency, cancellation at checkout timeout, and reconciliation |
-| Multi-region booking | Single writer/home region per event | Prevent cross-region double booking; consistency over availability |
-| Event ownership control plane | DynamoDB MRSC Global Table | Tiny low-write state with globally coordinated ownership and conditional epoch changes |
-| Ownership routing guard | Cached Control Plane read through Booking port | Prevent ordinary regional misrouting without putting Control Plane on every hot request; hard fencing remains separate |
+| Holds / bookings | DynamoDB | Atomic seat/workflow transactions plus query-specific indexes |
+| Hold retry safety | Transactional idempotency mapping | Lost responses do not create duplicate/replacement holds |
+| Seat-map read model | DynamoDB | Query-efficient section projection without Redis |
+| Seat-map updates | DynamoDB Stream -> Lambda | Managed checkpointing/retries, idempotent projection |
+| Waiting room | DynamoDB timestamp + watermark | Approximate fairness without physical queue/global sequence |
+| Payments | External Payment Intent provider | Durable provider state plus idempotency/reconciliation |
+| Multi-region booking | Single writer/home region per event | Consistency over availability, no cross-region double booking |
+| Event ownership control plane | DynamoDB MRSC Global Table | Tiny globally coordinated ownership metadata |
+| Hard failover fence | Operational/storage isolation before ownership transfer | Ownership metadata alone cannot fence a stale regional writer |
 
 ## Key Tradeoffs Established
 
-1. **Availability versus consistency:** event/search/read models can be stale; seat acquisition cannot.
-2. **Waiting room versus database correctness:** admission control limits load, but DynamoDB conditional writes prevent double booking.
-3. **Approximate fairness versus global sequencing:** timestamp-watermark admission avoids SQS/Kafka/global sequencing because exact request ordering is not a requirement.
-4. **Hot event versus hot seat:** distributing inventory by event+seat avoids concentrating the entire event behind one partition key; competition for the exact same seat still serializes logically.
-5. **Write model versus read model:** the authoritative table is optimized for exact seat claims while a separate section-oriented DynamoDB table serves seat-map queries.
-6. **No Redis by default:** the second DynamoDB table is sufficient for the seat map unless another requirement later justifies Redis.
-7. **Ordinary hold expiration versus cleanup:** an expired `HELD` timestamp makes the seat reclaimable immediately; no cleanup worker is required for pre-checkout hold correctness.
-8. **Payment state is distributed:** Payment Intent state at the provider and Booking state in DynamoDB converge through idempotent completion, webhooks, cancellation, and reconciliation rather than distributed ACID.
-9. **Multi-region reads versus writes:** reads may be active-active, while each event has one authoritative booking writer region.
-10. **Control metadata versus hard fencing:** strongly coordinated owner/epoch metadata prevents conflicting ownership transitions, but strict split-brain prevention still requires the previous regional writer to lose write capability before the new writer is enabled.
-11. **CDN versus live inventory:** cache stable/read-heavy content aggressively, but never use CDN state as the authority for seat acquisition.
-12. **Client display price versus authoritative hold price:** seat-map prices may be stale; the hold service re-reads authoritative prices, calculates the total server-side, and binds the claim transaction to that quote.
-13. **Waiting-room optimization versus enforcement:** admission tokens may reduce reads later, but the current correctness/load-shedding boundary is the strongly consistent admission check performed before seat pricing and claims.
-14. **Checkout timeout versus payment ambiguity:** a local deadline is not enough to safely free inventory after payment starts. `CHECKOUT` seats stay fenced until provider success is booked or provider failure/cancellation makes release safe.
-15. **Ownership cache versus fencing:** a short cache keeps the rare control plane off the hot path. Correctness comes from controlled writer fencing before ownership transfer, not from cache freshness or a non-atomic ownership read before each DynamoDB transaction.
+1. **Availability versus consistency:** event/search/read models may be stale; seat acquisition cannot.
+2. **Waiting room versus database correctness:** admission limits load, but DynamoDB conditional transactions prevent double booking.
+3. **Approximate fairness versus global sequencing:** timestamp-watermark admission avoids a physical waiting queue because exact arrival ordering is not required.
+4. **Hot event versus hot seat:** event+seat keys distribute different seats; contenders for the exact same seat still serialize logically.
+5. **Write model versus read model:** authoritative inventory is optimized for exact claims; a separate section model is optimized for browsing.
+6. **No Redis by default:** the second DynamoDB table satisfies the seat-map access pattern without another datastore.
+7. **Ordinary hold expiration versus cleanup:** expired `HELD` timestamps are reclaimable immediately; no cleanup worker is required for correctness.
+8. **Checkout timeout versus payment ambiguity:** protected `CHECKOUT` inventory remains fenced until provider state makes booking or release safe.
+9. **Client price versus authoritative price:** display prices may be stale; the hold path strongly re-quotes and binds claims to those prices.
+10. **Client retry versus duplicate mutation:** hold and checkout idempotency turn lost responses into safe retries rather than duplicate workflows.
+11. **Bounded contexts versus shared models:** Events and Search integrate through versioned JSON over SQS, not shared Java classes or database-schema coupling.
+12. **FIFO ordering versus global serialization:** search projection uses per-event FIFO ordering, not one global queue group, so unrelated events remain parallel.
+13. **Projection reliability versus bespoke consumers:** Lambda event-source mappings own stream/queue polling, checkpoints, and retries; projection writes remain idempotent.
+14. **CDN versus live inventory:** cache stable/read-heavy responses aggressively but never cache live booking state as authority.
+15. **Multi-region reads versus writes:** reads may be active-active while each event has one authoritative booking writer.
+16. **Ownership cache versus fencing:** a short cache removes control-plane reads from the hot path; correctness comes from hard fencing before transfer, not cache freshness.
+17. **Regional failover availability versus correctness:** temporary booking outage is preferable to split-brain inventory; stronger automatic failover requirements may change the datastore choice.

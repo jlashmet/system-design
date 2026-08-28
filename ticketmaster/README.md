@@ -64,7 +64,9 @@ ticketmaster.booking.admission.constrained-advance=PT0.5S
 ticketmaster.booking.admission.poll-delay-ms=1000
 ```
 
-An empty `event-ids` value means the admission regulator has no events to process. The initial `ConfiguredAdmissionHealthGateway` defaults to `OVERLOADED`, so simply enabling the service never advances admission accidentally. It is intentionally a bootstrap/demo adapter and can be replaced by a telemetry-backed `AdmissionHealthGateway` without changing the application policy.
+An empty `event-ids` value means admission control is not enabled for any configured hot event. Every event listed in `event-ids` is initialized synchronously while the scheduler bean is constructed. If its `EventAdmission` row does not already exist, Booking creates a watermark at the service startup time before accepting normal traffic. That means subsequent joins queue behind a live watermark instead of accidentally bypassing admission, while the regulator can advance immediately from a current timestamp. If that initialization fails, service startup fails closed rather than bringing up a configured hot event with its waiting room silently disabled. Existing watermarks are preserved across restarts.
+
+The initial `ConfiguredAdmissionHealthGateway` defaults to `OVERLOADED`, so initialization alone never advances admission accidentally. It is intentionally a bootstrap/demo adapter and can be replaced by a telemetry-backed `AdmissionHealthGateway` without changing the application policy.
 
 ### Seat-map DynamoDB Stream projection
 

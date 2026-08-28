@@ -9,7 +9,7 @@ public record EventSearchProjection(
         String venue,
         String city,
         Instant startsAt,
-        String category) {
+        String category) implements EventSearchProjectionAction {
 
     public EventSearchProjection {
         Objects.requireNonNull(eventId, "eventId");

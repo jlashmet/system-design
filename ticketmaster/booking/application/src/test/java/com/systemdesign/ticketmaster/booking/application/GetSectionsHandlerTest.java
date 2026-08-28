@@ -12,14 +12,28 @@ import org.junit.jupiter.api.Test;
 class GetSectionsHandlerTest {
     private static final EventId EVENT_ID = new EventId("event-123");
 
+    private GetSectionsHandler handler;
+    private List<SectionId> sections;
+
     @Test
     void returnsSectionDirectoryFromSeatMapProjection() {
+        givenProjectedSections();
+        whenSectionsAreRead();
+        thenExpectProjectedSections();
+    }
+
+    private void givenProjectedSections() {
         SeatMapRepository repository = new FakeSeatMapRepository(
                 List.of(new SectionId("101"), new SectionId("102")));
-        GetSectionsHandler handler = new GetSectionsHandler(repository);
+        handler = new GetSectionsHandler(repository);
+        sections = null;
+    }
 
-        List<SectionId> sections = handler.handle(new GetSectionsQuery(EVENT_ID));
+    private void whenSectionsAreRead() {
+        sections = handler.handle(new GetSectionsQuery(EVENT_ID));
+    }
 
+    private void thenExpectProjectedSections() {
         assertThat(sections).containsExactly(new SectionId("101"), new SectionId("102"));
     }
 

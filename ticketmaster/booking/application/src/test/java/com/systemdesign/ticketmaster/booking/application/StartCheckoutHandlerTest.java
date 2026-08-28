@@ -11,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
+import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
@@ -55,6 +56,13 @@ class StartCheckoutHandlerTest {
     }
 
     @Test
+    void missingHoldIsResourceMissBeforePayment() {
+        givenMissingHold();
+        whenCheckoutStartsAs(OWNER, "idem-missing");
+        thenExpectHoldNotFoundBeforeCheckoutOrPayment();
+    }
+
+    @Test
     void rejectsDifferentUserBeforeStartingFreshCheckout() {
         givenActiveHoldOwnedBy(OWNER);
         whenCheckoutStartsAs(OTHER_USER, "idem-2");
@@ -77,6 +85,15 @@ class StartCheckoutHandlerTest {
             throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
         };
         handler = handler(wrongRegion);
+        thrown = null;
+    }
+
+    private void givenMissingHold() {
+        bookingRepository = new TrackingBookingRepository();
+        holdRepository = new TrackingHoldRepository(null);
+        checkoutGateway = new TrackingCheckoutGateway();
+        paymentGateway = new TrackingPaymentGateway();
+        handler = handler(ignored -> {});
         thrown = null;
     }
 
@@ -119,6 +136,14 @@ class StartCheckoutHandlerTest {
         assertThat(thrown).isInstanceOf(WrongBookingRegionException.class);
         assertThat(bookingRepository.idempotencyReads).isZero();
         assertThat(holdRepository.findByIdReads).isZero();
+    }
+
+    private void thenExpectHoldNotFoundBeforeCheckoutOrPayment() {
+        assertThat(thrown).isInstanceOf(HoldNotFoundException.class);
+        assertThat(holdRepository.findByIdReads).isOne();
+        assertThat(checkoutGateway.startCalls).isZero();
+        assertThat(paymentGateway.createCalls).isZero();
+        assertThat(paymentGateway.statusCalls).isZero();
     }
 
     private void thenExpectHoldOwnershipRejectedBeforeCheckoutOrPayment() {

@@ -108,15 +108,12 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
             Map<String, AttributeValue> updated = dynamoDb.updateItem(UpdateItemRequest.builder()
                             .tableName(tableName)
                             .key(Map.of(PK, string(admissionPk(admission.eventId()))))
-                            .updateExpression("SET #entityType = :entityType, #eventId = :eventId, #admittedThrough = :newWatermark")
-                            .conditionExpression("attribute_not_exists(#admittedThrough) OR #admittedThrough <= :newWatermark")
+                            .updateExpression("SET #admittedThrough = :newWatermark")
+                            .conditionExpression("attribute_exists(#pk) AND #admittedThrough <= :newWatermark")
                             .expressionAttributeNames(Map.of(
-                                    "#entityType", "entityType",
-                                    "#eventId", "eventId",
+                                    "#pk", PK,
                                     "#admittedThrough", "admittedThrough"))
                             .expressionAttributeValues(Map.of(
-                                    ":entityType", string("EVENT_ADMISSION"),
-                                    ":eventId", string(admission.eventId().value()),
                                     ":newWatermark", number(admission.admittedThrough().toEpochMilli())))
                             .returnValues(ReturnValue.ALL_NEW)
                             .build())
@@ -124,7 +121,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
             return new EventAdmission(
                     new EventId(updated.get("eventId").s()),
                     Instant.ofEpochMilli(Long.parseLong(updated.get("admittedThrough").n())));
-        } catch (ConditionalCheckFailedException regression) {
+        } catch (ConditionalCheckFailedException regressionOrDisabled) {
             throw new AdmissionWatermarkRegressionException(admission.eventId());
         }
     }

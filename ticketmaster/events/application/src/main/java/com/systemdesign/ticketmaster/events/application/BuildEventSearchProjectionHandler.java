@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.events.application;
 
 import com.systemdesign.ticketmaster.events.domain.Event;
 import com.systemdesign.ticketmaster.events.domain.EventRepository;
+import com.systemdesign.ticketmaster.events.domain.EventStatus;
 import com.systemdesign.ticketmaster.events.domain.Venue;
 import com.systemdesign.ticketmaster.events.domain.VenueRepository;
 import java.util.Objects;
@@ -16,12 +17,15 @@ public final class BuildEventSearchProjectionHandler {
         this.venueRepository = Objects.requireNonNull(venueRepository, "venueRepository");
     }
 
-    public Optional<EventSearchProjection> handle(BuildEventSearchProjectionQuery query) {
+    public Optional<EventSearchProjectionAction> handle(BuildEventSearchProjectionQuery query) {
         Objects.requireNonNull(query, "query");
-        return eventRepository.findById(query.eventId()).map(this::enrich);
+        return eventRepository.findById(query.eventId()).map(this::project);
     }
 
-    private EventSearchProjection enrich(Event event) {
+    private EventSearchProjectionAction project(Event event) {
+        if (event.status() == EventStatus.CANCELLED) {
+            return new DeleteEventSearchProjection(event.id().value());
+        }
         Venue venue = venueRepository.findById(event.venueId())
                 .orElseThrow(() -> new IllegalStateException(
                         "event " + event.id().value() + " references missing venue " + event.venueId().value()));

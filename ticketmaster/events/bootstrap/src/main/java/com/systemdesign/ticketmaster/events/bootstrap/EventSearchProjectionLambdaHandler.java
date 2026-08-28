@@ -26,6 +26,7 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 public final class EventSearchProjectionLambdaHandler implements RequestHandler<DynamodbEvent, Void> {
     private static final String TABLE_ENV = "TICKETMASTER_EVENTS_TABLE_NAME";
     private static final String QUEUE_ENV = "TICKETMASTER_SEARCH_PROJECTION_QUEUE_URL";
+    private static final String EVENT_PK_PREFIX = "EVENT#";
 
     private final BuildEventSearchProjectionHandler projectionHandler;
     private final EventSearchProjectionPublisher publisher;
@@ -64,8 +65,9 @@ public final class EventSearchProjectionLambdaHandler implements RequestHandler<
                 record.getDynamodb().getOldImage();
 
         if ("REMOVE".equals(record.getEventName())) {
-            if (!isEvent(oldImage)) return;
-            publisher.publish(new DeleteEventSearchProjection(string(oldImage, "eventId")), deduplicationId);
+            String eventId = removedEventId(record.getDynamodb().getKeys(), oldImage);
+            if (eventId == null) return;
+            publisher.publish(new DeleteEventSearchProjection(eventId), deduplicationId);
             return;
         }
 
@@ -76,6 +78,17 @@ public final class EventSearchProjectionLambdaHandler implements RequestHandler<
                 .orElseThrow(() -> new IllegalStateException(
                         "stream referenced event that is not readable yet: " + eventId.value()));
         publisher.publish(action, deduplicationId);
+    }
+
+    private static String removedEventId(
+            Map<String, com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue> keys,
+            Map<String, com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue> oldImage) {
+        if (isEvent(oldImage)) return string(oldImage, "eventId");
+        if (keys == null || keys.isEmpty()) return null;
+        com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue pk = keys.get("pk");
+        if (pk == null || pk.getS() == null || !pk.getS().startsWith(EVENT_PK_PREFIX)) return null;
+        String eventId = pk.getS().substring(EVENT_PK_PREFIX.length());
+        return eventId.isBlank() ? null : eventId;
     }
 
     private static boolean isEvent(

@@ -52,6 +52,13 @@ class EventSearchProjectionLambdaHandlerTest {
     }
 
     @Test
+    void publishesDeleteFromEventKeyWhenOldImageIsUnavailable() {
+        givenMissingCanonicalEvent();
+        whenRemovalWithOnlyEventKeyIsProcessed();
+        thenExpectDelete("stream-keys");
+    }
+
+    @Test
     void ignoresNonEventRows() {
         givenCanonicalEvent(EventStatus.SCHEDULED);
         whenStreamRecordIsProcessed("MODIFY", "stream-4", venueImage(), null);
@@ -76,6 +83,12 @@ class EventSearchProjectionLambdaHandlerTest {
             Map<String, AttributeValue> newImage,
             Map<String, AttributeValue> oldImage) {
         streamEvent = event(eventName, eventId, newImage, oldImage);
+        handler.handleRequest(streamEvent, null);
+    }
+
+    private void whenRemovalWithOnlyEventKeyIsProcessed() {
+        streamEvent = event("REMOVE", "stream-keys", null, null);
+        streamEvent.getRecords().getFirst().getDynamodb().setKeys(Map.of("pk", string("EVENT#event-1")));
         handler.handleRequest(streamEvent, null);
     }
 

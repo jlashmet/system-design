@@ -17,10 +17,16 @@ public final class DynamoEventRepository implements EventRepository {
     private static final String PK = "pk";
     private final DynamoDbClient dynamoDb;
     private final String tableName;
+    private final boolean consistentRead;
 
     public DynamoEventRepository(DynamoDbClient dynamoDb, String tableName) {
+        this(dynamoDb, tableName, false);
+    }
+
+    public DynamoEventRepository(DynamoDbClient dynamoDb, String tableName, boolean consistentRead) {
         this.dynamoDb = Objects.requireNonNull(dynamoDb, "dynamoDb");
         this.tableName = Objects.requireNonNull(tableName, "tableName");
+        this.consistentRead = consistentRead;
     }
 
     @Override
@@ -29,7 +35,7 @@ public final class DynamoEventRepository implements EventRepository {
         Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
                         .key(Map.of(PK, string(eventPk(eventId))))
-                        .consistentRead(false)
+                        .consistentRead(consistentRead)
                         .build())
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();

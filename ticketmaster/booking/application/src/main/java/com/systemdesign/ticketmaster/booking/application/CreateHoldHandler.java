@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
+import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -29,10 +30,15 @@ public final class CreateHoldHandler {
         Set<SeatId> seats = new LinkedHashSet<>(command.seatIds());
         if (seats.size() != command.seatIds().size()) throw new IllegalArgumentException("duplicate seats are not allowed");
 
+        SeatPriceQuote quote = holdRepository.quoteSeatPrices(command.eventId(), seats);
+        if (!quote.eventId().equals(command.eventId()) || !quote.seatIds().equals(seats)) {
+            throw new IllegalStateException("seat price quote does not match requested event and seats");
+        }
+
         Instant now = clock.instant();
         Hold hold = Hold.active(new HoldId(UUID.randomUUID().toString()), command.userId(), command.eventId(),
-                seats, command.totalPrice(), now, now.plus(holdDuration));
-        holdRepository.createWithSeatClaims(hold, now);
+                seats, quote.totalPrice(), now, now.plus(holdDuration));
+        holdRepository.createWithSeatClaims(hold, quote, now);
         return hold;
     }
 }

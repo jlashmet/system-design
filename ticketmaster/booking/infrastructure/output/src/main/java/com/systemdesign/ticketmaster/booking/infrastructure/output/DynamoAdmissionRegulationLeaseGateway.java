@@ -36,7 +36,7 @@ public final class DynamoAdmissionRegulationLeaseGateway implements AdmissionReg
         if (!leaseExpiresAt.isAfter(now)) throw new IllegalArgumentException("lease expiry must be after now");
 
         try {
-            dynamoDb.updateItem(UpdateItemRequest.builder()
+            DynamoBookingCall.execute("admission regulator lease", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                     .tableName(tableName)
                     .key(Map.of(PK, string(DynamoWaitingRoomRepository.admissionPk(eventId))))
                     .updateExpression("SET #regulatorId = :regulatorId, #leaseExpiresAt = :leaseExpiresAt")
@@ -50,7 +50,7 @@ public final class DynamoAdmissionRegulationLeaseGateway implements AdmissionReg
                             ":regulatorId", string(regulatorId),
                             ":now", number(now.toEpochMilli()),
                             ":leaseExpiresAt", number(leaseExpiresAt.toEpochMilli())))
-                    .build());
+                    .build()));
             return true;
         } catch (ConditionalCheckFailedException notOwner) {
             return false;

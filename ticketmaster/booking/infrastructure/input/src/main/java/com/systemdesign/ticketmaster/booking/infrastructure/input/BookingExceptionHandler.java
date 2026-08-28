@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import org.springframework.http.HttpHeaders;
@@ -41,6 +42,13 @@ public final class BookingExceptionHandler {
     ResponseEntity<ProblemDetail> holdNotFound(HoldNotFoundException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
         detail.setTitle("Hold not found");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
+    }
+
+    @ExceptionHandler(WaitingRoomEntryNotFoundException.class)
+    ResponseEntity<ProblemDetail> waitingRoomEntryNotFound(WaitingRoomEntryNotFoundException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
+        detail.setTitle("Waiting-room entry not found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
     }
 

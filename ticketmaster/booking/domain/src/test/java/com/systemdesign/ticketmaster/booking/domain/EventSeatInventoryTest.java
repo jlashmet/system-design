@@ -42,19 +42,7 @@ class EventSeatInventoryTest {
     }
 
     @Test
-    void checkoutExtendsHeldDeadlineWithoutCreatingAnotherSeatState() {
-        EventSeatInventory held = new EventSeatInventory(
-                EVENT_ID, SEAT_ID, PRICE, SeatStatus.HELD, OLD_HOLD, NOW.plusSeconds(30), null);
-
-        EventSeatInventory checkoutSeat = held.startCheckout(OLD_HOLD, NOW, FUTURE);
-
-        assertThat(checkoutSeat.status()).isEqualTo(SeatStatus.HELD);
-        assertThat(checkoutSeat.holdId()).isEqualTo(OLD_HOLD);
-        assertThat(checkoutSeat.holdExpiresAt()).isEqualTo(FUTURE);
-    }
-
-    @Test
-    void seatCanBeReclaimedAfterCheckoutDeadlineWithoutCleanup() {
+    void checkoutProtectsSeatFromBlindTimestampReclaim() {
         EventSeatInventory held = new EventSeatInventory(
                 EVENT_ID, SEAT_ID, PRICE, SeatStatus.HELD, OLD_HOLD, NOW.plusSeconds(30), null);
         EventSeatInventory checkoutSeat = held.startCheckout(OLD_HOLD, NOW, NOW.plusSeconds(60));
@@ -62,7 +50,9 @@ class EventSeatInventoryTest {
 
         whenHold(NEW_HOLD, NOW.plusSeconds(61), FUTURE);
 
-        thenExpectHeldBy(NEW_HOLD, FUTURE);
+        thenExpect(SeatUnavailableException.class);
+        assertThat(seat.status()).isEqualTo(SeatStatus.CHECKOUT);
+        assertThat(seat.holdExpiresAt()).isEqualTo(NOW.plusSeconds(60));
     }
 
     private void given(EventSeatInventory seat) {

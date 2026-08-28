@@ -18,10 +18,10 @@ paths:
           description: Event details
           headers:
             Cache-Control:
-              description: CDN/browser caching policy for stable event metadata
+              description: CDN/browser caching policy for stable event metadata, including brief stale service during origin failure
               schema:
                 type: string
-                example: public, max-age=60, stale-while-revalidate=300
+                example: public, max-age=60, stale-while-revalidate=300, stale-if-error=300
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventResponse' }

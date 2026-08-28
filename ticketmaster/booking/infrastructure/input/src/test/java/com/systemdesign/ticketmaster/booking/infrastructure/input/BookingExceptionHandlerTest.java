@@ -11,7 +11,9 @@ import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
+import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 
@@ -55,6 +57,13 @@ class BookingExceptionHandlerTest {
         thenExpectConflict("Waiting room disabled");
     }
 
+    @Test
+    void transientBookingStorageFailureIsRetryableServiceUnavailable() {
+        givenBookingStorageUnavailable();
+        whenExceptionIsHandled();
+        thenExpectRetryableStorageUnavailable();
+    }
+
     private void givenWrongRegion() {
         exception = new WrongBookingRegionException(
                 new EventId("event-123"), "us-west-2", "us-east-1");
@@ -82,6 +91,11 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenBookingStorageUnavailable() {
+        exception = new BookingStorageUnavailableException("seat claim", new IllegalStateException("throttled"));
+        response = null;
+    }
+
     private void whenExceptionIsHandled() {
         if (exception instanceof WrongBookingRegionException wrongRegion) {
             response = handler.wrongBookingRegion(wrongRegion);
@@ -91,6 +105,8 @@ class BookingExceptionHandlerTest {
             response = handler.holdOwnership(ownership);
         } else if (exception instanceof WaitingRoomDisabledException disabled) {
             response = handler.waitingRoomDisabled(disabled);
+        } else if (exception instanceof BookingStorageUnavailableException storageUnavailable) {
+            response = handler.bookingStorageUnavailable(storageUnavailable);
         } else {
             response = handler.conflict(exception);
         }
@@ -119,5 +135,12 @@ class BookingExceptionHandlerTest {
         assertThat(response.getStatusCode().value()).isEqualTo(403);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getTitle()).isEqualTo("Hold access forbidden");
+    }
+
+    private void thenExpectRetryableStorageUnavailable() {
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Booking storage unavailable");
     }
 }

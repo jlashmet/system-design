@@ -7,9 +7,13 @@ import com.systemdesign.ticketmaster.booking.application.JoinWaitingRoomHandler;
 import com.systemdesign.ticketmaster.booking.application.ProjectSeatMapHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileDueBookingsHandler;
+import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionCapacity;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
+import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
@@ -17,6 +21,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.CachedEventWriteAuthority;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.ConfiguredAdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DemoPaymentGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoBookingRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckoutGateway;
@@ -28,6 +33,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -110,6 +118,13 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    AdmissionHealthGateway admissionHealthGateway(
+            @Value("${ticketmaster.booking.admission.capacity:OVERLOADED}") String capacity) {
+        return new ConfiguredAdmissionHealthGateway(
+                AdmissionCapacity.valueOf(capacity.trim().toUpperCase(Locale.ROOT)));
+    }
+
+    @Bean
     CreateHoldHandler createHoldHandler(
             EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
@@ -187,6 +202,28 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    RegulateAdmissionHandler regulateAdmissionHandler(
+            WaitingRoomRepository waitingRoomRepository,
+            AdmissionHealthGateway admissionHealthGateway,
+            Clock clock,
+            @Value("${ticketmaster.booking.admission.healthy-advance:PT2S}") String healthyAdvance,
+            @Value("${ticketmaster.booking.admission.constrained-advance:PT0.5S}") String constrainedAdvance) {
+        return new RegulateAdmissionHandler(
+                waitingRoomRepository,
+                admissionHealthGateway,
+                clock,
+                Duration.parse(healthyAdvance),
+                Duration.parse(constrainedAdvance));
+    }
+
+    @Bean
+    AdmissionRegulationScheduler admissionRegulationScheduler(
+            RegulateAdmissionHandler handler,
+            @Value("${ticketmaster.booking.admission.event-ids:}") String configuredEventIds) {
+        return new AdmissionRegulationScheduler(handler, parseEventIds(configuredEventIds));
+    }
+
+    @Bean
     ProjectSeatMapHandler projectSeatMapHandler(SeatMapRepository seatMapRepository) {
         return new ProjectSeatMapHandler(seatMapRepository);
     }
@@ -209,5 +246,15 @@ public class BookingServiceApplication {
     @Bean
     CheckAdmissionHandler checkAdmissionHandler(WaitingRoomRepository waitingRoomRepository) {
         return new CheckAdmissionHandler(waitingRoomRepository);
+    }
+
+    private static List<EventId> parseEventIds(String configuredEventIds) {
+        if (configuredEventIds == null || configuredEventIds.isBlank()) return List.of();
+        return Arrays.stream(configuredEventIds.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .distinct()
+                .map(EventId::new)
+                .toList();
     }
 }

@@ -36,6 +36,12 @@ If a request reaches the wrong booking region, the API returns HTTP `421 Misdire
 
 Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
 
+### Trusted user identity
+
+Waiting-room join/status, hold creation, and checkout all use the same `X-User-Id` request header as the current interview-project representation of authenticated identity. The Hold request body contains seat selection only; it cannot choose its owner. Checkout carries the same identity into the application layer and rejects a Hold or idempotent Booking owned by a different user with HTTP `403` before payment-provider access.
+
+`X-User-Id` is an integration-boundary simplification, not a claim that an internet client may self-assert identity safely. In a production deployment the public ingress/authentication layer must authenticate the user, strip any untrusted inbound copy of this header, and inject the trusted user ID (or the controller would read the authenticated principal directly). The domain/application code consumes the resulting `UserId` and does not depend on the authentication technology.
+
 ### Runnable demo payment completion
 
 `DemoPaymentGateway` is intentionally not presented as a production provider integration. By default it creates a pending demo Payment Intent and there is **no client-controlled success endpoint** exposed.

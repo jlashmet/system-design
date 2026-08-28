@@ -10,10 +10,6 @@ on:
       - 'ticketmaster/**'
       - '.github/workflows/ticketmaster-verify.yml'
 
-concurrency:
-  group: ticketmaster-verify-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   verify:
     runs-on: ubuntu-latest

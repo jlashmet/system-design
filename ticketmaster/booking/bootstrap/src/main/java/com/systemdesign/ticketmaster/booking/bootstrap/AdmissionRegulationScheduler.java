@@ -6,6 +6,8 @@ import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionComman
 import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRegulationLeaseGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
+import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -16,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 public final class AdmissionRegulationScheduler {
     private static final System.Logger LOGGER = System.getLogger(AdmissionRegulationScheduler.class.getName());
 
+    private final EventWriteAuthority eventWriteAuthority;
     private final RegulateAdmissionHandler handler;
     private final AdmissionRegulationLeaseGateway leaseGateway;
     private final Clock clock;
@@ -25,6 +28,7 @@ public final class AdmissionRegulationScheduler {
 
     public AdmissionRegulationScheduler(
             EnableAdmissionHandler enableAdmissionHandler,
+            EventWriteAuthority eventWriteAuthority,
             RegulateAdmissionHandler handler,
             AdmissionRegulationLeaseGateway leaseGateway,
             Clock clock,
@@ -32,6 +36,7 @@ public final class AdmissionRegulationScheduler {
             String regulatorId,
             List<EventId> eventIds) {
         Objects.requireNonNull(enableAdmissionHandler, "enableAdmissionHandler");
+        this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
         this.handler = Objects.requireNonNull(handler, "handler");
         this.leaseGateway = Objects.requireNonNull(leaseGateway, "leaseGateway");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -40,7 +45,8 @@ public final class AdmissionRegulationScheduler {
         if (regulatorId.isBlank()) throw new IllegalArgumentException("regulatorId must not be blank");
         this.eventIds = List.copyOf(Objects.requireNonNull(eventIds, "eventIds"));
 
-        // Fail startup rather than accidentally serve a configured hot event with admission disabled.
+        // Any region may initialize the globally consistent waiting-room record, but only the
+        // event's authoritative booking region may later regulate it.
         for (EventId eventId : this.eventIds) {
             enableAdmissionHandler.handle(new EnableAdmissionCommand(eventId));
         }
@@ -52,6 +58,12 @@ public final class AdmissionRegulationScheduler {
     public void regulate() {
         for (EventId eventId : eventIds) {
             try {
+                try {
+                    eventWriteAuthority.assertMayWrite(eventId);
+                } catch (WrongBookingRegionException notHomeRegion) {
+                    continue;
+                }
+
                 Instant now = clock.instant();
                 if (!leaseGateway.tryAcquireOrRenew(
                         eventId,
@@ -62,6 +74,8 @@ public final class AdmissionRegulationScheduler {
                 }
                 handler.handle(new RegulateAdmissionCommand(eventId));
             } catch (RuntimeException failure) {
+                // Fail closed: any authority/control-plane/health/storage failure holds the
+                // watermark steady for this event while allowing other events to continue.
                 LOGGER.log(System.Logger.Level.ERROR,
                         "admission regulation failed for event " + eventId.value(), failure);
             }

@@ -29,11 +29,13 @@ public final class DynamoVenueRepository implements VenueRepository {
     @Override
     public Optional<Venue> findById(VenueId venueId) {
         Objects.requireNonNull(venueId, "venueId");
-        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(venuePk(venueId))))
-                        .consistentRead(consistentRead)
-                        .build())
+        Map<String, AttributeValue> item = DynamoEventsCall.execute(
+                        "venue metadata read",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(venuePk(venueId))))
+                                .consistentRead(consistentRead)
+                                .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(new Venue(

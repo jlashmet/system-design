@@ -40,6 +40,7 @@ import java.util.Locale;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import software.amazon.awssdk.regions.Region;
@@ -114,7 +115,7 @@ public class BookingServiceApplication {
     }
 
     @Bean
-    PaymentGateway paymentGateway() {
+    DemoPaymentGateway paymentGateway() {
         return new DemoPaymentGateway();
     }
 
@@ -180,6 +181,16 @@ public class BookingServiceApplication {
                 paymentGateway,
                 clock,
                 Duration.parse(reconciliationBackoff));
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            name = "ticketmaster.booking.demo-payment-endpoint-enabled",
+            havingValue = "true")
+    DemoPaymentController demoPaymentController(
+            DemoPaymentGateway paymentGateway,
+            ReconcileBookingHandler reconcileBookingHandler) {
+        return new DemoPaymentController(paymentGateway, reconcileBookingHandler);
     }
 
     @Bean

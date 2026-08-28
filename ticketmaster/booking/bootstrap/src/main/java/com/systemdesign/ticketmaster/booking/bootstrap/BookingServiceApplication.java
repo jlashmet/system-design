@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
 import com.systemdesign.ticketmaster.booking.application.JoinWaitingRoomHandler;
+import com.systemdesign.ticketmaster.booking.application.ProjectSeatMapHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileDueBookingsHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
@@ -13,6 +14,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
+import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DemoPaymentGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoBookingRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckoutGateway;
@@ -150,6 +152,16 @@ public class BookingServiceApplication {
     @Bean
     BookingReconciliationScheduler bookingReconciliationScheduler(ReconcileDueBookingsHandler handler) {
         return new BookingReconciliationScheduler(handler);
+    }
+
+    @Bean
+    ProjectSeatMapHandler projectSeatMapHandler(SeatMapRepository seatMapRepository) {
+        return new ProjectSeatMapHandler(seatMapRepository);
+    }
+
+    @Bean
+    DynamoSeatInventoryStreamProjector dynamoSeatInventoryStreamProjector(ProjectSeatMapHandler handler) {
+        return new DynamoSeatInventoryStreamProjector(handler);
     }
 
     @Bean

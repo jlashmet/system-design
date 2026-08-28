@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictExcep
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -32,6 +33,13 @@ public final class BookingExceptionHandler {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
         detail.setTitle("Hold access forbidden");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
+    }
+
+    @ExceptionHandler(WaitingRoomDisabledException.class)
+    ResponseEntity<ProblemDetail> waitingRoomDisabled(WaitingRoomDisabledException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
+        detail.setTitle("Waiting room disabled");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(detail);
     }
 
     @ExceptionHandler(WrongBookingRegionException.class)

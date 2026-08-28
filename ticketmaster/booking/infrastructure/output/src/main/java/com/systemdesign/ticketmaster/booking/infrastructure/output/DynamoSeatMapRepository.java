@@ -14,8 +14,10 @@ import java.util.Map;
 import java.util.Objects;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 
 public final class DynamoSeatMapRepository implements SeatMapRepository {
     private static final String PK = "pk";
@@ -31,7 +33,8 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     @Override
     public void upsert(SeatMapSeat seat) {
         Objects.requireNonNull(seat, "seat");
-        dynamoDb.putItem(PutItemRequest.builder()
+
+        Put seatPut = Put.builder()
                 .tableName(tableName)
                 .item(Map.of(
                         PK, string(sectionPk(seat.eventId(), seat.sectionId())),
@@ -44,18 +47,25 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                         "priceAmount", string(seat.price().amount().toPlainString()),
                         "priceCurrency", string(seat.price().currency().getCurrencyCode()),
                         "status", string(seat.status().name())))
-                .build());
+                .build();
 
         // Materialize a tiny event-level section directory so section discovery never scans seat rows.
-        // This write is idempotent. A future static venue-geometry projection can own these markers
-        // if rewriting the marker on seat changes becomes material at scale.
-        dynamoDb.putItem(PutItemRequest.builder()
+        // A future static venue-geometry projection can own these markers if rewriting them on seat
+        // changes becomes material at scale.
+        Put sectionDirectoryPut = Put.builder()
                 .tableName(tableName)
                 .item(Map.of(
                         PK, string(eventPk(seat.eventId())),
                         SK, string(sectionSk(seat.sectionId())),
                         "eventId", string(seat.eventId().value()),
                         "sectionId", string(seat.sectionId().value())))
+                .build();
+
+        // Keep the derived seat row and its discovery marker consistent for each projected stream image.
+        dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder()
+                .transactItems(
+                        TransactWriteItem.builder().put(seatPut).build(),
+                        TransactWriteItem.builder().put(sectionDirectoryPut).build())
                 .build());
     }
 

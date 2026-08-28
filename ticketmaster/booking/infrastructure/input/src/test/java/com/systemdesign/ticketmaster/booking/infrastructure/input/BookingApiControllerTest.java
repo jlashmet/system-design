@@ -10,11 +10,12 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 
 class BookingApiControllerTest {
     @Test
-    void mapsProjectedSectionsToApiContract() {
+    void mapsProjectedSectionsToApiContractWithShortSharedCachePolicy() {
         SeatMapRepository repository = new FakeSeatMapRepository();
         BookingApiController controller = new BookingApiController(
                 null,
@@ -25,6 +26,8 @@ class BookingApiControllerTest {
         ResponseEntity<List<SectionResponse>> response = controller.getSections("event-123");
 
         assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL))
+                .isEqualTo("public, max-age=60, stale-while-revalidate=300");
         assertThat(response.getBody()).extracting(SectionResponse::getSectionId)
                 .containsExactly("101", "102");
     }

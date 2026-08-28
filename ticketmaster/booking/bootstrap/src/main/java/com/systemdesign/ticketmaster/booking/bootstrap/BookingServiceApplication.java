@@ -91,9 +91,14 @@ public class BookingServiceApplication {
     @Bean
     CreateHoldHandler createHoldHandler(
             HoldRepository holdRepository,
+            WaitingRoomRepository waitingRoomRepository,
             Clock clock,
             @Value("${ticketmaster.booking.hold-duration:PT5M}") String holdDuration) {
-        return new CreateHoldHandler(holdRepository, clock, Duration.parse(holdDuration));
+        return new CreateHoldHandler(
+                holdRepository,
+                waitingRoomRepository,
+                clock,
+                Duration.parse(holdDuration));
     }
 
     @Bean

@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.search.infrastructure.input;
 
 import com.systemdesign.ticketmaster.search.domain.SearchUnavailableException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -14,7 +15,9 @@ public final class SearchExceptionHandler {
     ResponseEntity<ProblemDetail> unavailable(SearchUnavailableException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
         detail.setTitle("Search temporarily unavailable");
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(detail);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(detail);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

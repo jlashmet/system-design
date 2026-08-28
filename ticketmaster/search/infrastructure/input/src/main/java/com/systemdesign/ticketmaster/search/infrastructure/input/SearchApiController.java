@@ -9,11 +9,15 @@ import com.systemdesign.ticketmaster.search.domain.SearchPage;
 import com.systemdesign.ticketmaster.search.domain.SearchQuery;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public final class SearchApiController implements SearchApi {
+    private static final String SEARCH_CACHE_CONTROL =
+            "public, max-age=15, stale-while-revalidate=30, stale-if-error=120";
+
     private final SearchEventsHandler searchEventsHandler;
 
     public SearchApiController(SearchEventsHandler searchEventsHandler) {
@@ -39,7 +43,9 @@ public final class SearchApiController implements SearchApi {
         SearchPageResponse response = new SearchPageResponse();
         response.setEvents(page.events().stream().map(SearchApiController::toResponse).toList());
         response.setNextCursor(page.nextCursor());
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, SEARCH_CACHE_CONTROL)
+                .body(response);
     }
 
     private static SearchEventResponse toResponse(SearchEvent event) {

@@ -16,23 +16,16 @@ import org.junit.jupiter.api.Test;
 class BuildEventSearchProjectionHandlerTest {
 
     @Test
-    void enrichesEventWithVenueMetadata() {
+    void enrichesScheduledEventWithVenueMetadata() {
         EventId eventId = new EventId("event-42");
         VenueId venueId = new VenueId("venue-7");
-        Event event = new Event(
-                eventId,
-                "The National",
-                venueId,
-                Instant.parse("2026-10-20T03:00:00Z"),
-                "CONCERT",
-                EventStatus.SCHEDULED,
-                "");
+        Event event = event(eventId, venueId, EventStatus.SCHEDULED);
         Venue venue = new Venue(venueId, "Hollywood Bowl", "Los Angeles");
         BuildEventSearchProjectionHandler handler = new BuildEventSearchProjectionHandler(
                 id -> Optional.of(event),
                 id -> Optional.of(venue));
 
-        Optional<EventSearchProjection> projection = handler.handle(new BuildEventSearchProjectionQuery(eventId));
+        Optional<EventSearchProjectionAction> projection = handler.handle(new BuildEventSearchProjectionQuery(eventId));
 
         assertThat(projection).contains(new EventSearchProjection(
                 "event-42",
@@ -44,14 +37,42 @@ class BuildEventSearchProjectionHandlerTest {
     }
 
     @Test
+    void cancelledEventProducesDeleteWithoutLoadingVenue() {
+        EventId eventId = new EventId("event-42");
+        VenueId venueId = new VenueId("venue-7");
+        Event event = event(eventId, venueId, EventStatus.CANCELLED);
+        VenueRepository venues = id -> {
+            throw new AssertionError("cancelled event should not load venue metadata");
+        };
+        BuildEventSearchProjectionHandler handler = new BuildEventSearchProjectionHandler(
+                id -> Optional.of(event),
+                venues);
+
+        Optional<EventSearchProjectionAction> projection = handler.handle(new BuildEventSearchProjectionQuery(eventId));
+
+        assertThat(projection).contains(new DeleteEventSearchProjection("event-42"));
+    }
+
+    @Test
     void returnsEmptyWhenEventDoesNotExist() {
         EventRepository events = id -> Optional.empty();
         VenueRepository venues = id -> Optional.empty();
         BuildEventSearchProjectionHandler handler = new BuildEventSearchProjectionHandler(events, venues);
 
-        Optional<EventSearchProjection> projection = handler.handle(
+        Optional<EventSearchProjectionAction> projection = handler.handle(
                 new BuildEventSearchProjectionQuery(new EventId("missing")));
 
         assertThat(projection).isEmpty();
+    }
+
+    private static Event event(EventId eventId, VenueId venueId, EventStatus status) {
+        return new Event(
+                eventId,
+                "The National",
+                venueId,
+                Instant.parse("2026-10-20T03:00:00Z"),
+                "CONCERT",
+                status,
+                "");
     }
 }

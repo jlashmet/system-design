@@ -14,6 +14,16 @@
     <dependencies>
         <dependency>
             <groupId>com.systemdesign.ticketmaster</groupId>
+            <artifactId>booking-domain</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.systemdesign.ticketmaster</groupId>
+            <artifactId>booking-application</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.systemdesign.ticketmaster</groupId>
             <artifactId>booking-infrastructure-input</artifactId>
             <version>${project.version}</version>
         </dependency>

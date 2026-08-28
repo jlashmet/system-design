@@ -148,6 +148,11 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    BookingReconciliationScheduler bookingReconciliationScheduler(ReconcileDueBookingsHandler handler) {
+        return new BookingReconciliationScheduler(handler);
+    }
+
+    @Bean
     GetSectionSeatsHandler getSectionSeatsHandler(SeatMapRepository seatMapRepository) {
         return new GetSectionSeatsHandler(seatMapRepository);
     }

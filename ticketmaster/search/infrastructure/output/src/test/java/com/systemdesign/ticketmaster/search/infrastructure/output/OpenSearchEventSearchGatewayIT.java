@@ -105,6 +105,26 @@ class OpenSearchEventSearchGatewayIT {
     }
 
     @Test
+    void deletesEventFromSearch() throws Exception {
+        recreateIndex();
+        index.upsert(new SearchEvent(
+                "event-42",
+                "The National",
+                "Hollywood Bowl",
+                "Los Angeles",
+                Instant.parse("2026-10-20T03:00:00Z"),
+                "CONCERT"));
+        dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
+        index.delete("event-42");
+        dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
+
+        whenSearch(new SearchQuery("National", "Los Angeles", OCTOBER_1,
+                Instant.parse("2026-11-01T00:00:00Z"), "", 10));
+
+        thenExpectFirstPage();
+    }
+
+    @Test
     void filtersByTextCityAndDateRange() {
         givenEvents(
                 event("1", "Taylor Swift", "SoFi Stadium", "Los Angeles", "2026-10-10T03:00:00Z", "CONCERT"),

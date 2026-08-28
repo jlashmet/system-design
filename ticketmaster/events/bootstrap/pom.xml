@@ -14,6 +14,16 @@
     <dependencies>
         <dependency>
             <groupId>com.systemdesign.ticketmaster</groupId>
+            <artifactId>events-domain</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.systemdesign.ticketmaster</groupId>
+            <artifactId>events-application</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.systemdesign.ticketmaster</groupId>
             <artifactId>events-infrastructure-input</artifactId>
             <version>${project.version}</version>
         </dependency>

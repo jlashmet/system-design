@@ -26,12 +26,16 @@ import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.time.ZoneOffset;
 import java.util.List;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public final class BookingApiController implements BookingApi {
+    private static final String SECTION_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
+    private static final String NO_STORE = "no-store";
+
     private final CreateHoldHandler createHoldHandler;
     private final StartCheckoutHandler startCheckoutHandler;
     private final GetSectionsHandler getSectionsHandler;
@@ -55,7 +59,9 @@ public final class BookingApiController implements BookingApi {
                 .stream()
                 .map(BookingApiController::toSectionResponse)
                 .toList();
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, SECTION_CACHE_CONTROL)
+                .body(response);
     }
 
     @Override
@@ -65,7 +71,9 @@ public final class BookingApiController implements BookingApi {
                 .stream()
                 .map(BookingApiController::toSeatResponse)
                 .toList();
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
+                .body(response);
     }
 
     @Override
@@ -77,7 +85,9 @@ public final class BookingApiController implements BookingApi {
                 new EventId(eventId),
                 seatIds));
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(toHoldResponse(hold));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
+                .body(toHoldResponse(hold));
     }
 
     @Override
@@ -89,7 +99,9 @@ public final class BookingApiController implements BookingApi {
         response.setBookingId(result.booking().id().value());
         response.setStatus(result.booking().status().name());
         response.setPaymentIntentId(result.paymentIntent().id());
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
+                .body(response);
     }
 
     private static HoldResponse toHoldResponse(Hold hold) {

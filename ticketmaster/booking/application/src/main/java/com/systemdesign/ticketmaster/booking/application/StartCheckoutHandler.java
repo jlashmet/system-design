@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
+import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
@@ -60,6 +61,7 @@ public final class StartCheckoutHandler {
         if (!hold.eventId().equals(command.eventId())) {
             throw new IllegalArgumentException("hold does not belong to event " + command.eventId().value());
         }
+        requireOwner(command, hold.userId());
         Hold checkoutHold = hold.startCheckout(now, now.plus(checkoutDuration));
         BookingId bookingId = new BookingId(UUID.randomUUID().toString());
         int shard = Math.floorMod(bookingId.value().hashCode(), reconciliationShards);
@@ -86,7 +88,14 @@ public final class StartCheckoutHandler {
         if (!booking.eventId().equals(command.eventId()) || !booking.holdId().equals(command.holdId())) {
             throw new IllegalStateException("checkout idempotency mapping resolved outside its event/hold scope");
         }
+        requireOwner(command, booking.userId());
         return booking;
+    }
+
+    private void requireOwner(StartCheckoutCommand command, com.systemdesign.ticketmaster.booking.domain.UserId owner) {
+        if (!owner.equals(command.userId())) {
+            throw new HoldOwnershipException(command.holdId(), command.userId());
+        }
     }
 
     private StartCheckoutResult ensurePaymentIntent(Booking booking) {

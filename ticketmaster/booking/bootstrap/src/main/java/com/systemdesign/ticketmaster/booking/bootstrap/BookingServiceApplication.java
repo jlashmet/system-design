@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
+import com.systemdesign.ticketmaster.booking.application.GetSectionsHandler;
 import com.systemdesign.ticketmaster.booking.application.JoinWaitingRoomHandler;
 import com.systemdesign.ticketmaster.booking.application.ProjectSeatMapHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
@@ -231,6 +232,11 @@ public class BookingServiceApplication {
     @Bean
     DynamoSeatInventoryStreamProjector dynamoSeatInventoryStreamProjector(ProjectSeatMapHandler handler) {
         return new DynamoSeatInventoryStreamProjector(handler);
+    }
+
+    @Bean
+    GetSectionsHandler getSectionsHandler(SeatMapRepository seatMapRepository) {
+        return new GetSectionsHandler(seatMapRepository);
     }
 
     @Bean

@@ -247,6 +247,7 @@ public class BookingServiceApplication {
     @Bean
     AdmissionRegulationScheduler admissionRegulationScheduler(
             EnableAdmissionHandler enableAdmissionHandler,
+            EventWriteAuthority eventWriteAuthority,
             RegulateAdmissionHandler handler,
             AdmissionRegulationLeaseGateway leaseGateway,
             Clock clock,
@@ -254,6 +255,7 @@ public class BookingServiceApplication {
             @Value("${ticketmaster.booking.admission.event-ids:}") String configuredEventIds) {
         return new AdmissionRegulationScheduler(
                 enableAdmissionHandler,
+                eventWriteAuthority,
                 handler,
                 leaseGateway,
                 clock,

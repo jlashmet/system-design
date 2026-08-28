@@ -9,6 +9,8 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -23,6 +25,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Currency;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -35,13 +38,12 @@ class CreateHoldHandlerTest {
     private static final SeatId A10 = new SeatId("A10");
     private static final SeatId A11 = new SeatId("A11");
     private static final Currency USD = Currency.getInstance("USD");
+    private static final HoldIdempotencyKey KEY = new HoldIdempotencyKey("hold-request-1");
     private static final EventWriteAuthority LOCAL_OWNER = ignored -> {};
 
     @Test
     void computesHoldTotalFromAuthoritativeSeatQuoteWhenWaitingRoomIsDisabled() {
-        SeatPriceQuote quote = new SeatPriceQuote(EVENT_ID, Map.of(
-                A10, price("100.00"),
-                A11, price("125.00")));
+        SeatPriceQuote quote = defaultQuote();
         FakeHoldRepository holdRepository = new FakeHoldRepository(quote);
         FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
         CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
@@ -53,10 +55,39 @@ class CreateHoldHandlerTest {
         assertThat(hold.expiresAt()).isEqualTo(NOW.plus(Duration.ofMinutes(5)));
         assertThat(holdRepository.createdHold).isEqualTo(hold);
         assertThat(holdRepository.claimQuote).isEqualTo(quote);
+        assertThat(holdRepository.createdKey).isEqualTo(KEY);
     }
 
     @Test
-    void rejectsWrongRegionBeforeWaitingRoomOrPricing() {
+    void retryWithSameIdempotencyKeyReturnsOriginalHoldWithoutRepricingOrReadmission() {
+        FakeHoldRepository holdRepository = new FakeHoldRepository(defaultQuote());
+        FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
+        CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
+
+        Hold first = handler.handle(command());
+        int admissionReadsAfterFirst = waitingRoomRepository.admissionReads;
+        Hold retry = handler.handle(command());
+
+        assertThat(retry).isEqualTo(first);
+        assertThat(holdRepository.quoteCalls).isEqualTo(1);
+        assertThat(waitingRoomRepository.admissionReads).isEqualTo(admissionReadsAfterFirst);
+    }
+
+    @Test
+    void reusingIdempotencyKeyForDifferentRequestIsConflict() {
+        FakeHoldRepository holdRepository = new FakeHoldRepository(defaultQuote());
+        CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, new FakeWaitingRoomRepository());
+        handler.handle(command());
+
+        CreateHoldCommand different = new CreateHoldCommand(
+                USER_ID, EVENT_ID, java.util.List.of(A10), KEY);
+
+        assertThatThrownBy(() -> handler.handle(different))
+                .isInstanceOf(HoldIdempotencyConflictException.class);
+    }
+
+    @Test
+    void rejectsWrongRegionBeforeIdempotencyWaitingRoomOrPricing() {
         FakeHoldRepository holdRepository = new FakeHoldRepository(defaultQuote());
         FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
         EventWriteAuthority wrongRegion = eventId -> {
@@ -64,9 +95,9 @@ class CreateHoldHandlerTest {
         };
         CreateHoldHandler handler = handler(wrongRegion, holdRepository, waitingRoomRepository);
 
-        assertThatThrownBy(() -> handler.handle(command()))
-                .isInstanceOf(WrongBookingRegionException.class);
+        assertThatThrownBy(() -> handler.handle(command())).isInstanceOf(WrongBookingRegionException.class);
 
+        assertThat(holdRepository.idempotencyReads).isZero();
         assertThat(holdRepository.quoteCalls).isZero();
         assertThat(waitingRoomRepository.admissionReads).isZero();
         assertThat(holdRepository.createdHold).isNull();
@@ -79,8 +110,7 @@ class CreateHoldHandlerTest {
         waitingRoomRepository.admission = new EventAdmission(EVENT_ID, NOW);
         CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
 
-        assertThatThrownBy(() -> handler.handle(command()))
-                .isInstanceOf(AdmissionRequiredException.class);
+        assertThatThrownBy(() -> handler.handle(command())).isInstanceOf(AdmissionRequiredException.class);
 
         assertThat(holdRepository.quoteCalls).isZero();
         assertThat(holdRepository.createdHold).isNull();
@@ -94,9 +124,7 @@ class CreateHoldHandlerTest {
         waitingRoomRepository.entry = new WaitingRoomEntry(EVENT_ID, USER_ID, NOW.plusSeconds(1));
         CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
 
-        assertThatThrownBy(() -> handler.handle(command()))
-                .isInstanceOf(AdmissionRequiredException.class);
-
+        assertThatThrownBy(() -> handler.handle(command())).isInstanceOf(AdmissionRequiredException.class);
         assertThat(holdRepository.quoteCalls).isZero();
     }
 
@@ -114,20 +142,13 @@ class CreateHoldHandlerTest {
         assertThat(holdRepository.createdHold).isEqualTo(hold);
     }
 
-    private static CreateHoldHandler handler(
-            EventWriteAuthority eventWriteAuthority,
-            HoldRepository holdRepository,
-            WaitingRoomRepository waitingRoomRepository) {
-        return new CreateHoldHandler(
-                eventWriteAuthority,
-                holdRepository,
-                waitingRoomRepository,
-                Clock.fixed(NOW, ZoneOffset.UTC),
-                Duration.ofMinutes(5));
+    private static CreateHoldHandler handler(EventWriteAuthority authority, HoldRepository holds, WaitingRoomRepository waiting) {
+        return new CreateHoldHandler(authority, holds, waiting,
+                Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofMinutes(5));
     }
 
     private static CreateHoldCommand command() {
-        return new CreateHoldCommand(USER_ID, EVENT_ID, java.util.List.of(A10, A11));
+        return new CreateHoldCommand(USER_ID, EVENT_ID, java.util.List.of(A10, A11), KEY);
     }
 
     private static SeatPriceQuote defaultQuote() {
@@ -140,13 +161,14 @@ class CreateHoldHandlerTest {
 
     private static final class FakeHoldRepository implements HoldRepository {
         private final SeatPriceQuote quote;
+        private final Map<HoldIdempotencyKey, Hold> byKey = new HashMap<>();
         private Hold createdHold;
         private SeatPriceQuote claimQuote;
+        private HoldIdempotencyKey createdKey;
         private int quoteCalls;
+        private int idempotencyReads;
 
-        private FakeHoldRepository(SeatPriceQuote quote) {
-            this.quote = quote;
-        }
+        private FakeHoldRepository(SeatPriceQuote quote) { this.quote = quote; }
 
         @Override
         public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) {
@@ -157,15 +179,23 @@ class CreateHoldHandlerTest {
         }
 
         @Override
-        public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now) {
+        public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) {
             this.createdHold = hold;
             this.claimQuote = quote;
+            this.createdKey = key;
+            this.byKey.put(key, hold);
             assertThat(now).isEqualTo(NOW);
         }
 
         @Override
         public Optional<Hold> findById(HoldId holdId) {
             return Optional.ofNullable(createdHold).filter(hold -> hold.id().equals(holdId));
+        }
+
+        @Override
+        public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) {
+            idempotencyReads++;
+            return Optional.ofNullable(byKey.get(key));
         }
     }
 
@@ -174,28 +204,14 @@ class CreateHoldHandlerTest {
         private EventAdmission admission;
         private int admissionReads;
 
-        @Override
-        public WaitingRoomEntry join(WaitingRoomEntry entry) {
-            this.entry = entry;
-            return entry;
+        @Override public WaitingRoomEntry join(WaitingRoomEntry entry) { this.entry = entry; return entry; }
+        @Override public Optional<WaitingRoomEntry> findEntry(EventId eventId, UserId userId) {
+            return Optional.ofNullable(entry).filter(value -> value.eventId().equals(eventId) && value.userId().equals(userId));
         }
-
-        @Override
-        public Optional<WaitingRoomEntry> findEntry(EventId eventId, UserId userId) {
-            return Optional.ofNullable(entry)
-                    .filter(value -> value.eventId().equals(eventId) && value.userId().equals(userId));
-        }
-
-        @Override
-        public Optional<EventAdmission> findAdmission(EventId eventId) {
+        @Override public Optional<EventAdmission> findAdmission(EventId eventId) {
             admissionReads++;
             return Optional.ofNullable(admission).filter(value -> value.eventId().equals(eventId));
         }
-
-        @Override
-        public EventAdmission advanceAdmission(EventAdmission admission) {
-            this.admission = admission;
-            return admission;
-        }
+        @Override public EventAdmission advanceAdmission(EventAdmission admission) { this.admission = admission; return admission; }
     }
 }

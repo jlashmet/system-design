@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
+import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -59,6 +60,15 @@ public final class BookingExceptionHandler {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
         detail.setTitle("Booking ownership unavailable");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(detail);
+    }
+
+    @ExceptionHandler(BookingStorageUnavailableException.class)
+    ResponseEntity<ProblemDetail> bookingStorageUnavailable(BookingStorageUnavailableException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
+        detail.setTitle("Booking storage unavailable");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(detail);
     }
 
     @ExceptionHandler({SeatClaimConflictException.class, SeatUnavailableException.class,

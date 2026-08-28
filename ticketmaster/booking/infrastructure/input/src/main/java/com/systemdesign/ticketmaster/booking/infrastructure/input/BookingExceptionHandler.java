@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
+import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
@@ -23,6 +24,13 @@ public final class BookingExceptionHandler {
     ResponseEntity<ProblemDetail> admissionRequired(AdmissionRequiredException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
         detail.setTitle("Waiting-room admission required");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
+    }
+
+    @ExceptionHandler(HoldOwnershipException.class)
+    ResponseEntity<ProblemDetail> holdOwnership(HoldOwnershipException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
+        detail.setTitle("Hold access forbidden");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
     }
 

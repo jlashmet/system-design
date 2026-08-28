@@ -42,7 +42,7 @@ paths:
             schema: { $ref: '#/components/schemas/CreateHoldRequest' }
       responses:
         '201':
-          description: Hold created
+          description: Hold created with the server-calculated price snapshot
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HoldResponse' }
@@ -137,7 +137,7 @@ components:
           items: { type: string }
     HoldResponse:
       type: object
-      required: [holdId, eventId, userId, seatIds, status, expiresAt]
+      required: [holdId, eventId, userId, seatIds, totalPrice, status, expiresAt]
       properties:
         holdId: { type: string }
         eventId: { type: string }
@@ -145,6 +145,7 @@ components:
         seatIds:
           type: array
           items: { type: string }
+        totalPrice: { $ref: '#/components/schemas/Money' }
         status: { type: string }
         expiresAt: { type: string, format: date-time }
     CheckoutResponse:

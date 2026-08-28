@@ -13,14 +13,14 @@ class EventsArchitectureTest {
     static final ArchRule domain_does_not_depend_outward = noClasses()
             .that().resideInAPackage("..domain..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..application..", "..infrastructure..", "org.springframework..",
+                    "..application..", "..infrastructure..", "..bootstrap..", "org.springframework..",
                     "software.amazon..", "org.opensearch..");
 
     @ArchTest
     static final ArchRule application_does_not_depend_on_infrastructure = noClasses()
             .that().resideInAPackage("..application..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..infrastructure..", "org.springframework..", "software.amazon..", "org.opensearch..");
+                    "..infrastructure..", "..bootstrap..", "org.springframework..", "software.amazon..", "org.opensearch..");
 
     @ArchTest
     static final ArchRule input_does_not_depend_on_output = noClasses()
@@ -36,5 +36,7 @@ class EventsArchitectureTest {
     static final ArchRule bounded_context_does_not_depend_on_other_contexts = noClasses()
             .that().resideInAPackage("com.systemdesign.ticketmaster.events..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "com.systemdesign.ticketmaster.booking..", "com.systemdesign.ticketmaster.search..");
+                    "com.systemdesign.ticketmaster.booking..",
+                    "com.systemdesign.ticketmaster.search..",
+                    "com.systemdesign.ticketmaster.controlplane..");
 }

@@ -21,6 +21,7 @@
         <module>booking</module>
         <module>search</module>
         <module>events</module>
+        <module>controlplane</module>
     </modules>
 
     <properties>

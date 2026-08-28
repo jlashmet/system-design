@@ -127,7 +127,7 @@ paths:
     post:
       tags: [WaitingRoom]
       operationId: joinWaitingRoom
-      summary: Join a hot event waiting room
+      summary: Join an enabled hot-event waiting room
       parameters:
         - in: path
           name: eventId
@@ -146,6 +146,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/WaitingRoomEntryResponse' }
+        '409': { description: Waiting room is not enabled for this event }
     get:
       tags: [WaitingRoom]
       operationId: getAdmissionStatus

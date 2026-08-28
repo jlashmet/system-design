@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Bean;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
-@SpringBootApplication
+@SpringBootApplication(scanBasePackages = "com.systemdesign.ticketmaster.controlplane.infrastructure.input")
 public class ControlPlaneApplication {
     public static void main(String[] args) {
         SpringApplication.run(ControlPlaneApplication.class, args);

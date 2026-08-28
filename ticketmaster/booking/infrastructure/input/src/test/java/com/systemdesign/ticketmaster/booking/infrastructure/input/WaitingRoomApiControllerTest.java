@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 
 class WaitingRoomApiControllerTest {
@@ -29,10 +30,11 @@ class WaitingRoomApiControllerTest {
             new CheckAdmissionHandler(repository));
 
     @Test
-    void joinsUsingServerTimeAndMapsGeneratedResponse() {
+    void joinsUsingServerTimeAndMapsGeneratedResponseWithoutCaching() {
         ResponseEntity<WaitingRoomEntryResponse> response = controller.joinWaitingRoom("event-1", "user-1");
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getEventId()).isEqualTo("event-1");
         assertThat(response.getBody().getUserId()).isEqualTo("user-1");
@@ -40,11 +42,12 @@ class WaitingRoomApiControllerTest {
     }
 
     @Test
-    void reportsAdmittedWhenWaitingRoomIsDisabled() {
+    void reportsAdmittedWhenWaitingRoomIsDisabledWithoutCaching() {
         controller.joinWaitingRoom("event-1", "user-1");
 
         ResponseEntity<AdmissionStatusResponse> response = controller.getAdmissionStatus("event-1", "user-1");
 
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getStatus()).isEqualTo(AdmissionStatusResponse.StatusEnum.ADMITTED);
     }

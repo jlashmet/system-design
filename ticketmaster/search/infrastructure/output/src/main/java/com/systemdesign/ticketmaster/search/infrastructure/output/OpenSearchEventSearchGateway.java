@@ -63,8 +63,8 @@ public final class OpenSearchEventSearchGateway implements EventSearchGateway {
                     ? encodeCursor(documents.get(documents.size() - 1))
                     : "";
             return new SearchPage(events, nextCursor);
-        } catch (IOException e) {
-            throw new SearchUnavailableException("event search is temporarily unavailable", e);
+        } catch (IOException | RuntimeException backendFailure) {
+            throw new SearchUnavailableException("event search is temporarily unavailable", backendFailure);
         }
     }
 

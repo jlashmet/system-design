@@ -6,6 +6,7 @@ import static org.awaitility.Awaitility.await;
 import com.systemdesign.ticketmaster.search.domain.SearchEvent;
 import com.systemdesign.ticketmaster.search.domain.SearchPage;
 import com.systemdesign.ticketmaster.search.domain.SearchQuery;
+import com.systemdesign.ticketmaster.search.domain.SearchUnavailableException;
 import io.floci.testcontainers.FlociContainer;
 import java.net.URI;
 import java.time.Duration;
@@ -47,6 +48,7 @@ class OpenSearchEventSearchGatewayIT {
 
     private SearchPage firstPage;
     private SearchPage secondPage;
+    private Throwable thrown;
 
     @BeforeAll
     static void setUpOpenSearch() {
@@ -87,41 +89,25 @@ class OpenSearchEventSearchGatewayIT {
     }
 
     @Test
-    void indexesEventForSearch() throws Exception {
-        recreateIndex();
-        index.upsert(new SearchEvent(
-                "event-42",
-                "The National",
-                "Hollywood Bowl",
-                "Los Angeles",
-                Instant.parse("2026-10-20T03:00:00Z"),
-                "CONCERT"));
-        dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
-
+    void indexesEventForSearch() {
+        givenIndexedEvent();
         whenSearch(new SearchQuery("National", "Los Angeles", OCTOBER_1,
                 Instant.parse("2026-11-01T00:00:00Z"), "", 10));
-
         thenExpectFirstPage("event-42");
     }
 
     @Test
-    void deletesEventFromSearch() throws Exception {
-        recreateIndex();
-        index.upsert(new SearchEvent(
-                "event-42",
-                "The National",
-                "Hollywood Bowl",
-                "Los Angeles",
-                Instant.parse("2026-10-20T03:00:00Z"),
-                "CONCERT"));
-        dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
-        index.delete("event-42");
-        dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
-
-        whenSearch(new SearchQuery("National", "Los Angeles", OCTOBER_1,
-                Instant.parse("2026-11-01T00:00:00Z"), "", 10));
-
+    void deletesEventFromSearch() {
+        givenIndexedEvent();
+        whenIndexedEventIsDeletedAndSearched();
         thenExpectFirstPage();
+    }
+
+    @Test
+    void backendResponseFailureIsSearchUnavailable() {
+        givenMissingIndex();
+        whenMissingIndexIsSearched();
+        thenExpectSearchUnavailable();
     }
 
     @Test
@@ -145,6 +131,34 @@ class OpenSearchEventSearchGatewayIT {
         thenExpectPages(List.of("event-a", "event-b"), List.of("event-c"));
     }
 
+    private void givenIndexedEvent() {
+        try {
+            recreateIndex();
+            index.upsert(new SearchEvent(
+                    "event-42",
+                    "The National",
+                    "Hollywood Bowl",
+                    "Los Angeles",
+                    Instant.parse("2026-10-20T03:00:00Z"),
+                    "CONCERT"));
+            dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
+            resetResults();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void givenMissingIndex() {
+        try {
+            if (dataClient.indices().exists(exists -> exists.index(INDEX_NAME)).value()) {
+                dataClient.indices().delete(delete -> delete.index(INDEX_NAME));
+            }
+            resetResults();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private void givenEvents(SearchEventDocument... documents) {
         try {
             recreateIndex();
@@ -155,8 +169,7 @@ class OpenSearchEventSearchGatewayIT {
                         .document(document)
                         .refresh(Refresh.True));
             }
-            firstPage = null;
-            secondPage = null;
+            resetResults();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -180,6 +193,25 @@ class OpenSearchEventSearchGatewayIT {
         firstPage = gateway.search(query);
     }
 
+    private void whenIndexedEventIsDeletedAndSearched() {
+        try {
+            index.delete("event-42");
+            dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
+            firstPage = gateway.search(new SearchQuery("National", "Los Angeles", OCTOBER_1,
+                    Instant.parse("2026-11-01T00:00:00Z"), "", 10));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void whenMissingIndexIsSearched() {
+        try {
+            gateway.search(new SearchQuery("", "", null, null, "", 10));
+        } catch (Throwable error) {
+            thrown = error;
+        }
+    }
+
     private void whenSearchTwoPages(SearchQuery query) {
         firstPage = gateway.search(query);
         secondPage = gateway.search(new SearchQuery(query.text(), query.city(), query.startsAfter(), query.startsBefore(),
@@ -191,11 +223,21 @@ class OpenSearchEventSearchGatewayIT {
         assertThat(firstPage.nextCursor()).isEmpty();
     }
 
+    private void thenExpectSearchUnavailable() {
+        assertThat(thrown).isInstanceOf(SearchUnavailableException.class);
+    }
+
     private void thenExpectPages(List<String> firstIds, List<String> secondIds) {
         assertThat(firstPage.events()).extracting(SearchEvent::eventId).containsExactlyElementsOf(firstIds);
         assertThat(firstPage.nextCursor()).isNotBlank();
         assertThat(secondPage.events()).extracting(SearchEvent::eventId).containsExactlyElementsOf(secondIds);
         assertThat(secondPage.nextCursor()).isEmpty();
+    }
+
+    private void resetResults() {
+        firstPage = null;
+        secondPage = null;
+        thrown = null;
     }
 
     private static SearchEventDocument event(String eventId, String name, String venue, String city,

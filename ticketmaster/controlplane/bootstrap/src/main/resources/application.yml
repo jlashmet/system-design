@@ -1,0 +1,2 @@
+server:
+  port: ${TICKETMASTER_CONTROLPLANE_PORT:8083}

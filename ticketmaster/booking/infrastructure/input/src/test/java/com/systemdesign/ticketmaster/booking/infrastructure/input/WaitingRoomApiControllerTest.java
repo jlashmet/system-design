@@ -53,7 +53,7 @@ class WaitingRoomApiControllerTest {
 
     private void givenEnabledWaitingRoom(Instant admittedThrough) {
         repository = new FakeWaitingRoomRepository();
-        repository.advanceAdmission(new EventAdmission(EVENT_ID, admittedThrough));
+        repository.initializeAdmission(new EventAdmission(EVENT_ID, admittedThrough));
         controller = new WaitingRoomApiController(
                 new JoinWaitingRoomHandler(repository, Clock.fixed(JOINED_AT, ZoneOffset.UTC)),
                 new CheckAdmissionHandler(repository));

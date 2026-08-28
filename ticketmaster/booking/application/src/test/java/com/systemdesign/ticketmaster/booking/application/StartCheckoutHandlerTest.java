@@ -60,7 +60,9 @@ class StartCheckoutHandlerTest {
         private int idempotencyReads;
 
         @Override public Optional<Booking> findById(BookingId bookingId) { return Optional.empty(); }
-        @Override public Optional<Booking> findByCheckoutIdempotencyKey(String idempotencyKey) {
+        @Override
+        public Optional<Booking> findByCheckoutIdempotencyKey(
+                EventId eventId, HoldId holdId, String idempotencyKey) {
             idempotencyReads++;
             return Optional.empty();
         }

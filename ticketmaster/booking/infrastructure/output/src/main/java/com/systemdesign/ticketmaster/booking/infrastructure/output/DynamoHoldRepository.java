@@ -155,7 +155,10 @@ public final class DynamoHoldRepository implements HoldRepository {
         if (holdId == null || holdId.s() == null || holdId.s().isBlank()) {
             throw new IllegalStateException("hold idempotency record is missing holdId");
         }
-        return findById(new HoldId(holdId.s()));
+        Hold hold = findById(new HoldId(holdId.s()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "hold idempotency record references missing hold " + holdId.s()));
+        return Optional.of(hold);
     }
 
     private Price priceFromSeatItem(SeatId seatId, Map<String, AttributeValue> item) {

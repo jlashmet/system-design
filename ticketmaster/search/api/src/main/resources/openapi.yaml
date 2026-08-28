@@ -30,6 +30,12 @@ paths:
       responses:
         '200':
           description: Search results
+          headers:
+            Cache-Control:
+              description: Short-lived shared cache policy; stale results may be served briefly during backend errors
+              schema:
+                type: string
+                example: public, max-age=15, stale-while-revalidate=30, stale-if-error=120
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SearchPageResponse' }

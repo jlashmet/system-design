@@ -1,7 +1,6 @@
 package com.systemdesign.ticketmaster.booking.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
@@ -38,38 +37,60 @@ class ReconcileBookingEventScopeTest {
     private static final Instant NOW = Instant.parse("2026-08-28T18:00:00Z");
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
 
+    private TrackingBookingRepository repository;
+    private TrackingPaymentGateway paymentGateway;
+    private ReconcileBookingHandler handler;
+    private Throwable thrown;
+
     @Test
     void scopedCallbackChecksRegionBeforeReadingRegionalBookingState() {
-        TrackingBookingRepository repository = new TrackingBookingRepository(pendingBooking());
-        EventWriteAuthority wrongRegion = eventId -> {
-            throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
-        };
-        ReconcileBookingHandler handler = handler(wrongRegion, repository);
-
-        assertThatThrownBy(() -> handler.handle(ACTUAL_EVENT, BOOKING_ID))
-                .isInstanceOf(WrongBookingRegionException.class);
-
-        assertThat(repository.findByIdCalls).isZero();
+        givenWrongBookingRegion();
+        whenScopedReconcile(ACTUAL_EVENT);
+        thenExpectWrongRegionBeforeBookingRead();
     }
 
     @Test
     void scopedCallbackRejectsBookingFromDifferentEventBeforeProviderAccess() {
-        TrackingBookingRepository repository = new TrackingBookingRepository(pendingBooking());
-        TrackingPaymentGateway paymentGateway = new TrackingPaymentGateway();
-        ReconcileBookingHandler handler = handler(ignored -> {}, repository, paymentGateway);
-
-        assertThatThrownBy(() -> handler.handle(OTHER_EVENT, BOOKING_ID))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("does not belong to event");
-
-        assertThat(repository.findByIdCalls).isOne();
-        assertThat(paymentGateway.statusCalls).isZero();
+        givenLocalRegionWithPendingBooking();
+        whenScopedReconcile(OTHER_EVENT);
+        thenExpectEventMismatchBeforeProviderAccess();
     }
 
-    private static ReconcileBookingHandler handler(
-            EventWriteAuthority authority,
-            TrackingBookingRepository repository) {
-        return handler(authority, repository, new TrackingPaymentGateway());
+    private void givenWrongBookingRegion() {
+        repository = new TrackingBookingRepository(pendingBooking());
+        paymentGateway = new TrackingPaymentGateway();
+        EventWriteAuthority wrongRegion = eventId -> {
+            throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
+        };
+        handler = handler(wrongRegion, repository, paymentGateway);
+        thrown = null;
+    }
+
+    private void givenLocalRegionWithPendingBooking() {
+        repository = new TrackingBookingRepository(pendingBooking());
+        paymentGateway = new TrackingPaymentGateway();
+        handler = handler(ignored -> {}, repository, paymentGateway);
+        thrown = null;
+    }
+
+    private void whenScopedReconcile(EventId eventId) {
+        try {
+            handler.handle(eventId, BOOKING_ID);
+        } catch (Throwable error) {
+            thrown = error;
+        }
+    }
+
+    private void thenExpectWrongRegionBeforeBookingRead() {
+        assertThat(thrown).isInstanceOf(WrongBookingRegionException.class);
+        assertThat(repository.findByIdCalls).isZero();
+    }
+
+    private void thenExpectEventMismatchBeforeProviderAccess() {
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not belong to event");
+        assertThat(repository.findByIdCalls).isOne();
+        assertThat(paymentGateway.statusCalls).isZero();
     }
 
     private static ReconcileBookingHandler handler(

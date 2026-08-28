@@ -33,6 +33,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SearchPageResponse' }
+        '400': { description: Invalid query parameters or cursor }
+        '503': { description: Search backend is temporarily unavailable }
 components:
   schemas:
     SearchEventResponse:

@@ -12,12 +12,13 @@ import com.systemdesign.ticketmaster.events.domain.VenueId;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 
 class EventsApiControllerTest {
 
     @Test
-    void mapsDomainEventToGeneratedResponse() {
+    void mapsDomainEventToGeneratedResponseAndMarksMetadataCacheable() {
         EventRepository repository = eventId -> Optional.of(new Event(
                 eventId,
                 "Taylor Swift",
@@ -37,15 +38,18 @@ class EventsApiControllerTest {
         assertThat(response.getBody().getVenueId()).isEqualTo("venue-1");
         assertThat(response.getBody().getStartsAt().toInstant()).isEqualTo(Instant.parse("2026-10-10T03:00:00Z"));
         assertThat(response.getBody().getStatus()).isEqualTo("SCHEDULED");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL))
+                .isEqualTo("public, max-age=60, stale-while-revalidate=300");
     }
 
     @Test
-    void returnsNotFoundWhenEventDoesNotExist() {
+    void returnsNotFoundWithoutCachingWhenEventDoesNotExist() {
         EventsApiController controller = new EventsApiController(new GetEventHandler(eventId -> Optional.empty()));
 
         ResponseEntity<EventResponse> response = controller.getEvent("missing");
 
         assertThat(response.getStatusCode().value()).isEqualTo(404);
         assertThat(response.getBody()).isNull();
+        assertThat(response.getHeaders().containsKey(HttpHeaders.CACHE_CONTROL)).isFalse();
     }
 }

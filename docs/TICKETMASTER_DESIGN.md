@@ -36,7 +36,8 @@ This document captures the Ticketmaster system-design discussion and the impleme
 - Hold creation and checkout are idempotent because clients may retry after losing an HTTP response.
 - Ordinary `HELD` seats can be reclaimed lazily after their hold deadline. Seats in `CHECKOUT` are deliberately protected from blind timestamp reclaim because an external payment may still resolve.
 - Waiting-room ordering only needs to be approximately fair. We do not require a globally exact real-world arrival order.
-- A missing `EventAdmission` record means the waiting room is disabled for that event. Enabling a hot-event waiting room therefore creates its admission record before hold traffic is admitted.
+- A missing `EventAdmission` record means the waiting room is disabled for that event. A configured hot event initializes this record fail-closed at service startup before normal traffic is accepted.
+- `X-User-Id` is the interview-project representation of identity already authenticated by a trusted ingress boundary. A production edge must strip any client-supplied copy and inject the authenticated principal (or the controller can read the principal directly); callers are not allowed to self-assert another user's ID.
 
 ## High-Level Architecture
 
@@ -477,6 +478,8 @@ The waiting room is not required for inventory correctness. Its purpose is to pr
 
 It can be enabled only for sufficiently hot events. An `EventAdmission` record means admission control is enabled; if the record is absent, the waiting room is disabled and hold creation proceeds without admission gating.
 
+Configured hot-event IDs are initialized synchronously as the Booking service constructs its admission scheduler. A missing `EventAdmission` row is created with `admittedThrough = startup time`; joins arriving after startup therefore queue immediately, while the regulator begins near the live clock instead of having to advance from a historical epoch. Existing watermarks are preserved. If initialization fails, service startup fails closed rather than accidentally serving a configured hot event with admission disabled.
+
 ### No Physical Queue Required
 
 Exact FIFO admission is not a requirement, so waiting-room state does not need SQS, Kafka, or a global sequence number.
@@ -569,16 +572,18 @@ These endpoints use the eventually consistent read model.
 ```http
 POST /events/{eventId}/holds
 Idempotency-Key: <client-generated-key>
+X-User-Id: <authenticated-user-id>
 ```
 
 Example body:
 
 ```json
 {
-  "userId": "user-456",
   "seatIds": ["A10", "A11", "A12"]
 }
 ```
+
+The body cannot choose the Hold owner. The trusted identity boundary supplies `X-User-Id`; in production the external ingress must authenticate the caller and prevent user-controlled spoofing of that header.
 
 The request never supplies a total price. Booking reads authoritative prices, computes the total, and returns that snapshot in `HoldResponse.totalPrice`.
 
@@ -591,9 +596,10 @@ The operation is all-or-nothing. Seat conflict, stale quoted price, or idempoten
 ```http
 POST /events/{eventId}/holds/{holdId}/checkout
 Idempotency-Key: <client-generated-key>
+X-User-Id: <authenticated-user-id>
 ```
 
-Checkout is event-scoped so regional routing/ownership can be validated without a separate global hold lookup. Checkout idempotency prevents duplicate booking/payment workflows.
+Checkout is event-scoped so regional routing/ownership can be validated without a separate global hold lookup. Checkout idempotency prevents duplicate booking/payment workflows. The loaded Hold—or the Booking reached through an idempotent retry—must belong to the authenticated user. A mismatch returns `403` before payment-provider access.
 
 ## Checkout and Payment Workflow
 
@@ -778,6 +784,7 @@ The invariant is:
 | Concern | Current Direction | Why |
 | --- | --- | --- |
 | CDN / static delivery | CloudFront or equivalent | Absorb stable/read-heavy traffic before application servers |
+| User identity boundary | Authenticated ingress -> trusted `UserId` | Hold/checkout ownership is enforced without coupling domain/application to auth technology |
 | Event metadata | DynamoDB | Simple key-oriented canonical store |
 | Event search | OpenSearch | Full-text/filtering/read throughput; eventual consistency acceptable |
 | Events -> Search projection | DynamoDB Stream -> Lambda -> SQS FIFO -> Lambda | Durable bounded-context integration, per-event ordering, replayable/idempotent |
@@ -805,10 +812,11 @@ The invariant is:
 8. **Checkout timeout versus payment ambiguity:** protected `CHECKOUT` inventory remains fenced until provider state makes booking or release safe.
 9. **Client price versus authoritative price:** display prices may be stale; the hold path strongly re-quotes and binds claims to those prices.
 10. **Client retry versus duplicate mutation:** hold and checkout idempotency turn lost responses into safe retries rather than duplicate workflows.
-11. **Bounded contexts versus shared models:** Events and Search integrate through versioned JSON over SQS, not shared Java classes or database-schema coupling.
-12. **FIFO ordering versus global serialization:** search projection uses per-event FIFO ordering, not one global queue group, so unrelated events remain parallel.
-13. **Projection reliability versus bespoke consumers:** Lambda event-source mappings own stream/queue polling, checkpoints, and retries; projection writes remain idempotent.
-14. **CDN versus live inventory:** cache stable/read-heavy responses aggressively but never cache live booking state as authority.
-15. **Multi-region reads versus writes:** reads may be active-active while each event has one authoritative booking writer.
-16. **Ownership cache versus fencing:** a short cache removes control-plane reads from the hot path; correctness comes from hard fencing before transfer, not cache freshness.
-17. **Regional failover availability versus correctness:** temporary booking outage is preferable to split-brain inventory; stronger automatic failover requirements may change the datastore choice.
+11. **Authenticated identity versus client-controlled ownership:** Hold ownership comes from trusted ingress identity, not a user ID in the request body; checkout verifies the same identity before provider access.
+12. **Bounded contexts versus shared models:** Events and Search integrate through versioned JSON over SQS, not shared Java classes or database-schema coupling.
+13. **FIFO ordering versus global serialization:** search projection uses per-event FIFO ordering, not one global queue group, so unrelated events remain parallel.
+14. **Projection reliability versus bespoke consumers:** Lambda event-source mappings own stream/queue polling, checkpoints, and retries; projection writes remain idempotent.
+15. **CDN versus live inventory:** cache stable/read-heavy responses aggressively but never cache live booking state as authority.
+16. **Multi-region reads versus writes:** reads may be active-active while each event has one authoritative booking writer.
+17. **Ownership cache versus fencing:** a short cache removes control-plane reads from the hot path; correctness comes from hard fencing before transfer, not cache freshness.
+18. **Regional failover availability versus correctness:** temporary booking outage is preferable to split-brain inventory; stronger automatic failover requirements may change the datastore choice.

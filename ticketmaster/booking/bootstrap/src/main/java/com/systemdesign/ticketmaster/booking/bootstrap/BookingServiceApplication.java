@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 
 import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
+import com.systemdesign.ticketmaster.booking.application.EnableAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionsHandler;
 import com.systemdesign.ticketmaster.booking.application.JoinWaitingRoomHandler;
@@ -214,6 +215,11 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    EnableAdmissionHandler enableAdmissionHandler(WaitingRoomRepository waitingRoomRepository) {
+        return new EnableAdmissionHandler(waitingRoomRepository);
+    }
+
+    @Bean
     RegulateAdmissionHandler regulateAdmissionHandler(
             WaitingRoomRepository waitingRoomRepository,
             AdmissionHealthGateway admissionHealthGateway,
@@ -230,9 +236,13 @@ public class BookingServiceApplication {
 
     @Bean
     AdmissionRegulationScheduler admissionRegulationScheduler(
+            EnableAdmissionHandler enableAdmissionHandler,
             RegulateAdmissionHandler handler,
             @Value("${ticketmaster.booking.admission.event-ids:}") String configuredEventIds) {
-        return new AdmissionRegulationScheduler(handler, parseEventIds(configuredEventIds));
+        return new AdmissionRegulationScheduler(
+                enableAdmissionHandler,
+                handler,
+                parseEventIds(configuredEventIds));
     }
 
     @Bean

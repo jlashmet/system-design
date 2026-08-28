@@ -4,6 +4,8 @@ import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
 import com.systemdesign.ticketmaster.booking.application.JoinWaitingRoomHandler;
+import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
+import com.systemdesign.ticketmaster.booking.application.ReconcileDueBookingsHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
@@ -23,9 +25,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
+@EnableScheduling
 @SpringBootApplication(scanBasePackages = "com.systemdesign.ticketmaster.booking.infrastructure.input")
 public class BookingServiceApplication {
     public static void main(String[] args) {
@@ -109,6 +113,38 @@ public class BookingServiceApplication {
                 Duration.parse(checkoutDuration),
                 Duration.parse(reconciliationDelay),
                 reconciliationShards);
+    }
+
+    @Bean
+    ReconcileBookingHandler reconcileBookingHandler(
+            BookingRepository bookingRepository,
+            HoldRepository holdRepository,
+            CheckoutGateway checkoutGateway,
+            PaymentGateway paymentGateway,
+            Clock clock,
+            @Value("${ticketmaster.booking.reconciliation-backoff:PT30S}") String reconciliationBackoff) {
+        return new ReconcileBookingHandler(
+                bookingRepository,
+                holdRepository,
+                checkoutGateway,
+                paymentGateway,
+                clock,
+                Duration.parse(reconciliationBackoff));
+    }
+
+    @Bean
+    ReconcileDueBookingsHandler reconcileDueBookingsHandler(
+            BookingRepository bookingRepository,
+            ReconcileBookingHandler reconcileBookingHandler,
+            Clock clock,
+            @Value("${ticketmaster.booking.reconciliation-shards:16}") int reconciliationShards,
+            @Value("${ticketmaster.booking.reconciliation-batch-size-per-shard:25}") int batchSizePerShard) {
+        return new ReconcileDueBookingsHandler(
+                bookingRepository,
+                reconcileBookingHandler,
+                clock,
+                reconciliationShards,
+                batchSizePerShard);
     }
 
     @Bean

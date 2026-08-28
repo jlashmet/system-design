@@ -215,8 +215,8 @@ public class BookingServiceApplication {
     }
 
     @Bean
-    EnableAdmissionHandler enableAdmissionHandler(WaitingRoomRepository waitingRoomRepository) {
-        return new EnableAdmissionHandler(waitingRoomRepository);
+    EnableAdmissionHandler enableAdmissionHandler(WaitingRoomRepository waitingRoomRepository, Clock clock) {
+        return new EnableAdmissionHandler(waitingRoomRepository, clock);
     }
 
     @Bean

@@ -194,7 +194,8 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
 
     private void transact(Hold hold, List<TransactWriteItem> writes) {
         try {
-            dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
+            DynamoBookingCall.execute("checkout transaction", () -> dynamoDb.transactWriteItems(
+                    TransactWriteItemsRequest.builder().transactItems(writes).build()));
         } catch (TransactionCanceledException e) {
             if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
                 throw new BookingStorageUnavailableException("checkout transaction", e);

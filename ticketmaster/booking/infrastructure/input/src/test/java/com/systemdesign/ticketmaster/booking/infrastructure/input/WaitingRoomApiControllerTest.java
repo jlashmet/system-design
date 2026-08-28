@@ -23,55 +23,66 @@ import org.springframework.http.ResponseEntity;
 
 class WaitingRoomApiControllerTest {
     private static final Instant JOINED_AT = Instant.parse("2026-08-27T20:00:00Z");
+    private static final EventId EVENT_ID = new EventId("event-1");
 
-    private final FakeWaitingRoomRepository repository = new FakeWaitingRoomRepository();
-    private final WaitingRoomApiController controller = new WaitingRoomApiController(
-            new JoinWaitingRoomHandler(repository, Clock.fixed(JOINED_AT, ZoneOffset.UTC)),
-            new CheckAdmissionHandler(repository));
-
-    @Test
-    void joinsUsingServerTimeAndMapsGeneratedResponseWithoutCaching() {
-        ResponseEntity<WaitingRoomEntryResponse> response = controller.joinWaitingRoom("event-1", "user-1");
-
-        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
-        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getEventId()).isEqualTo("event-1");
-        assertThat(response.getBody().getUserId()).isEqualTo("user-1");
-        assertThat(response.getBody().getJoinedAt().toInstant()).isEqualTo(JOINED_AT);
-    }
+    private FakeWaitingRoomRepository repository;
+    private WaitingRoomApiController controller;
+    private ResponseEntity<WaitingRoomEntryResponse> joinResponse;
+    private ResponseEntity<AdmissionStatusResponse> admissionResponse;
 
     @Test
-    void reportsAdmittedWhenWaitingRoomIsDisabledWithoutCaching() {
-        controller.joinWaitingRoom("event-1", "user-1");
-
-        ResponseEntity<AdmissionStatusResponse> response = controller.getAdmissionStatus("event-1", "user-1");
-
-        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getStatus()).isEqualTo(AdmissionStatusResponse.StatusEnum.ADMITTED);
+    void joinsEnabledWaitingRoomUsingServerTimeAndDoesNotCache() {
+        givenEnabledWaitingRoom(JOINED_AT.minusSeconds(1));
+        whenUserJoinsWaitingRoom();
+        thenExpectServerTimestampedJoinResponse();
     }
 
     @Test
     void reportsWaitingWhenWatermarkHasNotReachedJoinTime() {
-        controller.joinWaitingRoom("event-1", "user-1");
-        repository.advanceAdmission(new EventAdmission(new EventId("event-1"), JOINED_AT.minusSeconds(1)));
-
-        ResponseEntity<AdmissionStatusResponse> response = controller.getAdmissionStatus("event-1", "user-1");
-
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getStatus()).isEqualTo(AdmissionStatusResponse.StatusEnum.WAITING);
+        givenEnabledWaitingRoom(JOINED_AT.minusSeconds(1));
+        whenUserJoinsAndChecksAdmission();
+        thenExpectAdmissionStatus(AdmissionStatusResponse.StatusEnum.WAITING);
     }
 
     @Test
     void reportsAdmittedWhenWatermarkPassesJoinTime() {
-        controller.joinWaitingRoom("event-1", "user-1");
-        repository.advanceAdmission(new EventAdmission(new EventId("event-1"), JOINED_AT));
+        givenEnabledWaitingRoom(JOINED_AT);
+        whenUserJoinsAndChecksAdmission();
+        thenExpectAdmissionStatus(AdmissionStatusResponse.StatusEnum.ADMITTED);
+    }
 
-        ResponseEntity<AdmissionStatusResponse> response = controller.getAdmissionStatus("event-1", "user-1");
+    private void givenEnabledWaitingRoom(Instant admittedThrough) {
+        repository = new FakeWaitingRoomRepository();
+        repository.advanceAdmission(new EventAdmission(EVENT_ID, admittedThrough));
+        controller = new WaitingRoomApiController(
+                new JoinWaitingRoomHandler(repository, Clock.fixed(JOINED_AT, ZoneOffset.UTC)),
+                new CheckAdmissionHandler(repository));
+        joinResponse = null;
+        admissionResponse = null;
+    }
 
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getStatus()).isEqualTo(AdmissionStatusResponse.StatusEnum.ADMITTED);
+    private void whenUserJoinsWaitingRoom() {
+        joinResponse = controller.joinWaitingRoom(EVENT_ID.value(), "user-1");
+    }
+
+    private void whenUserJoinsAndChecksAdmission() {
+        controller.joinWaitingRoom(EVENT_ID.value(), "user-1");
+        admissionResponse = controller.getAdmissionStatus(EVENT_ID.value(), "user-1");
+    }
+
+    private void thenExpectServerTimestampedJoinResponse() {
+        assertThat(joinResponse.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(joinResponse.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
+        assertThat(joinResponse.getBody()).isNotNull();
+        assertThat(joinResponse.getBody().getEventId()).isEqualTo(EVENT_ID.value());
+        assertThat(joinResponse.getBody().getUserId()).isEqualTo("user-1");
+        assertThat(joinResponse.getBody().getJoinedAt().toInstant()).isEqualTo(JOINED_AT);
+    }
+
+    private void thenExpectAdmissionStatus(AdmissionStatusResponse.StatusEnum status) {
+        assertThat(admissionResponse.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
+        assertThat(admissionResponse.getBody()).isNotNull();
+        assertThat(admissionResponse.getBody().getStatus()).isEqualTo(status);
     }
 
     private static final class FakeWaitingRoomRepository implements WaitingRoomRepository {

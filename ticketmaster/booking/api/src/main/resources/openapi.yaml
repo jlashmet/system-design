@@ -16,6 +16,9 @@ paths:
       responses:
         '200':
           description: Eventually consistent section directory
+          headers:
+            Cache-Control:
+              schema: { type: string, example: 'public, max-age=60, stale-while-revalidate=300' }
           content:
             application/json:
               schema:
@@ -25,7 +28,7 @@ paths:
     get:
       tags: [Booking]
       operationId: getSectionSeats
-      summary: View the eventually consistent seat map for a section
+      summary: View the eventually consistent live seat map for a section
       parameters:
         - in: path
           name: eventId
@@ -38,6 +41,9 @@ paths:
       responses:
         '200':
           description: Section seat map
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
           content:
             application/json:
               schema:
@@ -47,12 +53,17 @@ paths:
     post:
       tags: [Booking]
       operationId: createHold
-      summary: Temporarily hold a set of seats at their current authoritative prices
+      summary: Idempotently hold seats at their current authoritative prices
       parameters:
         - in: path
           name: eventId
           required: true
           schema: { type: string }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Repeating the same key with the same user/event/seats returns the original Hold
+          schema: { type: string, minLength: 1, maxLength: 200 }
       requestBody:
         required: true
         content:
@@ -60,12 +71,15 @@ paths:
             schema: { $ref: '#/components/schemas/CreateHoldRequest' }
       responses:
         '201':
-          description: Hold created with the server-calculated price snapshot
+          description: Hold created, or the original successful Hold returned for an idempotent retry
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HoldResponse' }
         '403': { description: Waiting-room admission is enabled for the event and the user is not yet admitted }
-        '409': { description: One or more seats are unavailable or changed price before claim }
+        '409': { description: Seats are unavailable, a quoted price changed, or the idempotency key was reused for a different request }
         '421': { description: Request reached the wrong booking region; X-Booking-Region identifies the current owner }
         '503': { description: Booking ownership cannot currently be established }
   /events/{eventId}/holds/{holdId}/checkout:
@@ -89,6 +103,9 @@ paths:
       responses:
         '200':
           description: Checkout started
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CheckoutResponse' }
@@ -112,6 +129,9 @@ paths:
       responses:
         '200':
           description: Existing or newly-created waiting-room entry
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/WaitingRoomEntryResponse' }
@@ -131,6 +151,9 @@ paths:
       responses:
         '200':
           description: Current admission status
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AdmissionStatusResponse' }

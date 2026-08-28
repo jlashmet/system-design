@@ -19,7 +19,7 @@ import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.transport.aws.AwsSdk2Transport;
 import org.opensearch.client.transport.aws.AwsSdk2TransportOptions;
 import software.amazon.awssdk.http.SdkHttpClient;
-import software.amazon.awssdk.http.apache.ApacheHttpClient;
+import software.amazon.awssdk.http.apache5.Apache5HttpClient;
 import software.amazon.awssdk.regions.Region;
 
 /**
@@ -94,7 +94,7 @@ public final class SearchProjectionSqsLambdaHandler implements RequestHandler<SQ
 
         URI uri = endpoint.contains("://") ? URI.create(endpoint) : URI.create("https://" + endpoint);
         String host = requireNonBlank(uri.getHost(), "OpenSearch endpoint host");
-        SdkHttpClient httpClient = ApacheHttpClient.builder()
+        SdkHttpClient httpClient = Apache5HttpClient.builder()
                 .connectionTimeout(Duration.ofMillis(200))
                 .socketTimeout(Duration.ofMillis(450))
                 .build();

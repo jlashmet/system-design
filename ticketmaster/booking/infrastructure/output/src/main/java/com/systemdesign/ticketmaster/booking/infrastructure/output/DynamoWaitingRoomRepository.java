@@ -32,7 +32,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     public WaitingRoomEntry join(WaitingRoomEntry entry) {
         Objects.requireNonNull(entry, "entry");
         try {
-            dynamoDb.putItem(PutItemRequest.builder()
+            DynamoBookingCall.execute("waiting-room join", () -> dynamoDb.putItem(PutItemRequest.builder()
                     .tableName(tableName)
                     .item(Map.of(
                             PK, string(entryPk(entry.eventId(), entry.userId())),
@@ -42,7 +42,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                             "joinedAt", number(entry.joinedAt().toEpochMilli())))
                     .conditionExpression("attribute_not_exists(#pk)")
                     .expressionAttributeNames(Map.of("#pk", PK))
-                    .build());
+                    .build()));
             return entry;
         } catch (ConditionalCheckFailedException alreadyJoined) {
             return findEntry(entry.eventId(), entry.userId())
@@ -82,7 +82,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     public EventAdmission initializeAdmission(EventAdmission initial) {
         Objects.requireNonNull(initial, "initial");
         try {
-            dynamoDb.putItem(PutItemRequest.builder()
+            DynamoBookingCall.execute("admission initialization", () -> dynamoDb.putItem(PutItemRequest.builder()
                     .tableName(tableName)
                     .item(Map.of(
                             PK, string(admissionPk(initial.eventId())),
@@ -91,7 +91,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                             "admittedThrough", number(initial.admittedThrough().toEpochMilli())))
                     .conditionExpression("attribute_not_exists(#pk)")
                     .expressionAttributeNames(Map.of("#pk", PK))
-                    .build());
+                    .build()));
             return initial;
         } catch (ConditionalCheckFailedException alreadyEnabled) {
             return findAdmission(initial.eventId())
@@ -105,7 +105,9 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     public EventAdmission advanceAdmission(EventAdmission admission) {
         Objects.requireNonNull(admission, "admission");
         try {
-            Map<String, AttributeValue> updated = dynamoDb.updateItem(UpdateItemRequest.builder()
+            Map<String, AttributeValue> updated = DynamoBookingCall.execute(
+                    "admission watermark advance",
+                    () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                             .tableName(tableName)
                             .key(Map.of(PK, string(admissionPk(admission.eventId()))))
                             .updateExpression("SET #admittedThrough = :newWatermark")
@@ -116,7 +118,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                             .expressionAttributeValues(Map.of(
                                     ":newWatermark", number(admission.admittedThrough().toEpochMilli())))
                             .returnValues(ReturnValue.ALL_NEW)
-                            .build())
+                            .build()))
                     .attributes();
             return new EventAdmission(
                     new EventId(updated.get("eventId").s()),
@@ -127,11 +129,13 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     }
 
     private Map<String, AttributeValue> get(String pk) {
-        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(pk)))
-                        .consistentRead(true)
-                        .build())
+        Map<String, AttributeValue> item = DynamoBookingCall.execute(
+                        "waiting-room state read",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(pk)))
+                                .consistentRead(true)
+                                .build()))
                 .item();
         return item == null ? Map.of() : item;
     }

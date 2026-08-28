@@ -5,6 +5,7 @@ import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 public final class ReconcileBookingHandler {
+    private final EventWriteAuthority eventWriteAuthority;
     private final BookingRepository bookingRepository;
     private final HoldRepository holdRepository;
     private final CheckoutGateway checkoutGateway;
@@ -23,9 +25,11 @@ public final class ReconcileBookingHandler {
     private final Clock clock;
     private final Duration pendingBackoff;
 
-    public ReconcileBookingHandler(BookingRepository bookingRepository, HoldRepository holdRepository,
+    public ReconcileBookingHandler(EventWriteAuthority eventWriteAuthority,
+                                   BookingRepository bookingRepository, HoldRepository holdRepository,
                                    CheckoutGateway checkoutGateway, PaymentGateway paymentGateway,
                                    Clock clock, Duration pendingBackoff) {
+        this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
         this.bookingRepository = Objects.requireNonNull(bookingRepository, "bookingRepository");
         this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
         this.checkoutGateway = Objects.requireNonNull(checkoutGateway, "checkoutGateway");
@@ -41,6 +45,8 @@ public final class ReconcileBookingHandler {
         Booking booking = bookingRepository.findById(Objects.requireNonNull(bookingId, "bookingId"))
                 .orElseThrow(() -> new IllegalArgumentException("booking not found: " + bookingId.value()));
         if (booking.status() != BookingStatus.PENDING_PAYMENT) return booking;
+
+        eventWriteAuthority.assertMayWrite(booking.eventId());
 
         Booking withIntent = ensurePaymentIntent(booking);
         Hold hold = loadHold(withIntent);

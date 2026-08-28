@@ -40,6 +40,27 @@ class WaitingRoomApiControllerTest {
     }
 
     @Test
+    void reportsAdmittedWhenWaitingRoomIsDisabled() {
+        controller.joinWaitingRoom("event-1", "user-1");
+
+        ResponseEntity<AdmissionStatusResponse> response = controller.getAdmissionStatus("event-1", "user-1");
+
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(AdmissionStatusResponse.StatusEnum.ADMITTED);
+    }
+
+    @Test
+    void reportsWaitingWhenWatermarkHasNotReachedJoinTime() {
+        controller.joinWaitingRoom("event-1", "user-1");
+        repository.advanceAdmission(new EventAdmission(new EventId("event-1"), JOINED_AT.minusSeconds(1)));
+
+        ResponseEntity<AdmissionStatusResponse> response = controller.getAdmissionStatus("event-1", "user-1");
+
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(AdmissionStatusResponse.StatusEnum.WAITING);
+    }
+
+    @Test
     void reportsAdmittedWhenWatermarkPassesJoinTime() {
         controller.joinWaitingRoom("event-1", "user-1");
         repository.advanceAdmission(new EventAdmission(new EventId("event-1"), JOINED_AT));

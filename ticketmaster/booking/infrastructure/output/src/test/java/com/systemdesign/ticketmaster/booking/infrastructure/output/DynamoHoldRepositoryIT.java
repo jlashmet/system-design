@@ -8,6 +8,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
+import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import io.floci.testcontainers.FlociContainer;
 import java.math.BigDecimal;
@@ -43,7 +44,9 @@ class DynamoHoldRepositoryIT {
     private static final Instant NOW = Instant.parse("2026-08-27T22:00:00Z");
     private static final EventId EVENT_ID = new EventId("event-123");
     private static final UserId USER_ID = new UserId("user-456");
-    private static final Price TWO_HUNDRED_DOLLARS = new Price(new BigDecimal("200.00"), Currency.getInstance("USD"));
+    private static final Currency USD = Currency.getInstance("USD");
+    private static final Price ONE_HUNDRED_DOLLARS = price("100.00");
+    private static final Price ONE_HUNDRED_TWENTY_FIVE_DOLLARS = price("125.00");
 
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
@@ -65,24 +68,41 @@ class DynamoHoldRepositoryIT {
     }
 
     @Test
-    void createsHoldAndClaimsAllSeats() {
-        given(availableSeat("A10"), availableSeat("A11"));
-        whenCreateHold(activeHold("hold-1", "A10", "A11"));
+    void createsHoldAndClaimsAllSeatsAtAuthoritativeQuotedPrice() {
+        given(availableSeat("A10", ONE_HUNDRED_DOLLARS), availableSeat("A11", ONE_HUNDRED_TWENTY_FIVE_DOLLARS));
+        whenCreateHold("hold-1", "A10", "A11");
         thenExpectHeldBy("hold-1", "A10", "A11");
+        assertThat(requestedHold.totalPrice()).isEqualTo(price("225.00"));
     }
 
     @Test
     void transactionRollsBackWhenAnySeatIsUnavailable() {
-        given(availableSeat("A10"), heldSeat("A11", "other-hold", NOW.plus(5, ChronoUnit.MINUTES)));
-        whenCreateHold(activeHold("hold-2", "A10", "A11"));
+        given(availableSeat("A10", ONE_HUNDRED_DOLLARS),
+                heldSeat("A11", "other-hold", NOW.plus(5, ChronoUnit.MINUTES), ONE_HUNDRED_DOLLARS));
+        whenCreateHold("hold-2", "A10", "A11");
         thenExpectConflictAndAvailable("A10");
     }
 
     @Test
     void reclaimsExpiredHeldSeatWithoutCleanupWorker() {
-        given(heldSeat("A10", "old-hold", NOW.minus(1, ChronoUnit.SECONDS)));
-        whenCreateHold(activeHold("hold-3", "A10"));
+        given(heldSeat("A10", "old-hold", NOW.minus(1, ChronoUnit.SECONDS), ONE_HUNDRED_DOLLARS));
+        whenCreateHold("hold-3", "A10");
         thenExpectHeldBy("hold-3", "A10");
+    }
+
+    @Test
+    void rejectsEntireClaimWhenSeatPriceChangesAfterQuote() {
+        given(availableSeat("A10", ONE_HUNDRED_DOLLARS), availableSeat("A11", ONE_HUNDRED_DOLLARS));
+        Set<SeatId> seats = seatIds("A10", "A11");
+        SeatPriceQuote quote = repository.quoteSeatPrices(EVENT_ID, seats);
+        putSeat(availableSeat("A11", ONE_HUNDRED_TWENTY_FIVE_DOLLARS));
+
+        whenCreateHold(activeHold("hold-4", seats, quote.totalPrice()), quote);
+
+        assertThat(thrown).isInstanceOf(SeatClaimConflictException.class);
+        assertThat(repository.findById(new HoldId("hold-4"))).isEmpty();
+        assertThat(seatItem("A10").get("status").s()).isEqualTo("AVAILABLE");
+        assertThat(seatItem("A11").get("status").s()).isEqualTo("AVAILABLE");
     }
 
     private void given(SeatFixture... seats) {
@@ -107,18 +127,28 @@ class DynamoHoldRepositoryIT {
                 .build());
         repository = new DynamoHoldRepository(dynamoDb, tableName);
         for (SeatFixture seat : seats) {
-            dynamoDb.putItem(PutItemRequest.builder()
-                    .tableName(tableName)
-                    .item(seat.toItem())
-                    .build());
+            putSeat(seat);
         }
     }
 
-    private void whenCreateHold(Hold hold) {
+    private void putSeat(SeatFixture seat) {
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(seat.toItem())
+                .build());
+    }
+
+    private void whenCreateHold(String holdId, String... seatIds) {
+        Set<SeatId> seats = seatIds(seatIds);
+        SeatPriceQuote quote = repository.quoteSeatPrices(EVENT_ID, seats);
+        whenCreateHold(activeHold(holdId, seats, quote.totalPrice()), quote);
+    }
+
+    private void whenCreateHold(Hold hold, SeatPriceQuote quote) {
         requestedHold = hold;
         thrown = null;
         try {
-            repository.createWithSeatClaims(hold, NOW);
+            repository.createWithSeatClaims(hold, quote, NOW);
         } catch (Throwable error) {
             thrown = error;
         }
@@ -152,23 +182,31 @@ class DynamoHoldRepositoryIT {
                 .item();
     }
 
-    private static Hold activeHold(String holdId, String... seatIds) {
+    private static Hold activeHold(String holdId, Set<SeatId> seatIds, Price totalPrice) {
         return Hold.active(
                 new HoldId(holdId),
                 USER_ID,
                 EVENT_ID,
-                Set.of(java.util.Arrays.stream(seatIds).map(SeatId::new).toArray(SeatId[]::new)),
-                TWO_HUNDRED_DOLLARS,
+                seatIds,
+                totalPrice,
                 NOW,
                 NOW.plus(5, ChronoUnit.MINUTES));
     }
 
-    private static SeatFixture availableSeat(String seatId) {
-        return new SeatFixture(seatId, "AVAILABLE", null, null);
+    private static Set<SeatId> seatIds(String... seatIds) {
+        return Set.of(java.util.Arrays.stream(seatIds).map(SeatId::new).toArray(SeatId[]::new));
     }
 
-    private static SeatFixture heldSeat(String seatId, String holdId, Instant expiresAt) {
-        return new SeatFixture(seatId, "HELD", holdId, expiresAt);
+    private static SeatFixture availableSeat(String seatId, Price price) {
+        return new SeatFixture(seatId, "AVAILABLE", null, null, price);
+    }
+
+    private static SeatFixture heldSeat(String seatId, String holdId, Instant expiresAt, Price price) {
+        return new SeatFixture(seatId, "HELD", holdId, expiresAt, price);
+    }
+
+    private static Price price(String amount) {
+        return new Price(new BigDecimal(amount), USD);
     }
 
     private static String seatPk(String seatId) {
@@ -183,12 +221,16 @@ class DynamoHoldRepositoryIT {
         return AttributeValue.builder().n(Long.toString(value)).build();
     }
 
-    private record SeatFixture(String seatId, String status, String holdId, Instant expiresAt) {
+    private record SeatFixture(String seatId, String status, String holdId, Instant expiresAt, Price price) {
         Map<String, AttributeValue> toItem() {
             Map<String, AttributeValue> item = new LinkedHashMap<>();
             item.put("pk", string(seatPk(seatId)));
             item.put("entityType", string("SEAT"));
+            item.put("eventId", string(EVENT_ID.value()));
+            item.put("seatId", string(seatId));
             item.put("status", string(status));
+            item.put("priceAmount", string(price.amount().toPlainString()));
+            item.put("priceCurrency", string(price.currency().getCurrencyCode()));
             if (holdId != null) {
                 item.put("holdId", string(holdId));
             }

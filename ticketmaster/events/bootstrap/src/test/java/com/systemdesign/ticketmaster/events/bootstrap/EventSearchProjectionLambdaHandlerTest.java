@@ -26,15 +26,62 @@ class EventSearchProjectionLambdaHandlerTest {
     private static final VenueId VENUE_ID = new VenueId("venue-1");
     private static final Venue VENUE = new Venue(VENUE_ID, "SoFi Stadium", "Los Angeles");
 
+    private CapturingPublisher publisher;
+    private EventSearchProjectionLambdaHandler handler;
+    private DynamodbEvent streamEvent;
+
     @Test
     void publishesUpsertForEventInsertOrModify() {
-        CapturingPublisher publisher = new CapturingPublisher();
-        EventSearchProjectionLambdaHandler handler = handler(event(EventStatus.SCHEDULED), publisher);
+        givenCanonicalEvent(EventStatus.SCHEDULED);
+        whenStreamRecordIsProcessed("MODIFY", "stream-1", eventImage(), null);
+        thenExpectUpsert("stream-1");
+    }
 
-        handler.handleRequest(event("MODIFY", "stream-1", eventImage(), null), null);
+    @Test
+    void publishesDeleteWhenCanonicalEventIsCancelled() {
+        givenCanonicalEvent(EventStatus.CANCELLED);
+        whenStreamRecordIsProcessed("MODIFY", "stream-2", eventImage(), null);
+        thenExpectDelete("stream-2");
+    }
 
+    @Test
+    void publishesDeleteDirectlyForRemovedEventRow() {
+        givenMissingCanonicalEvent();
+        whenStreamRecordIsProcessed("REMOVE", "stream-3", null, eventImage());
+        thenExpectDelete("stream-3");
+    }
+
+    @Test
+    void ignoresNonEventRows() {
+        givenCanonicalEvent(EventStatus.SCHEDULED);
+        whenStreamRecordIsProcessed("MODIFY", "stream-4", venueImage(), null);
+        thenExpectNoProjection();
+    }
+
+    private void givenCanonicalEvent(EventStatus status) {
+        publisher = new CapturingPublisher();
+        handler = handler(event(status), publisher);
+        streamEvent = null;
+    }
+
+    private void givenMissingCanonicalEvent() {
+        publisher = new CapturingPublisher();
+        handler = handler(null, publisher);
+        streamEvent = null;
+    }
+
+    private void whenStreamRecordIsProcessed(
+            String eventName,
+            String eventId,
+            Map<String, AttributeValue> newImage,
+            Map<String, AttributeValue> oldImage) {
+        streamEvent = event(eventName, eventId, newImage, oldImage);
+        handler.handleRequest(streamEvent, null);
+    }
+
+    private void thenExpectUpsert(String deduplicationId) {
         assertThat(publisher.messages).singleElement().satisfies(message -> {
-            assertThat(message.deduplicationId()).isEqualTo("stream-1");
+            assertThat(message.deduplicationId()).isEqualTo(deduplicationId);
             assertThat(message.action()).isInstanceOf(EventSearchProjection.class);
             EventSearchProjection projection = (EventSearchProjection) message.action();
             assertThat(projection.eventId()).isEqualTo("event-1");
@@ -43,40 +90,12 @@ class EventSearchProjectionLambdaHandlerTest {
         });
     }
 
-    @Test
-    void publishesDeleteWhenCanonicalEventIsCancelled() {
-        CapturingPublisher publisher = new CapturingPublisher();
-        EventSearchProjectionLambdaHandler handler = handler(event(EventStatus.CANCELLED), publisher);
-
-        handler.handleRequest(event("MODIFY", "stream-2", eventImage(), null), null);
-
-        assertThat(publisher.messages).singleElement().satisfies(message -> {
-            assertThat(message.deduplicationId()).isEqualTo("stream-2");
-            assertThat(message.action()).isEqualTo(new DeleteEventSearchProjection("event-1"));
-        });
-    }
-
-    @Test
-    void publishesDeleteDirectlyForRemovedEventRow() {
-        CapturingPublisher publisher = new CapturingPublisher();
-        EventSearchProjectionLambdaHandler handler = handler(null, publisher);
-
-        handler.handleRequest(event("REMOVE", "stream-3", null, eventImage()), null);
-
+    private void thenExpectDelete(String deduplicationId) {
         assertThat(publisher.messages).containsExactly(
-                new Published(new DeleteEventSearchProjection("event-1"), "stream-3"));
+                new Published(new DeleteEventSearchProjection("event-1"), deduplicationId));
     }
 
-    @Test
-    void ignoresNonEventRows() {
-        CapturingPublisher publisher = new CapturingPublisher();
-        EventSearchProjectionLambdaHandler handler = handler(event(EventStatus.SCHEDULED), publisher);
-        Map<String, AttributeValue> venueImage = Map.of(
-                "entityType", string("VENUE"),
-                "venueId", string("venue-1"));
-
-        handler.handleRequest(event("MODIFY", "stream-4", venueImage, null), null);
-
+    private void thenExpectNoProjection() {
         assertThat(publisher.messages).isEmpty();
     }
 
@@ -119,6 +138,12 @@ class EventSearchProjectionLambdaHandlerTest {
         return Map.of(
                 "entityType", string("EVENT"),
                 "eventId", string("event-1"));
+    }
+
+    private static Map<String, AttributeValue> venueImage() {
+        return Map.of(
+                "entityType", string("VENUE"),
+                "venueId", string("venue-1"));
     }
 
     private static AttributeValue string(String value) {

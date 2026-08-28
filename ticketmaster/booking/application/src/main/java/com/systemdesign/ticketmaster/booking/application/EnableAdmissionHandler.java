@@ -16,9 +16,10 @@ public final class EnableAdmissionHandler {
 
     public EventAdmission handle(EnableAdmissionCommand command) {
         Objects.requireNonNull(command, "command");
-        // A configured hot event starts closed at the current time. initializeAdmission must not
-        // advance an existing watermark: another replica may already be serving the queue.
+        // Start one millisecond behind the service clock so a join stamped in this same millisecond
+        // is still queued. initializeAdmission must never advance an existing watermark because
+        // another replica may already be serving the queue.
         return waitingRoomRepository.initializeAdmission(
-                new EventAdmission(command.eventId(), clock.instant()));
+                new EventAdmission(command.eventId(), clock.instant().minusMillis(1)));
     }
 }

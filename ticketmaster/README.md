@@ -28,6 +28,24 @@ bootstrap/
 
 Dependencies point inward. Bounded contexts do not directly depend on one another; integration between them uses explicit API or projection/event boundaries. The executable `bootstrap` module is the composition root allowed to depend on both input and output adapters.
 
+## Booking Runtime Notes
+
+Authoritative booking mutations call the ControlPlane ownership API through `EventWriteAuthority`. Successful ownership checks may be cached briefly, but the cache is only a hot-path optimization; controlled failover must still hard-fence the previous writer before ownership changes.
+
+If a request reaches the wrong booking region, the API returns HTTP `421 Misdirected Request` with `X-Booking-Region` identifying the current owner. If ownership cannot be established at all, Booking fails closed with HTTP `503`.
+
+Waiting-room regulation is schedulable but conservative by default. Runtime properties include:
+
+```text
+ticketmaster.booking.admission.event-ids=
+ticketmaster.booking.admission.capacity=OVERLOADED
+ticketmaster.booking.admission.healthy-advance=PT2S
+ticketmaster.booking.admission.constrained-advance=PT0.5S
+ticketmaster.booking.admission.poll-delay-ms=1000
+```
+
+An empty `event-ids` value means the admission regulator has no events to process. The initial `ConfiguredAdmissionHealthGateway` defaults to `OVERLOADED`, so simply enabling the service never advances admission accidentally. It is intentionally a bootstrap/demo adapter and can be replaced by a telemetry-backed `AdmissionHealthGateway` without changing the application policy.
+
 ## Testing
 
 The test layers follow `../docs/TESTING.md`:

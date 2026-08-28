@@ -47,8 +47,8 @@ public final class StartCheckoutHandler {
     public StartCheckoutResult handle(StartCheckoutCommand command) {
         Objects.requireNonNull(command, "command");
         eventWriteAuthority.assertMayWrite(command.eventId());
-        return bookingRepository.findByCheckoutIdempotencyKey(command.idempotencyKey())
-                .map(booking -> ensureSameEvent(command, booking))
+        return findIdempotentBooking(command)
+                .map(booking -> ensureSameScope(command, booking))
                 .map(this::ensurePaymentIntent)
                 .orElseGet(() -> startNewCheckout(command));
     }
@@ -70,16 +70,21 @@ public final class StartCheckoutHandler {
             checkoutGateway.startCheckout(checkoutHold, booking);
             return ensurePaymentIntent(booking);
         } catch (CheckoutConflictException conflict) {
-            return bookingRepository.findByCheckoutIdempotencyKey(command.idempotencyKey())
-                    .map(bookingAfterConflict -> ensureSameEvent(command, bookingAfterConflict))
+            return findIdempotentBooking(command)
+                    .map(bookingAfterConflict -> ensureSameScope(command, bookingAfterConflict))
                     .map(this::ensurePaymentIntent)
                     .orElseThrow(() -> conflict);
         }
     }
 
-    private Booking ensureSameEvent(StartCheckoutCommand command, Booking booking) {
-        if (!booking.eventId().equals(command.eventId())) {
-            throw new IllegalArgumentException("idempotency key belongs to a different event");
+    private java.util.Optional<Booking> findIdempotentBooking(StartCheckoutCommand command) {
+        return bookingRepository.findByCheckoutIdempotencyKey(
+                command.eventId(), command.holdId(), command.idempotencyKey());
+    }
+
+    private Booking ensureSameScope(StartCheckoutCommand command, Booking booking) {
+        if (!booking.eventId().equals(command.eventId()) || !booking.holdId().equals(command.holdId())) {
+            throw new IllegalStateException("checkout idempotency mapping resolved outside its event/hold scope");
         }
         return booking;
     }

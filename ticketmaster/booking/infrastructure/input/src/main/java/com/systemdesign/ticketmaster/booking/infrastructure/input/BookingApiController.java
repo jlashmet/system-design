@@ -82,6 +82,7 @@ public final class BookingApiController implements BookingApi {
         response.setEventId(hold.eventId().value());
         response.setUserId(hold.userId().value());
         response.setSeatIds(hold.seatIds().stream().map(SeatId::value).sorted().toList());
+        response.setTotalPrice(toMoney(hold.totalPrice()));
         response.setStatus(hold.status().name());
         response.setExpiresAt(hold.expiresAt().atOffset(ZoneOffset.UTC));
         return response;

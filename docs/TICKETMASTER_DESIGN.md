@@ -81,19 +81,35 @@ startsAt
 category
 status
 description
+
+Venue
+-----
+PK = VENUE#456
+name
+city
 ```
 
 Physical venue data such as sections and seat geometry can also be stored in DynamoDB using access-pattern-oriented keys.
 
-Changes to event metadata asynchronously update OpenSearch.
+Changes to event metadata asynchronously update OpenSearch. The Search bounded context does not read the Events table directly. Events enriches its Event with canonical Venue metadata and emits a denormalized projection message; Search consumes that message into its own domain and writes OpenSearch.
 
 ```text
-Event DynamoDB
-      |
-      | change/event
-      v
- OpenSearch
+Event change
+     |
+     v
+Events: load Event + Venue
+     |
+     v
+Denormalized search projection
+     |
+     v
+Search projection consumer
+     |
+     v
+OpenSearch
 ```
+
+The transport carrying that low-volume metadata projection is intentionally not part of the core requirements yet. The important boundary is that Search does not compile against Events classes or depend on the Events DynamoDB item schema.
 
 DynamoDB is the source of truth; OpenSearch is the search projection.
 
@@ -598,11 +614,79 @@ Event C -> West
 Event D -> Europe
 ```
 
-If an event's booking region becomes unavailable, the initial design chooses consistency over availability: stop new authoritative seat mutations for that event rather than risk two regions accepting the same seat.
+A request may arrive at the user's nearest API region and still be forwarded internally to the event's home booking region. The routing decision is explicit metadata rather than an accidental consequence of DNS or load-balancer hashing.
 
-A more advanced design could add controlled regional failover using a strongly coordinated ownership/fencing mechanism. The key invariant would remain:
+### Event Ownership Control Plane
 
-> At most one region may be the authoritative writer for an event at a time.
+The control plane is deliberately separate from the high-volume booking data plane. Its state changes rarely and answers one operational question:
+
+> Which region is currently allowed to own authoritative booking for this event?
+
+Use a small DynamoDB Global Table configured for Multi-Region Strong Consistency for this ownership metadata.
+
+```text
+EventOwnership
+--------------
+PK = EVENT#123
+ownerRegion = us-west-2
+epoch = 17
+```
+
+Regional routers may cache this mapping because writes are rare, but cache freshness is never the correctness mechanism. The globally coordinated ownership item is authoritative.
+
+Initial assignment creates epoch 1 only if the event does not already have an owner. A transfer is a single conditional compare-and-swap:
+
+```text
+expected: ownerRegion = WEST, epoch = 17
+write:    ownerRegion = EAST, epoch = 18
+```
+
+Conceptually:
+
+```text
+UPDATE EVENT#123
+SET ownerRegion = EAST,
+    epoch = 18
+ONLY IF ownerRegion = WEST
+   AND epoch = 17
+```
+
+Two operators or automation processes cannot both successfully transfer the same ownership version. Every successful transfer increments the epoch, so stale routing decisions, retries, and restarted processes can be recognized as old.
+
+The ownership table intentionally performs only single-item conditional writes. It does not need DynamoDB transaction APIs. This matters because the authoritative seat inventory still requires multi-item transactions for multi-seat holds and therefore remains a regional transactional table rather than being moved into the MRSC control table.
+
+### Controlled Failover and Hard Fencing
+
+The ownership record says who **should** be the writer. It does not by itself make an isolated old regional inventory incapable of accepting writes. A stale process holding `WEST / epoch 17` could otherwise continue mutating its regional table during a partition.
+
+Therefore automatic failover must remain fail-closed until the old writer is actually fenced.
+
+```text
+WEST fails or becomes unsafe
+        |
+        v
+1. Stop new booking for affected events
+        |
+        v
+2. Ensure WEST can no longer mutate authoritative inventory
+        |
+        v
+3. Ensure replacement inventory in EAST is caught up / restored
+        |
+        v
+4. CAS ownership WEST/17 -> EAST/18
+        |
+        v
+5. Enable EAST booking writes
+```
+
+The exact hard-fence mechanism is operational rather than a property of the ownership item. Examples include removing the old booking deployment from service and revoking/isolating its storage write path before the replacement writer is enabled.
+
+The design intentionally accepts a temporary booking outage during regional failover rather than risk split-brain inventory and double selling.
+
+The key invariant remains:
+
+> At most one region may be capable of authoritative writes for an event at a time.
 
 ## Current Technology Direction
 
@@ -614,10 +698,11 @@ A more advanced design could add controlled regional failover using a strongly c
 | Authoritative seat inventory | DynamoDB | Conditional writes and distributed event-seat keys |
 | Holds / bookings | DynamoDB | Fits transactional workflow with authoritative inventory and query-specific indexes |
 | Seat-map read model | DynamoDB | Query-efficient section projection without adding Redis |
-| Projection updates | DynamoDB Streams | Native change feed from authoritative inventory |
+| Projection updates | DynamoDB Streams / asynchronous projection messages | Native change feeds where the source item already contains the required data; explicit enrichment at bounded-context boundaries |
 | Waiting room | DynamoDB timestamp + admission watermark | No physical queue or global sequence needed; approximate fairness is acceptable |
 | Payments | External provider with Payment Intent | Durable provider-side state plus idempotency and reconciliation |
 | Multi-region booking | Single writer/home region per event | Prevent cross-region double booking; consistency over availability |
+| Event ownership control plane | DynamoDB MRSC Global Table | Tiny low-write state with globally coordinated ownership and conditional epoch changes |
 
 ## Key Tradeoffs Established
 
@@ -630,13 +715,15 @@ A more advanced design could add controlled regional failover using a strongly c
 7. **Expiration timestamp versus cleanup:** the timestamp determines whether an old hold is reclaimable; no cleanup worker is required for correctness.
 8. **Payment state is distributed:** Payment Intent state at the provider and Booking state in DynamoDB converge through idempotent completion, webhooks, and reconciliation rather than distributed ACID.
 9. **Multi-region reads versus writes:** reads may be active-active, while each event has one authoritative booking writer region.
-10. **CDN versus live inventory:** cache stable/read-heavy content aggressively, but never use CDN state as the authority for seat acquisition.
+10. **Control metadata versus hard fencing:** strongly coordinated owner/epoch metadata prevents conflicting ownership transitions, but strict split-brain prevention still requires the previous regional writer to lose write capability before the new writer is enabled.
+11. **CDN versus live inventory:** cache stable/read-heavy content aggressively, but never use CDN state as the authority for seat acquisition.
 
 ## Remaining Design Questions
 
 The major architecture is now settled. Remaining interview follow-ups are mostly about operational detail and capacity validation:
 
 - What exact downstream thresholds should control how quickly `admittedThrough` advances?
-- What controlled fencing/ownership mechanism would we use if automatic booking-region failover became a requirement?
+- What concrete operational mechanism should automate hard-fencing a failed booking region before ownership transfer?
+- What transport should carry the low-volume enriched Event/Venue search projection when event administration enters scope?
 - What are the expected peak hold attempts per second after admission control, and how much headroom should each tier maintain?
 - What retention/TTL policies should apply to completed bookings, old holds, and waiting-room records?

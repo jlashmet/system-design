@@ -17,8 +17,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.opensearch.client.json.jackson.JacksonJsonpMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
-import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch._types.HealthStatus;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.transport.httpclient5.ApacheHttpClient5Transport;
 import org.opensearch.client.transport.httpclient5.ApacheHttpClient5TransportBuilder;
 import org.testcontainers.junit.jupiter.Container;
@@ -43,6 +43,7 @@ class OpenSearchEventSearchGatewayIT {
     private static ApacheHttpClient5Transport transport;
     private static OpenSearchClient dataClient;
     private static OpenSearchEventSearchGateway gateway;
+    private static OpenSearchEventSearchIndex index;
 
     private SearchPage firstPage;
     private SearchPage secondPage;
@@ -70,6 +71,7 @@ class OpenSearchEventSearchGatewayIT {
                         .health(health -> health.waitForStatus(HealthStatus.Yellow).timeout(timeout -> timeout.time("5s")))
                         .status()).isIn(HealthStatus.Green, HealthStatus.Yellow));
         gateway = new OpenSearchEventSearchGateway(dataClient, INDEX_NAME);
+        index = new OpenSearchEventSearchIndex(dataClient, INDEX_NAME);
     }
 
     @AfterAll
@@ -82,6 +84,24 @@ class OpenSearchEventSearchGatewayIT {
             controlPlane.close();
         }
         if (transport != null) transport.close();
+    }
+
+    @Test
+    void indexesEventForSearch() throws Exception {
+        recreateIndex();
+        index.upsert(new SearchEvent(
+                "event-42",
+                "The National",
+                "Hollywood Bowl",
+                "Los Angeles",
+                Instant.parse("2026-10-20T03:00:00Z"),
+                "CONCERT"));
+        dataClient.indices().refresh(refresh -> refresh.index(INDEX_NAME));
+
+        whenSearch(new SearchQuery("National", "Los Angeles", OCTOBER_1,
+                Instant.parse("2026-11-01T00:00:00Z"), "", 10));
+
+        thenExpectFirstPage("event-42");
     }
 
     @Test
@@ -107,19 +127,9 @@ class OpenSearchEventSearchGatewayIT {
 
     private void givenEvents(SearchEventDocument... documents) {
         try {
-            if (dataClient.indices().exists(exists -> exists.index(INDEX_NAME)).value()) {
-                dataClient.indices().delete(delete -> delete.index(INDEX_NAME));
-            }
-            dataClient.indices().create(create -> create.index(INDEX_NAME)
-                    .mappings(mappings -> mappings
-                            .properties("eventId", property -> property.keyword(keyword -> keyword))
-                            .properties("name", property -> property.text(text -> text))
-                            .properties("venue", property -> property.text(text -> text))
-                            .properties("city", property -> property.keyword(keyword -> keyword))
-                            .properties("startsAtEpochMillis", property -> property.long_(longNumber -> longNumber))
-                            .properties("category", property -> property.text(text -> text))));
+            recreateIndex();
             for (SearchEventDocument document : documents) {
-                dataClient.index(index -> index
+                dataClient.index(indexRequest -> indexRequest
                         .index(INDEX_NAME)
                         .id(document.eventId())
                         .document(document)
@@ -130,6 +140,20 @@ class OpenSearchEventSearchGatewayIT {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static void recreateIndex() throws Exception {
+        if (dataClient.indices().exists(exists -> exists.index(INDEX_NAME)).value()) {
+            dataClient.indices().delete(delete -> delete.index(INDEX_NAME));
+        }
+        dataClient.indices().create(create -> create.index(INDEX_NAME)
+                .mappings(mappings -> mappings
+                        .properties("eventId", property -> property.keyword(keyword -> keyword))
+                        .properties("name", property -> property.text(text -> text))
+                        .properties("venue", property -> property.text(text -> text))
+                        .properties("city", property -> property.keyword(keyword -> keyword))
+                        .properties("startsAtEpochMillis", property -> property.long_(longNumber -> longNumber))
+                        .properties("category", property -> property.text(text -> text))));
     }
 
     private void whenSearch(SearchQuery query) {

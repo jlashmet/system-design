@@ -11,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,13 @@ class BookingExceptionHandlerTest {
     }
 
     @Test
+    void missingWaitingRoomEntryIsNotFound() {
+        givenWaitingRoomEntryNotFound();
+        whenExceptionIsHandled();
+        thenExpectNotFound("Waiting-room entry not found");
+    }
+
+    @Test
     void joiningDisabledWaitingRoomIsConflict() {
         givenWaitingRoomDisabled();
         whenExceptionIsHandled();
@@ -99,6 +107,12 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenWaitingRoomEntryNotFound() {
+        exception = new WaitingRoomEntryNotFoundException(
+                new EventId("event-123"), new UserId("user-missing"));
+        response = null;
+    }
+
     private void givenWaitingRoomDisabled() {
         exception = new WaitingRoomDisabledException(new EventId("event-123"));
         response = null;
@@ -118,6 +132,8 @@ class BookingExceptionHandlerTest {
             response = handler.holdOwnership(ownership);
         } else if (exception instanceof HoldNotFoundException notFound) {
             response = handler.holdNotFound(notFound);
+        } else if (exception instanceof WaitingRoomEntryNotFoundException notFound) {
+            response = handler.waitingRoomEntryNotFound(notFound);
         } else if (exception instanceof WaitingRoomDisabledException disabled) {
             response = handler.waitingRoomDisabled(disabled);
         } else if (exception instanceof BookingStorageUnavailableException storageUnavailable) {

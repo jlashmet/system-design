@@ -20,9 +20,8 @@ public record EventSeatInventory(
         if (status == SeatStatus.AVAILABLE && (holdId != null || holdExpiresAt != null || bookingId != null)) {
             throw new IllegalArgumentException("available seat cannot have hold or booking state");
         }
-        if ((status == SeatStatus.HELD || status == SeatStatus.CHECKOUT)
-                && (holdId == null || holdExpiresAt == null || bookingId != null)) {
-            throw new IllegalArgumentException("reserved seat requires hold id and expiration only");
+        if (status == SeatStatus.HELD && (holdId == null || holdExpiresAt == null || bookingId != null)) {
+            throw new IllegalArgumentException("held seat requires hold id and expiration only");
         }
         if (status == SeatStatus.BOOKED && bookingId == null) {
             throw new IllegalArgumentException("booked seat requires booking id");
@@ -61,14 +60,14 @@ public record EventSeatInventory(
         if (!checkoutExpiresAt.isAfter(now)) {
             throw new IllegalArgumentException("checkout expiration must be in the future");
         }
-        return new EventSeatInventory(eventId, seatId, price, SeatStatus.CHECKOUT,
+        return new EventSeatInventory(eventId, seatId, price, SeatStatus.HELD,
                 holdId, checkoutExpiresAt, null);
     }
 
     public EventSeatInventory book(HoldId expectedHoldId, BookingId newBookingId) {
         Objects.requireNonNull(expectedHoldId, "expectedHoldId");
         Objects.requireNonNull(newBookingId, "newBookingId");
-        if (status != SeatStatus.CHECKOUT || !expectedHoldId.equals(holdId)) {
+        if (status != SeatStatus.HELD || !expectedHoldId.equals(holdId)) {
             throw new SeatUnavailableException(seatId);
         }
         return new EventSeatInventory(eventId, seatId, price, SeatStatus.BOOKED, holdId, null, newBookingId);
@@ -76,7 +75,7 @@ public record EventSeatInventory(
 
     public EventSeatInventory releaseCheckout(HoldId expectedHoldId) {
         Objects.requireNonNull(expectedHoldId, "expectedHoldId");
-        if (status != SeatStatus.CHECKOUT || !expectedHoldId.equals(holdId)) {
+        if (status != SeatStatus.HELD || !expectedHoldId.equals(holdId)) {
             throw new SeatUnavailableException(seatId);
         }
         return available(eventId, seatId, price);

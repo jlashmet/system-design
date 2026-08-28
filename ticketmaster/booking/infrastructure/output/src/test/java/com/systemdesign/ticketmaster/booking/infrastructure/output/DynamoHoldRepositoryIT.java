@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -61,32 +62,33 @@ class DynamoHoldRepositoryIT {
     private DynamoHoldRepository repository;
     private String tableName;
     private Hold requestedHold;
+    private HoldIdempotencyKey requestedKey;
     private Throwable thrown;
 
     @AfterEach
     void tearDown() {
         if (dynamoDb != null) {
-            if (tableName != null) {
-                dynamoDb.deleteTable(DeleteTableRequest.builder().tableName(tableName).build());
-            }
+            if (tableName != null) dynamoDb.deleteTable(DeleteTableRequest.builder().tableName(tableName).build());
             dynamoDb.close();
         }
     }
 
     @Test
-    void createsHoldAndClaimsAllSeatsAtAuthoritativeQuotedPrice() {
+    void createsHoldClaimsAllSeatsAndPersistsIdempotencyMappingAtomically() {
         given(availableSeat("A10", ONE_HUNDRED_DOLLARS), availableSeat("A11", ONE_HUNDRED_TWENTY_FIVE_DOLLARS));
         whenCreateHold("hold-1", "A10", "A11");
         thenExpectHeldBy("hold-1", "A10", "A11");
         assertThat(requestedHold.totalPrice()).isEqualTo(price("225.00"));
+        assertThat(repository.findByIdempotencyKey(requestedKey)).contains(requestedHold);
     }
 
     @Test
-    void transactionRollsBackWhenAnySeatIsUnavailable() {
+    void transactionRollsBackHoldSeatsAndIdempotencyMappingWhenAnySeatIsUnavailable() {
         given(availableSeat("A10", ONE_HUNDRED_DOLLARS),
                 heldSeat("A11", "other-hold", NOW.plus(5, ChronoUnit.MINUTES), ONE_HUNDRED_DOLLARS));
         whenCreateHold("hold-2", "A10", "A11");
         thenExpectConflictAndAvailable("A10");
+        assertThat(repository.findByIdempotencyKey(requestedKey)).isEmpty();
     }
 
     @Test
@@ -103,12 +105,13 @@ class DynamoHoldRepositoryIT {
         SeatPriceQuote quote = repository.quoteSeatPrices(EVENT_ID, seats);
         putSeat(availableSeat("A11", ONE_HUNDRED_TWENTY_FIVE_DOLLARS));
 
-        whenCreateHold(activeHold("hold-4", seats, quote.totalPrice()), quote);
+        whenCreateHold(activeHold("hold-4", seats, quote.totalPrice()), quote, key("hold-4"));
 
         assertThat(thrown).isInstanceOf(SeatClaimConflictException.class);
         assertThat(repository.findById(new HoldId("hold-4"))).isEmpty();
-        assertThat(seatItem("A10").get("status").s()).isEqualTo("AVAILABLE");
-        assertThat(seatItem("A11").get("status").s()).isEqualTo("AVAILABLE");
+        assertThat(repository.findByIdempotencyKey(key("hold-4"))).isEmpty();
+        assertAvailable("A10");
+        assertAvailable("A11");
     }
 
     @Test
@@ -117,8 +120,7 @@ class DynamoHoldRepositoryIT {
         Set<SeatId> seats = seatIds("A10");
         SeatPriceQuote quote = repository.quoteSeatPrices(EVENT_ID, seats);
 
-        List<RaceResult> results = race(16, index ->
-                claim("race-" + index, seats, quote));
+        List<RaceResult> results = race(16, index -> claim("race-" + index, seats, quote, key("race-" + index)));
 
         List<RaceResult> winners = results.stream().filter(RaceResult::won).toList();
         assertThat(winners).hasSize(1);
@@ -129,9 +131,7 @@ class DynamoHoldRepositoryIT {
 
     @Test
     void overlappingMultiSeatClaimsRemainAllOrNothingUnderConcurrency() throws Exception {
-        given(
-                availableSeat("A10", ONE_HUNDRED_DOLLARS),
-                availableSeat("A11", ONE_HUNDRED_DOLLARS),
+        given(availableSeat("A10", ONE_HUNDRED_DOLLARS), availableSeat("A11", ONE_HUNDRED_DOLLARS),
                 availableSeat("A12", ONE_HUNDRED_DOLLARS));
 
         Set<SeatId> leftSeats = seatIds("A10", "A11");
@@ -140,8 +140,8 @@ class DynamoHoldRepositoryIT {
         SeatPriceQuote rightQuote = repository.quoteSeatPrices(EVENT_ID, rightSeats);
 
         List<RaceResult> results = race(List.of(
-                () -> claim("left-hold", leftSeats, leftQuote),
-                () -> claim("right-hold", rightSeats, rightQuote)));
+                () -> claim("left-hold", leftSeats, leftQuote, key("left")),
+                () -> claim("right-hold", rightSeats, rightQuote, key("right"))));
 
         RaceResult winner = results.stream().filter(RaceResult::won).findFirst().orElseThrow();
         RaceResult loser = results.stream().filter(result -> !result.won()).findFirst().orElseThrow();
@@ -160,6 +160,23 @@ class DynamoHoldRepositoryIT {
         }
     }
 
+    @Test
+    void duplicateIdempotencyKeyCannotCreateSecondHold() {
+        given(availableSeat("A10", ONE_HUNDRED_DOLLARS), availableSeat("A11", ONE_HUNDRED_DOLLARS));
+        HoldIdempotencyKey key = key("retry-key");
+        Set<SeatId> firstSeats = seatIds("A10");
+        SeatPriceQuote firstQuote = repository.quoteSeatPrices(EVENT_ID, firstSeats);
+        repository.createWithSeatClaims(activeHold("first", firstSeats, firstQuote.totalPrice()), firstQuote, NOW, key);
+
+        Set<SeatId> secondSeats = seatIds("A11");
+        SeatPriceQuote secondQuote = repository.quoteSeatPrices(EVENT_ID, secondSeats);
+        whenCreateHold(activeHold("second", secondSeats, secondQuote.totalPrice()), secondQuote, key);
+
+        assertThat(thrown).isInstanceOf(SeatClaimConflictException.class);
+        assertThat(repository.findByIdempotencyKey(key)).extracting(hold -> hold.id().value()).contains("first");
+        assertAvailable("A11");
+    }
+
     private void given(SeatFixture... seats) {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
@@ -169,50 +186,39 @@ class DynamoHoldRepositoryIT {
                 .build();
         tableName = "ticketmaster-booking-" + UUID.randomUUID();
         dynamoDb.createTable(CreateTableRequest.builder()
-                .tableName(tableName)
-                .billingMode(BillingMode.PAY_PER_REQUEST)
-                .attributeDefinitions(AttributeDefinition.builder()
-                        .attributeName("pk")
-                        .attributeType(ScalarAttributeType.S)
-                        .build())
-                .keySchema(KeySchemaElement.builder()
-                        .attributeName("pk")
-                        .keyType(KeyType.HASH)
-                        .build())
+                .tableName(tableName).billingMode(BillingMode.PAY_PER_REQUEST)
+                .attributeDefinitions(AttributeDefinition.builder().attributeName("pk").attributeType(ScalarAttributeType.S).build())
+                .keySchema(KeySchemaElement.builder().attributeName("pk").keyType(KeyType.HASH).build())
                 .build());
         repository = new DynamoHoldRepository(dynamoDb, tableName);
-        for (SeatFixture seat : seats) {
-            putSeat(seat);
-        }
+        for (SeatFixture seat : seats) putSeat(seat);
     }
 
     private void putSeat(SeatFixture seat) {
-        dynamoDb.putItem(PutItemRequest.builder()
-                .tableName(tableName)
-                .item(seat.toItem())
-                .build());
+        dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(seat.toItem()).build());
     }
 
     private void whenCreateHold(String holdId, String... seatIds) {
         Set<SeatId> seats = seatIds(seatIds);
         SeatPriceQuote quote = repository.quoteSeatPrices(EVENT_ID, seats);
-        whenCreateHold(activeHold(holdId, seats, quote.totalPrice()), quote);
+        whenCreateHold(activeHold(holdId, seats, quote.totalPrice()), quote, key(holdId));
     }
 
-    private void whenCreateHold(Hold hold, SeatPriceQuote quote) {
+    private void whenCreateHold(Hold hold, SeatPriceQuote quote, HoldIdempotencyKey key) {
         requestedHold = hold;
+        requestedKey = key;
         thrown = null;
         try {
-            repository.createWithSeatClaims(hold, quote, NOW);
+            repository.createWithSeatClaims(hold, quote, NOW, key);
         } catch (Throwable error) {
             thrown = error;
         }
     }
 
-    private RaceResult claim(String holdId, Set<SeatId> seats, SeatPriceQuote quote) {
+    private RaceResult claim(String holdId, Set<SeatId> seats, SeatPriceQuote quote, HoldIdempotencyKey key) {
         Hold hold = activeHold(holdId, seats, quote.totalPrice());
         try {
-            repository.createWithSeatClaims(hold, quote, NOW);
+            repository.createWithSeatClaims(hold, quote, NOW, key);
             return new RaceResult(holdId, null);
         } catch (Throwable error) {
             return new RaceResult(holdId, error);
@@ -233,16 +239,13 @@ class DynamoHoldRepositoryIT {
         CountDownLatch ready = new CountDownLatch(claims.size());
         CountDownLatch start = new CountDownLatch(1);
         try {
-            List<Future<RaceResult>> futures = claims.stream()
-                    .map(claim -> executor.submit(() -> {
-                        ready.countDown();
-                        start.await();
-                        return claim.run();
-                    }))
-                    .toList();
+            List<Future<RaceResult>> futures = claims.stream().map(claim -> executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                return claim.run();
+            })).toList();
             ready.await();
             start.countDown();
-
             List<RaceResult> results = new ArrayList<>();
             for (Future<RaceResult> future : futures) results.add(future.get());
             return results;
@@ -281,68 +284,31 @@ class DynamoHoldRepositoryIT {
     }
 
     private Map<String, AttributeValue> seatItem(String seatId) {
-        return dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of("pk", string(seatPk(seatId))))
-                        .consistentRead(true)
-                        .build())
-                .item();
+        return dynamoDb.getItem(GetItemRequest.builder().tableName(tableName)
+                .key(Map.of("pk", string(seatPk(seatId)))).consistentRead(true).build()).item();
     }
 
     private static Hold activeHold(String holdId, Set<SeatId> seatIds, Price totalPrice) {
-        return Hold.active(
-                new HoldId(holdId),
-                USER_ID,
-                EVENT_ID,
-                seatIds,
-                totalPrice,
-                NOW,
-                NOW.plus(5, ChronoUnit.MINUTES));
+        return Hold.active(new HoldId(holdId), USER_ID, EVENT_ID, seatIds, totalPrice,
+                NOW, NOW.plus(5, ChronoUnit.MINUTES));
     }
 
+    private static HoldIdempotencyKey key(String value) { return new HoldIdempotencyKey("key-" + value); }
     private static Set<SeatId> seatIds(String... seatIds) {
         return Set.of(java.util.Arrays.stream(seatIds).map(SeatId::new).toArray(SeatId[]::new));
     }
-
-    private static SeatFixture availableSeat(String seatId, Price price) {
-        return new SeatFixture(seatId, "AVAILABLE", null, null, price);
-    }
-
+    private static SeatFixture availableSeat(String seatId, Price price) { return new SeatFixture(seatId, "AVAILABLE", null, null, price); }
     private static SeatFixture heldSeat(String seatId, String holdId, Instant expiresAt, Price price) {
         return new SeatFixture(seatId, "HELD", holdId, expiresAt, price);
     }
+    private static Price price(String amount) { return new Price(new BigDecimal(amount), USD); }
+    private static String seatPk(String seatId) { return "EVENT#" + EVENT_ID.value() + "#SEAT#" + seatId; }
+    private static AttributeValue string(String value) { return AttributeValue.builder().s(value).build(); }
+    private static AttributeValue number(long value) { return AttributeValue.builder().n(Long.toString(value)).build(); }
 
-    private static Price price(String amount) {
-        return new Price(new BigDecimal(amount), USD);
-    }
-
-    private static String seatPk(String seatId) {
-        return "EVENT#" + EVENT_ID.value() + "#SEAT#" + seatId;
-    }
-
-    private static AttributeValue string(String value) {
-        return AttributeValue.builder().s(value).build();
-    }
-
-    private static AttributeValue number(long value) {
-        return AttributeValue.builder().n(Long.toString(value)).build();
-    }
-
-    @FunctionalInterface
-    private interface Claim {
-        RaceResult run();
-    }
-
-    @FunctionalInterface
-    private interface IndexedClaim {
-        RaceResult run(int index);
-    }
-
-    private record RaceResult(String holdId, Throwable error) {
-        boolean won() {
-            return error == null;
-        }
-    }
+    @FunctionalInterface private interface Claim { RaceResult run(); }
+    @FunctionalInterface private interface IndexedClaim { RaceResult run(int index); }
+    private record RaceResult(String holdId, Throwable error) { boolean won() { return error == null; } }
 
     private record SeatFixture(String seatId, String status, String holdId, Instant expiresAt, Price price) {
         Map<String, AttributeValue> toItem() {
@@ -354,12 +320,8 @@ class DynamoHoldRepositoryIT {
             item.put("status", string(status));
             item.put("priceAmount", string(price.amount().toPlainString()));
             item.put("priceCurrency", string(price.currency().getCurrencyCode()));
-            if (holdId != null) {
-                item.put("holdId", string(holdId));
-            }
-            if (expiresAt != null) {
-                item.put("holdExpiresAt", number(expiresAt.toEpochMilli()));
-            }
+            if (holdId != null) item.put("holdId", string(holdId));
+            if (expiresAt != null) item.put("holdExpiresAt", number(expiresAt.toEpochMilli()));
             return item;
         }
     }

@@ -6,6 +6,7 @@ import java.util.Set;
 
 public interface HoldRepository {
     SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds);
-    void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now);
+    void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey idempotencyKey);
     Optional<Hold> findById(HoldId holdId);
+    Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey idempotencyKey);
 }

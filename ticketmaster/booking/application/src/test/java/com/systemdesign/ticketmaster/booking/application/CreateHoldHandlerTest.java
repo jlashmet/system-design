@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
@@ -15,6 +16,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
+import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -33,6 +35,7 @@ class CreateHoldHandlerTest {
     private static final SeatId A10 = new SeatId("A10");
     private static final SeatId A11 = new SeatId("A11");
     private static final Currency USD = Currency.getInstance("USD");
+    private static final EventWriteAuthority LOCAL_OWNER = ignored -> {};
 
     @Test
     void computesHoldTotalFromAuthoritativeSeatQuoteWhenWaitingRoomIsDisabled() {
@@ -41,7 +44,7 @@ class CreateHoldHandlerTest {
                 A11, price("125.00")));
         FakeHoldRepository holdRepository = new FakeHoldRepository(quote);
         FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
-        CreateHoldHandler handler = handler(holdRepository, waitingRoomRepository);
+        CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
 
         Hold hold = handler.handle(command());
 
@@ -53,11 +56,28 @@ class CreateHoldHandlerTest {
     }
 
     @Test
+    void rejectsWrongRegionBeforeWaitingRoomOrPricing() {
+        FakeHoldRepository holdRepository = new FakeHoldRepository(defaultQuote());
+        FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
+        EventWriteAuthority wrongRegion = eventId -> {
+            throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
+        };
+        CreateHoldHandler handler = handler(wrongRegion, holdRepository, waitingRoomRepository);
+
+        assertThatThrownBy(() -> handler.handle(command()))
+                .isInstanceOf(WrongBookingRegionException.class);
+
+        assertThat(holdRepository.quoteCalls).isZero();
+        assertThat(waitingRoomRepository.admissionReads).isZero();
+        assertThat(holdRepository.createdHold).isNull();
+    }
+
+    @Test
     void rejectsHoldBeforePricingWhenWaitingRoomIsEnabledAndUserHasNotJoined() {
         FakeHoldRepository holdRepository = new FakeHoldRepository(defaultQuote());
         FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
         waitingRoomRepository.admission = new EventAdmission(EVENT_ID, NOW);
-        CreateHoldHandler handler = handler(holdRepository, waitingRoomRepository);
+        CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
 
         assertThatThrownBy(() -> handler.handle(command()))
                 .isInstanceOf(AdmissionRequiredException.class);
@@ -72,7 +92,7 @@ class CreateHoldHandlerTest {
         FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
         waitingRoomRepository.admission = new EventAdmission(EVENT_ID, NOW);
         waitingRoomRepository.entry = new WaitingRoomEntry(EVENT_ID, USER_ID, NOW.plusSeconds(1));
-        CreateHoldHandler handler = handler(holdRepository, waitingRoomRepository);
+        CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
 
         assertThatThrownBy(() -> handler.handle(command()))
                 .isInstanceOf(AdmissionRequiredException.class);
@@ -86,7 +106,7 @@ class CreateHoldHandlerTest {
         FakeWaitingRoomRepository waitingRoomRepository = new FakeWaitingRoomRepository();
         waitingRoomRepository.admission = new EventAdmission(EVENT_ID, NOW);
         waitingRoomRepository.entry = new WaitingRoomEntry(EVENT_ID, USER_ID, NOW.minusSeconds(1));
-        CreateHoldHandler handler = handler(holdRepository, waitingRoomRepository);
+        CreateHoldHandler handler = handler(LOCAL_OWNER, holdRepository, waitingRoomRepository);
 
         Hold hold = handler.handle(command());
 
@@ -95,9 +115,11 @@ class CreateHoldHandlerTest {
     }
 
     private static CreateHoldHandler handler(
+            EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
             WaitingRoomRepository waitingRoomRepository) {
         return new CreateHoldHandler(
+                eventWriteAuthority,
                 holdRepository,
                 waitingRoomRepository,
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -150,6 +172,7 @@ class CreateHoldHandlerTest {
     private static final class FakeWaitingRoomRepository implements WaitingRoomRepository {
         private WaitingRoomEntry entry;
         private EventAdmission admission;
+        private int admissionReads;
 
         @Override
         public WaitingRoomEntry join(WaitingRoomEntry entry) {
@@ -165,6 +188,7 @@ class CreateHoldHandlerTest {
 
         @Override
         public Optional<EventAdmission> findAdmission(EventId eventId) {
+            admissionReads++;
             return Optional.ofNullable(admission).filter(value -> value.eventId().equals(eventId));
         }
 

@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
@@ -44,7 +45,8 @@ public final class BookingExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(detail);
     }
 
-    @ExceptionHandler({SeatClaimConflictException.class, SeatUnavailableException.class, CheckoutConflictException.class})
+    @ExceptionHandler({SeatClaimConflictException.class, SeatUnavailableException.class,
+            CheckoutConflictException.class, HoldIdempotencyConflictException.class})
     ResponseEntity<ProblemDetail> conflict(RuntimeException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
         detail.setTitle("Booking conflict");

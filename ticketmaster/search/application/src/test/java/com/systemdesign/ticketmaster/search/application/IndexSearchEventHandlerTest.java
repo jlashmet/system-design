@@ -33,5 +33,9 @@ class IndexSearchEventHandlerTest {
         public void upsert(SearchEvent event) {
             indexed = event;
         }
+
+        @Override
+        public void delete(String eventId) {
+        }
     }
 }

@@ -22,7 +22,6 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.time.ZoneOffset;
-import java.util.Currency;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -55,16 +54,12 @@ public final class BookingApiController implements BookingApi {
 
     @Override
     public ResponseEntity<HoldResponse> createHold(String eventId, CreateHoldRequest request) {
-        Price totalPrice = new Price(
-                request.getTotalPrice().getAmount(),
-                Currency.getInstance(request.getTotalPrice().getCurrency()));
         List<SeatId> seatIds = request.getSeatIds().stream().map(SeatId::new).toList();
 
         Hold hold = createHoldHandler.handle(new CreateHoldCommand(
                 new UserId(request.getUserId()),
                 new EventId(eventId),
-                seatIds,
-                totalPrice));
+                seatIds));
 
         return ResponseEntity.status(HttpStatus.CREATED).body(toHoldResponse(hold));
     }

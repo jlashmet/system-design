@@ -15,7 +15,6 @@ import org.apache.hc.core5.util.Timeout;
 import org.opensearch.client.json.jackson.JacksonJsonpMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.transport.OpenSearchTransport;
-import org.opensearch.client.transport.aws.AwsSdk2Transport;
 import org.opensearch.client.transport.aws.AwsSdk2TransportOptions;
 import org.opensearch.client.transport.httpclient5.ApacheHttpClient5TransportBuilder;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,7 +22,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import software.amazon.awssdk.http.SdkHttpClient;
-import software.amazon.awssdk.http.apache.ApacheHttpClient;
+import software.amazon.awssdk.http.apache5.Apache5HttpClient;
 import software.amazon.awssdk.regions.Region;
 
 @SpringBootApplication(scanBasePackages = "com.systemdesign.ticketmaster.search.infrastructure.input")
@@ -46,11 +45,11 @@ public class SearchServiceApplication {
         String hostName = requireNonBlank(uri.getHost(), "OpenSearch endpoint host");
 
         if (awsSigningEnabled) {
-            SdkHttpClient httpClient = ApacheHttpClient.builder()
+            SdkHttpClient httpClient = Apache5HttpClient.builder()
                     .connectionTimeout(Duration.ofMillis(connectTimeout))
                     .socketTimeout(Duration.ofMillis(responseTimeout))
                     .build();
-            return new AwsSdk2Transport(
+            return new ManagedAwsSdk2Transport(
                     httpClient,
                     hostName,
                     requireNonBlank(signingService, "signingService"),

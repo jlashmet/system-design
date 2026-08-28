@@ -46,6 +46,7 @@ class StartCheckoutHandlerTest {
     private TrackingCheckoutGateway checkoutGateway;
     private TrackingPaymentGateway paymentGateway;
     private StartCheckoutHandler handler;
+    private StartCheckoutResult result;
     private Throwable thrown;
 
     @Test
@@ -76,6 +77,13 @@ class StartCheckoutHandlerTest {
         thenExpectHoldOwnershipRejectedBeforeProviderAccess();
     }
 
+    @Test
+    void returnsIdempotentCheckoutWithoutProviderAccess() {
+        givenExistingCheckoutOwnedBy(OWNER);
+        whenCheckoutStartsAs(OWNER, "idem-existing");
+        thenExpectExistingCheckoutReturnedWithoutProviderAccess();
+    }
+
     private void givenWrongBookingRegion() {
         bookingRepository = new TrackingBookingRepository();
         holdRepository = new TrackingHoldRepository(null);
@@ -85,7 +93,7 @@ class StartCheckoutHandlerTest {
             throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
         };
         handler = handler(wrongRegion);
-        thrown = null;
+        resetResult();
     }
 
     private void givenMissingHold() {
@@ -94,7 +102,7 @@ class StartCheckoutHandlerTest {
         checkoutGateway = new TrackingCheckoutGateway();
         paymentGateway = new TrackingPaymentGateway();
         handler = handler(ignored -> {});
-        thrown = null;
+        resetResult();
     }
 
     private void givenActiveHoldOwnedBy(UserId owner) {
@@ -103,7 +111,7 @@ class StartCheckoutHandlerTest {
         checkoutGateway = new TrackingCheckoutGateway();
         paymentGateway = new TrackingPaymentGateway();
         handler = handler(ignored -> {});
-        thrown = null;
+        resetResult();
     }
 
     private void givenExistingCheckoutOwnedBy(UserId owner) {
@@ -121,12 +129,12 @@ class StartCheckoutHandlerTest {
         checkoutGateway = new TrackingCheckoutGateway();
         paymentGateway = new TrackingPaymentGateway();
         handler = handler(ignored -> {});
-        thrown = null;
+        resetResult();
     }
 
     private void whenCheckoutStartsAs(UserId userId, String idempotencyKey) {
         try {
-            handler.handle(new StartCheckoutCommand(EVENT_ID, HOLD_ID, userId, idempotencyKey));
+            result = handler.handle(new StartCheckoutCommand(EVENT_ID, HOLD_ID, userId, idempotencyKey));
         } catch (Throwable error) {
             thrown = error;
         }
@@ -134,12 +142,14 @@ class StartCheckoutHandlerTest {
 
     private void thenExpectWrongRegionBeforeCheckoutStateRead() {
         assertThat(thrown).isInstanceOf(WrongBookingRegionException.class);
+        assertThat(result).isNull();
         assertThat(bookingRepository.idempotencyReads).isZero();
         assertThat(holdRepository.findByIdReads).isZero();
     }
 
     private void thenExpectHoldNotFoundBeforeCheckoutOrPayment() {
         assertThat(thrown).isInstanceOf(HoldNotFoundException.class);
+        assertThat(result).isNull();
         assertThat(holdRepository.findByIdReads).isOne();
         assertThat(checkoutGateway.startCalls).isZero();
         assertThat(paymentGateway.createCalls).isZero();
@@ -148,6 +158,7 @@ class StartCheckoutHandlerTest {
 
     private void thenExpectHoldOwnershipRejectedBeforeCheckoutOrPayment() {
         assertThat(thrown).isInstanceOf(HoldOwnershipException.class);
+        assertThat(result).isNull();
         assertThat(holdRepository.findByIdReads).isOne();
         assertThat(checkoutGateway.startCalls).isZero();
         assertThat(paymentGateway.createCalls).isZero();
@@ -156,9 +167,28 @@ class StartCheckoutHandlerTest {
 
     private void thenExpectHoldOwnershipRejectedBeforeProviderAccess() {
         assertThat(thrown).isInstanceOf(HoldOwnershipException.class);
+        assertThat(result).isNull();
         assertThat(bookingRepository.idempotencyReads).isOne();
         assertThat(holdRepository.findByIdReads).isZero();
+        assertThat(paymentGateway.createCalls).isZero();
         assertThat(paymentGateway.statusCalls).isZero();
+    }
+
+    private void thenExpectExistingCheckoutReturnedWithoutProviderAccess() {
+        assertThat(thrown).isNull();
+        assertThat(result).isNotNull();
+        assertThat(result.booking().id()).isEqualTo(new BookingId("booking-existing"));
+        assertThat(result.paymentIntentId()).isEqualTo("pi-existing");
+        assertThat(bookingRepository.idempotencyReads).isOne();
+        assertThat(holdRepository.findByIdReads).isZero();
+        assertThat(checkoutGateway.startCalls).isZero();
+        assertThat(paymentGateway.createCalls).isZero();
+        assertThat(paymentGateway.statusCalls).isZero();
+    }
+
+    private void resetResult() {
+        result = null;
+        thrown = null;
     }
 
     private StartCheckoutHandler handler(EventWriteAuthority authority) {

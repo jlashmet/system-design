@@ -34,6 +34,8 @@ Authoritative booking mutations call the ControlPlane ownership API through `Eve
 
 If a request reaches the wrong booking region, the API returns HTTP `421 Misdirected Request` with `X-Booking-Region` identifying the current owner. If ownership cannot be established at all, Booking fails closed with HTTP `503`.
 
+Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
+
 Waiting-room regulation is schedulable but conservative by default. Runtime properties include:
 
 ```text
@@ -46,6 +48,38 @@ ticketmaster.booking.admission.poll-delay-ms=1000
 
 An empty `event-ids` value means the admission regulator has no events to process. The initial `ConfiguredAdmissionHealthGateway` defaults to `OVERLOADED`, so simply enabling the service never advances admission accidentally. It is intentionally a bootstrap/demo adapter and can be replaced by a telemetry-backed `AdmissionHealthGateway` without changing the application policy.
 
+### Seat-map DynamoDB Stream projection
+
+The authoritative Booking table publishes DynamoDB Stream records to a Lambda event-source mapping. Configure the stream with `NEW_IMAGE` or `NEW_AND_OLD_IMAGES`; the projector requires the new seat image.
+
+```text
+Authoritative Booking DynamoDB
+          |
+     DynamoDB Stream
+          |
+ Lambda event-source mapping
+          |
+SeatMapProjectionLambdaHandler
+          |
+DynamoSeatInventoryStreamProjector
+          |
+SeatMapBySection DynamoDB
+```
+
+Lambda handler:
+
+```text
+com.systemdesign.ticketmaster.booking.bootstrap.SeatMapProjectionLambdaHandler::handleRequest
+```
+
+Required environment variable:
+
+```text
+TICKETMASTER_SEAT_MAP_TABLE_NAME=<seat-map-table>
+```
+
+The Lambda event-source mapping owns stream shard checkpoints, retry behavior, and parallelism. The projection writes are idempotent: each projected seat update atomically writes the section seat row and its event-level section-directory marker. Retrying a batch therefore safely converges on the latest processed seat image. A failed batch is intentionally retried as a batch rather than implementing custom stream checkpointing in the application.
+
 ## Testing
 
 The test layers follow `../docs/TESTING.md`:
@@ -54,7 +88,7 @@ The test layers follow `../docs/TESTING.md`:
 - application tests use fakes for domain gateways;
 - infrastructure integration tests use Floci through Testcontainers and exercise the real AWS SDK adapters;
 - architecture tests include the bootstrap module on their classpath so the executable composition root is also checked;
-- a small real-AWS contract suite can be added separately for behavior that an emulator cannot prove, such as IAM, quotas, networking, MRSC regional behavior, and hard-fencing operations.
+- a small real-AWS contract suite can be added separately for behavior that an emulator cannot prove, such as IAM, quotas, networking, MRSC regional behavior, Lambda event-source mapping configuration, and hard-fencing operations.
 
 Floci integration tests use the `*IT` naming convention and run through Maven Failsafe during `verify`:
 
@@ -62,4 +96,4 @@ Floci integration tests use the `*IT` naming convention and run through Maven Fa
 mvn verify
 ```
 
-Booking integration tests verify DynamoDB transactional seat claiming, checkout/finalization, reconciliation storage, waiting-room state, and seat-map projection. Events verifies canonical Event/Venue reads. Search verifies OpenSearch querying and indexing. Control-plane integration tests verify conditional owner/epoch assignment and transfer semantics.
+Booking integration tests verify DynamoDB transactional seat claiming, concurrent no-double-booking behavior, hold idempotency, checkout/finalization, reconciliation storage, waiting-room state, and seat-map projection. Events verifies canonical Event/Venue reads. Search verifies OpenSearch querying and indexing. Control-plane integration tests verify conditional owner/epoch assignment and transfer semantics.

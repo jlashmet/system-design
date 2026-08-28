@@ -3,6 +3,24 @@ info:
   title: Ticketmaster Booking API
   version: 0.0.1
 paths:
+  /events/{eventId}/sections:
+    get:
+      tags: [Booking]
+      operationId: getSections
+      summary: List seat-map sections currently projected for an event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Eventually consistent section directory
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SectionResponse' }
   /events/{eventId}/sections/{sectionId}/seats:
     get:
       tags: [Booking]
@@ -124,6 +142,11 @@ components:
       properties:
         amount: { type: number }
         currency: { type: string }
+    SectionResponse:
+      type: object
+      required: [sectionId]
+      properties:
+        sectionId: { type: string }
     SeatMapSeatResponse:
       type: object
       required: [seatId, sectionId, row, number, price, status]

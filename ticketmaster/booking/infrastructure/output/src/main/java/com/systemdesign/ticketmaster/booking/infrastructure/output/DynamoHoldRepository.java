@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Currency;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -24,7 +25,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.BatchGetItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.BatchGetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.KeysAndAttributes;
 import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
@@ -46,24 +50,43 @@ public final class DynamoHoldRepository implements HoldRepository {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(seatIds, "seatIds");
         if (seatIds.isEmpty()) throw new IllegalArgumentException("at least one seat is required");
+        if (seatIds.size() > 97) throw new IllegalArgumentException("a hold cannot contain more than 97 seats");
+
+        Map<String, SeatId> seatByPk = new LinkedHashMap<>();
+        List<Map<String, AttributeValue>> keys = new ArrayList<>(seatIds.size());
+        for (SeatId seatId : seatIds) {
+            String pk = seatPk(eventId, seatId);
+            seatByPk.put(pk, seatId);
+            keys.add(Map.of(PK, string(pk)));
+        }
 
         Map<SeatId, Price> prices = new HashMap<>();
+        Map<String, KeysAndAttributes> requestItems = Map.of(
+                tableName,
+                KeysAndAttributes.builder()
+                        .keys(keys)
+                        .consistentRead(true)
+                        .build());
+
+        while (!requestItems.isEmpty()) {
+            BatchGetItemResponse response = dynamoDb.batchGetItem(BatchGetItemRequest.builder()
+                    .requestItems(requestItems)
+                    .build());
+            for (Map<String, AttributeValue> item : response.responses().getOrDefault(tableName, List.of())) {
+                AttributeValue pkValue = item.get(PK);
+                SeatId seatId = pkValue == null ? null : seatByPk.get(pkValue.s());
+                if (seatId == null) {
+                    throw new IllegalStateException("authoritative seat batch returned an unexpected item");
+                }
+                prices.put(seatId, priceFromSeatItem(seatId, item));
+            }
+            requestItems = response.unprocessedKeys();
+        }
+
         for (SeatId seatId : seatIds) {
-            Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                            .tableName(tableName)
-                            .key(Map.of(PK, string(seatPk(eventId, seatId))))
-                            .consistentRead(true)
-                            .build())
-                    .item();
-            if (item == null || item.isEmpty()) {
+            if (!prices.containsKey(seatId)) {
                 throw new SeatUnavailableException(seatId);
             }
-            AttributeValue amount = item.get("priceAmount");
-            AttributeValue currency = item.get("priceCurrency");
-            if (amount == null || amount.s() == null || currency == null || currency.s() == null) {
-                throw new IllegalStateException("authoritative seat is missing price: " + seatId.value());
-            }
-            prices.put(seatId, new Price(new BigDecimal(amount.s()), Currency.getInstance(currency.s())));
         }
         return new SeatPriceQuote(eventId, prices);
     }
@@ -120,6 +143,15 @@ public final class DynamoHoldRepository implements HoldRepository {
             return Optional.empty();
         }
         return Optional.of(fromItem(item));
+    }
+
+    private Price priceFromSeatItem(SeatId seatId, Map<String, AttributeValue> item) {
+        AttributeValue amount = item.get("priceAmount");
+        AttributeValue currency = item.get("priceCurrency");
+        if (amount == null || amount.s() == null || currency == null || currency.s() == null) {
+            throw new IllegalStateException("authoritative seat is missing price: " + seatId.value());
+        }
+        return new Price(new BigDecimal(amount.s()), Currency.getInstance(currency.s()));
     }
 
     private Update seatClaimUpdate(Hold hold, SeatId seatId, Price quotedPrice, Instant now) {

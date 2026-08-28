@@ -2,8 +2,10 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
+import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
+import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +20,13 @@ public final class BookingExceptionHandler {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
         detail.setTitle("Waiting-room admission required");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
+    }
+
+    @ExceptionHandler({WrongBookingRegionException.class, EventOwnershipUnavailableException.class})
+    ResponseEntity<ProblemDetail> bookingRegionUnavailable(RuntimeException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
+        detail.setTitle("Booking region unavailable");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(detail);
     }
 
     @ExceptionHandler({SeatClaimConflictException.class, SeatUnavailableException.class, CheckoutConflictException.class})

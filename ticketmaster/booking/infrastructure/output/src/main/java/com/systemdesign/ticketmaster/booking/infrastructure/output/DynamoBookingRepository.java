@@ -42,11 +42,13 @@ public final class DynamoBookingRepository implements BookingRepository {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(holdId, "holdId");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
-        Map<String, AttributeValue> mapping = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey))))
-                        .consistentRead(true)
-                        .build())
+        Map<String, AttributeValue> mapping = DynamoBookingCall.execute(
+                        "checkout idempotency lookup",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey))))
+                                .consistentRead(true)
+                                .build()))
                 .item();
         if (mapping == null || mapping.isEmpty()) return Optional.empty();
         if (!eventId.value().equals(mapping.get("eventId").s())
@@ -62,7 +64,7 @@ public final class DynamoBookingRepository implements BookingRepository {
         Objects.requireNonNull(booking, "booking");
         String intentId = booking.paymentIntentIdOptional()
                 .orElseThrow(() -> new IllegalArgumentException("booking has no payment intent"));
-        dynamoDb.updateItem(UpdateItemRequest.builder()
+        DynamoBookingCall.execute("save payment intent", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
                 .updateExpression("SET #paymentIntentId = :intent")
@@ -73,7 +75,7 @@ public final class DynamoBookingRepository implements BookingRepository {
                 .expressionAttributeValues(Map.of(
                         ":pending", string("PENDING_PAYMENT"),
                         ":intent", string(intentId)))
-                .build());
+                .build()));
     }
 
     @Override
@@ -82,7 +84,7 @@ public final class DynamoBookingRepository implements BookingRepository {
         if (booking.nextReconcileAt() == null || booking.reconcileShard() == null) {
             throw new IllegalArgumentException("booking is not scheduled for reconciliation");
         }
-        dynamoDb.updateItem(UpdateItemRequest.builder()
+        DynamoBookingCall.execute("reschedule payment reconciliation", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
                 .updateExpression("SET #nextReconcileAt = :next")
@@ -95,7 +97,7 @@ public final class DynamoBookingRepository implements BookingRepository {
                         ":pending", string("PENDING_PAYMENT"),
                         ":shard", string(DynamoKeys.reconciliationShard(booking.reconcileShard())),
                         ":next", DynamoItemCodec.number(booking.nextReconcileAt().toEpochMilli())))
-                .build());
+                .build()));
     }
 
     @Override
@@ -103,7 +105,7 @@ public final class DynamoBookingRepository implements BookingRepository {
         Objects.requireNonNull(dueAtOrBefore, "dueAtOrBefore");
         if (shard < 0) throw new IllegalArgumentException("shard must not be negative");
         if (limit < 1) throw new IllegalArgumentException("limit must be positive");
-        return dynamoDb.query(QueryRequest.builder()
+        return DynamoBookingCall.execute("query due payment reconciliations", () -> dynamoDb.query(QueryRequest.builder()
                         .tableName(tableName)
                         .indexName(RECONCILIATION_INDEX)
                         .keyConditionExpression("#shard = :shard AND #due <= :due")
@@ -115,18 +117,20 @@ public final class DynamoBookingRepository implements BookingRepository {
                                 ":due", DynamoItemCodec.number(dueAtOrBefore.toEpochMilli())))
                         .scanIndexForward(true)
                         .limit(limit)
-                        .build())
+                        .build()))
                 .items().stream()
                 .map(DynamoItemCodec::bookingFromItem)
                 .toList();
     }
 
     private Optional<Booking> getBooking(String pk) {
-        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(pk)))
-                        .consistentRead(true)
-                        .build())
+        Map<String, AttributeValue> item = DynamoBookingCall.execute(
+                        "booking lookup",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(pk)))
+                                .consistentRead(true)
+                                .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(bookingFromItem(item));

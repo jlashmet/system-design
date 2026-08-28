@@ -114,14 +114,14 @@ public class BookingServiceApplication {
     @Bean
     WaitingRoomRepository waitingRoomRepository(
             DynamoDbClient dynamoDbClient,
-            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
+            @Value("${ticketmaster.booking.waiting-room-table-name:ticketmaster-waiting-room}") String tableName) {
         return new DynamoWaitingRoomRepository(dynamoDbClient, tableName);
     }
 
     @Bean
     AdmissionRegulationLeaseGateway admissionRegulationLeaseGateway(
             DynamoDbClient dynamoDbClient,
-            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
+            @Value("${ticketmaster.booking.waiting-room-table-name:ticketmaster-waiting-room}") String tableName) {
         return new DynamoAdmissionRegulationLeaseGateway(dynamoDbClient, tableName);
     }
 

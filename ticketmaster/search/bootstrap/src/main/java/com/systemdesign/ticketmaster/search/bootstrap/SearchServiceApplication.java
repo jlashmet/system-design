@@ -1,8 +1,11 @@
 package com.systemdesign.ticketmaster.search.bootstrap;
 
+import com.systemdesign.ticketmaster.search.application.IndexSearchEventHandler;
 import com.systemdesign.ticketmaster.search.application.SearchEventsHandler;
 import com.systemdesign.ticketmaster.search.domain.EventSearchGateway;
+import com.systemdesign.ticketmaster.search.domain.EventSearchIndex;
 import com.systemdesign.ticketmaster.search.infrastructure.output.OpenSearchEventSearchGateway;
+import com.systemdesign.ticketmaster.search.infrastructure.output.OpenSearchEventSearchIndex;
 import java.net.URI;
 import org.apache.hc.core5.http.HttpHost;
 import org.opensearch.client.json.jackson.JacksonJsonpMapper;
@@ -44,7 +47,19 @@ public class SearchServiceApplication {
     }
 
     @Bean
+    EventSearchIndex eventSearchIndex(
+            OpenSearchClient openSearchClient,
+            @Value("${ticketmaster.search.index-name:events}") String indexName) {
+        return new OpenSearchEventSearchIndex(openSearchClient, indexName);
+    }
+
+    @Bean
     SearchEventsHandler searchEventsHandler(EventSearchGateway eventSearchGateway) {
         return new SearchEventsHandler(eventSearchGateway);
+    }
+
+    @Bean
+    IndexSearchEventHandler indexSearchEventHandler(EventSearchIndex eventSearchIndex) {
+        return new IndexSearchEventHandler(eventSearchIndex);
     }
 }

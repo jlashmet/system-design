@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
+import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
@@ -57,7 +58,7 @@ public final class StartCheckoutHandler {
     private StartCheckoutResult startNewCheckout(StartCheckoutCommand command) {
         Instant now = clock.instant();
         Hold hold = holdRepository.findById(command.holdId())
-                .orElseThrow(() -> new IllegalArgumentException("hold not found: " + command.holdId().value()));
+                .orElseThrow(() -> new HoldNotFoundException(command.holdId()));
         if (!hold.eventId().equals(command.eventId())) {
             throw new IllegalArgumentException("hold does not belong to event " + command.eventId().value());
         }

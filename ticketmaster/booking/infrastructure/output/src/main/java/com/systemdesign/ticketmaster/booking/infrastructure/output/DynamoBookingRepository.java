@@ -8,6 +8,8 @@ import static com.systemdesign.ticketmaster.booking.infrastructure.output.Dynamo
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
+import com.systemdesign.ticketmaster.booking.domain.EventId;
+import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -35,15 +37,23 @@ public final class DynamoBookingRepository implements BookingRepository {
     }
 
     @Override
-    public Optional<Booking> findByCheckoutIdempotencyKey(String idempotencyKey) {
+    public Optional<Booking> findByCheckoutIdempotencyKey(
+            EventId eventId, HoldId holdId, String idempotencyKey) {
+        Objects.requireNonNull(eventId, "eventId");
+        Objects.requireNonNull(holdId, "holdId");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
         Map<String, AttributeValue> mapping = dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
-                        .key(Map.of(PK, string(DynamoKeys.idempotencyPk(idempotencyKey))))
+                        .key(Map.of(PK, string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey))))
                         .consistentRead(true)
                         .build())
                 .item();
         if (mapping == null || mapping.isEmpty()) return Optional.empty();
+        if (!eventId.value().equals(mapping.get("eventId").s())
+                || !holdId.value().equals(mapping.get("holdId").s())
+                || !idempotencyKey.equals(mapping.get("idempotencyKey").s())) {
+            throw new IllegalStateException("checkout idempotency mapping does not match lookup scope");
+        }
         return findById(new BookingId(mapping.get("bookingId").s()));
     }
 

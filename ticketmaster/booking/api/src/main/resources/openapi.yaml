@@ -24,6 +24,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/SectionResponse' }
+        '503': { description: Seat-map storage is temporarily unavailable; retry may succeed }
   /events/{eventId}/sections/{sectionId}/seats:
     get:
       tags: [Booking]
@@ -49,6 +50,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/SeatMapSeatResponse' }
+        '503': { description: Seat-map storage is temporarily unavailable; retry may succeed }
   /events/{eventId}/holds:
     post:
       tags: [Booking]
@@ -148,6 +150,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/WaitingRoomEntryResponse' }
         '409': { description: Waiting room is not enabled for this event }
+        '503': { description: Waiting-room storage is temporarily unavailable; retry may succeed }
     get:
       tags: [WaitingRoom]
       operationId: getAdmissionStatus
@@ -170,6 +173,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AdmissionStatusResponse' }
+        '404': { description: Waiting room is enabled, but this user has not joined it }
+        '409': { description: Waiting room is not enabled for this event }
+        '503': { description: Waiting-room storage is temporarily unavailable; retry may succeed }
 components:
   schemas:
     Money:

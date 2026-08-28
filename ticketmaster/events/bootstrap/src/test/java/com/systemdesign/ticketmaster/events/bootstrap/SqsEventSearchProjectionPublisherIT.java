@@ -30,6 +30,9 @@ class SqsEventSearchProjectionPublisherIT {
 
     private SqsClient sqs;
     private String queueUrl;
+    private ObjectMapper mapper;
+    private SqsEventSearchProjectionPublisher publisher;
+    private JsonNode receivedBody;
 
     @AfterEach
     void tearDown() {
@@ -40,7 +43,13 @@ class SqsEventSearchProjectionPublisherIT {
     }
 
     @Test
-    void publishesVersionedProjectionToFifoQueue() throws Exception {
+    void publishesVersionedProjectionToFifoQueue() {
+        givenFifoProjectionQueue();
+        whenProjectionIsPublished();
+        thenExpectVersionedProjectionMessage();
+    }
+
+    private void givenFifoProjectionQueue() {
         sqs = SqsClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
                 .region(Region.of(FLOCI.getRegion()))
@@ -52,9 +61,12 @@ class SqsEventSearchProjectionPublisherIT {
                         .attributes(Map.of(QueueAttributeName.FIFO_QUEUE, "true"))
                         .build())
                 .queueUrl();
-        ObjectMapper mapper = new ObjectMapper();
-        SqsEventSearchProjectionPublisher publisher = new SqsEventSearchProjectionPublisher(sqs, mapper, queueUrl);
+        mapper = new ObjectMapper();
+        publisher = new SqsEventSearchProjectionPublisher(sqs, mapper, queueUrl);
+        receivedBody = null;
+    }
 
+    private void whenProjectionIsPublished() {
         publisher.publish(new EventSearchProjection(
                 "event-1",
                 "Taylor Swift",
@@ -62,20 +74,27 @@ class SqsEventSearchProjectionPublisherIT {
                 "Los Angeles",
                 Instant.parse("2026-10-10T03:00:00Z"),
                 "CONCERT"), "stream-event-1");
-
         var messages = sqs.receiveMessage(ReceiveMessageRequest.builder()
                         .queueUrl(queueUrl)
                         .maxNumberOfMessages(1)
                         .waitTimeSeconds(1)
                         .build())
                 .messages();
-        assertThat(messages).hasSize(1);
-        JsonNode body = mapper.readTree(messages.getFirst().body());
-        assertThat(body.get("schemaVersion").asInt()).isEqualTo(1);
-        assertThat(body.get("type").asText()).isEqualTo("UPSERT");
-        assertThat(body.get("eventId").asText()).isEqualTo("event-1");
-        assertThat(body.get("venue").asText()).isEqualTo("SoFi Stadium");
-        assertThat(body.get("startsAtEpochMillis").asLong())
+        if (messages.size() != 1) return;
+        try {
+            receivedBody = mapper.readTree(messages.getFirst().body());
+        } catch (Exception error) {
+            throw new IllegalStateException("projection body is not valid JSON", error);
+        }
+    }
+
+    private void thenExpectVersionedProjectionMessage() {
+        assertThat(receivedBody).isNotNull();
+        assertThat(receivedBody.get("schemaVersion").asInt()).isEqualTo(1);
+        assertThat(receivedBody.get("type").asText()).isEqualTo("UPSERT");
+        assertThat(receivedBody.get("eventId").asText()).isEqualTo("event-1");
+        assertThat(receivedBody.get("venue").asText()).isEqualTo("SoFi Stadium");
+        assertThat(receivedBody.get("startsAtEpochMillis").asLong())
                 .isEqualTo(Instant.parse("2026-10-10T03:00:00Z").toEpochMilli());
     }
 }

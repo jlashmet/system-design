@@ -42,7 +42,7 @@ class AdmissionRegulationSchedulerTest {
     void initializesConfiguredEventsBeforeRegulation() {
         givenConfiguredEventsWithoutAdmission();
         whenSchedulerIsConstructed();
-        thenExpectConfiguredEventsInitializedAtNow();
+        thenExpectConfiguredEventsInitializedClosed();
     }
 
     @Test
@@ -110,10 +110,10 @@ class AdmissionRegulationSchedulerTest {
         }
     }
 
-    private void thenExpectConfiguredEventsInitializedAtNow() {
+    private void thenExpectConfiguredEventsInitializedClosed() {
         assertThat(repository.admissions).containsKeys(FIRST, SECOND);
-        assertThat(repository.admissions.get(FIRST).admittedThrough()).isEqualTo(NOW);
-        assertThat(repository.admissions.get(SECOND).admittedThrough()).isEqualTo(NOW);
+        assertThat(repository.admissions.get(FIRST).admittedThrough()).isEqualTo(NOW.minusMillis(1));
+        assertThat(repository.admissions.get(SECOND).admittedThrough()).isEqualTo(NOW.minusMillis(1));
     }
 
     private void thenExpectOtherEventsStillRegulated() {

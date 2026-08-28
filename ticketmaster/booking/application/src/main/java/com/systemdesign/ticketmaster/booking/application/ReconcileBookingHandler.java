@@ -43,27 +43,61 @@ public final class ReconcileBookingHandler {
         if (booking.status() != BookingStatus.PENDING_PAYMENT) return booking;
 
         Booking withIntent = ensurePaymentIntent(booking);
-        PaymentIntentStatus paymentStatus;
-        try {
-            paymentStatus = paymentGateway.getPaymentStatus(withIntent.paymentIntentIdOptional().orElseThrow());
-        } catch (RuntimeException providerFailure) {
-            reschedule(withIntent);
-            throw providerFailure;
-        }
+        Hold hold = loadHold(withIntent);
+        PaymentIntentStatus paymentStatus = getPaymentStatusOrReschedule(withIntent);
 
         if (paymentStatus == PaymentIntentStatus.SUCCEEDED) {
-            Hold hold = loadHold(withIntent).convert();
-            Booking confirmed = withIntent.confirm();
-            checkoutGateway.finalizeBooking(hold, confirmed);
-            return confirmed;
+            return confirm(withIntent, hold);
         }
         if (paymentStatus == PaymentIntentStatus.FAILED || paymentStatus == PaymentIntentStatus.CANCELED) {
-            Hold hold = loadHold(withIntent).fail();
-            Booking failed = withIntent.fail();
-            checkoutGateway.failBooking(hold, failed);
-            return failed;
+            return fail(withIntent, hold);
         }
+
+        Instant checkoutDeadline = Objects.requireNonNull(
+                hold.checkoutExpiresAt(), "pending booking hold must have checkout expiration");
+        if (!clock.instant().isBefore(checkoutDeadline)) {
+            PaymentIntentStatus cancelStatus = cancelPaymentOrReschedule(withIntent);
+            if (cancelStatus == PaymentIntentStatus.SUCCEEDED) {
+                return confirm(withIntent, hold);
+            }
+            if (cancelStatus == PaymentIntentStatus.FAILED || cancelStatus == PaymentIntentStatus.CANCELED) {
+                return fail(withIntent, hold);
+            }
+        }
+
         return reschedule(withIntent);
+    }
+
+    private PaymentIntentStatus getPaymentStatusOrReschedule(Booking booking) {
+        try {
+            return paymentGateway.getPaymentStatus(booking.paymentIntentIdOptional().orElseThrow());
+        } catch (RuntimeException providerFailure) {
+            reschedule(booking);
+            throw providerFailure;
+        }
+    }
+
+    private PaymentIntentStatus cancelPaymentOrReschedule(Booking booking) {
+        try {
+            return paymentGateway.cancelPaymentIntent(booking.paymentIntentIdOptional().orElseThrow());
+        } catch (RuntimeException providerFailure) {
+            reschedule(booking);
+            throw providerFailure;
+        }
+    }
+
+    private Booking confirm(Booking booking, Hold hold) {
+        Hold converted = hold.convert();
+        Booking confirmed = booking.confirm();
+        checkoutGateway.finalizeBooking(converted, confirmed);
+        return confirmed;
+    }
+
+    private Booking fail(Booking booking, Hold hold) {
+        Hold failedHold = hold.fail();
+        Booking failedBooking = booking.fail();
+        checkoutGateway.failBooking(failedHold, failedBooking);
+        return failedBooking;
     }
 
     private Booking ensurePaymentIntent(Booking booking) {

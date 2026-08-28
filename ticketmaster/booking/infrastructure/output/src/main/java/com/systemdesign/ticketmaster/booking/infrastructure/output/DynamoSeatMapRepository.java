@@ -45,6 +45,36 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                         "priceCurrency", string(seat.price().currency().getCurrencyCode()),
                         "status", string(seat.status().name())))
                 .build());
+
+        // Materialize a tiny event-level section directory so section discovery never scans seat rows.
+        // This write is idempotent. A future static venue-geometry projection can own these markers
+        // if rewriting the marker on seat changes becomes material at scale.
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(Map.of(
+                        PK, string(eventPk(seat.eventId())),
+                        SK, string(sectionSk(seat.sectionId())),
+                        "eventId", string(seat.eventId().value()),
+                        "sectionId", string(seat.sectionId().value())))
+                .build());
+    }
+
+    @Override
+    public List<SectionId> findSections(EventId eventId) {
+        Objects.requireNonNull(eventId, "eventId");
+        return dynamoDb.query(QueryRequest.builder()
+                        .tableName(tableName)
+                        .keyConditionExpression("#pk = :pk AND begins_with(#sk, :sectionPrefix)")
+                        .expressionAttributeNames(Map.of("#pk", PK, "#sk", SK))
+                        .expressionAttributeValues(Map.of(
+                                ":pk", string(eventPk(eventId)),
+                                ":sectionPrefix", string("SECTION#")))
+                        .scanIndexForward(true)
+                        .consistentRead(false)
+                        .build())
+                .items().stream()
+                .map(item -> new SectionId(item.get("sectionId").s()))
+                .toList();
     }
 
     @Override
@@ -65,7 +95,15 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     }
 
     static String sectionPk(EventId eventId, SectionId sectionId) {
-        return "EVENT#" + eventId.value() + "#SECTION#" + sectionId.value();
+        return eventPk(eventId) + "#SECTION#" + sectionId.value();
+    }
+
+    static String eventPk(EventId eventId) {
+        return "EVENT#" + eventId.value();
+    }
+
+    private static String sectionSk(SectionId sectionId) {
+        return "SECTION#" + sectionId.value();
     }
 
     private static String seatSk(SeatId seatId) {

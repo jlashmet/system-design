@@ -13,7 +13,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public final class EventsApiController implements EventsApi {
-    private static final String EVENT_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
+    private static final String EVENT_CACHE_CONTROL =
+            "public, max-age=60, stale-while-revalidate=300, stale-if-error=300";
 
     private final GetEventHandler getEventHandler;
 

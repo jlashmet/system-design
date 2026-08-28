@@ -11,6 +11,10 @@ public record StartCheckoutCommand(EventId eventId, HoldId holdId, UserId userId
         Objects.requireNonNull(holdId, "holdId");
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
-        if (idempotencyKey.isBlank()) throw new IllegalArgumentException("idempotency key must not be blank");
+        idempotencyKey = idempotencyKey.trim();
+        if (idempotencyKey.isEmpty()) throw new IllegalArgumentException("idempotency key must not be blank");
+        if (idempotencyKey.length() > 200) {
+            throw new IllegalArgumentException("idempotency key must not exceed 200 characters");
+        }
     }
 }

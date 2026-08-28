@@ -166,7 +166,10 @@ class DynamoCheckoutGatewayIT {
         assertThat(holdRepository.findById(activeHold.id()).orElseThrow().status())
                 .isEqualTo(HoldStatus.CHECKOUT_IN_PROGRESS);
         assertThat(bookingRepository.findById(pendingBooking.id())).contains(pendingBooking);
-        assertThat(bookingRepository.findByCheckoutIdempotencyKey("idempotency-1")).contains(pendingBooking);
+        assertThat(bookingRepository.findByCheckoutIdempotencyKey(
+                EVENT_ID, activeHold.id(), "idempotency-1")).contains(pendingBooking);
+        assertThat(bookingRepository.findByCheckoutIdempotencyKey(
+                EVENT_ID, new HoldId("other-hold"), "idempotency-1")).isEmpty();
         assertThat(bookingRepository.findDueForReconciliation(3, NOW.plusSeconds(40), 10))
                 .containsExactly(pendingBooking);
         for (String seatId : seatIds) {

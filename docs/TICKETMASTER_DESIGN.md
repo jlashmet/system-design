@@ -511,15 +511,19 @@ The request does not contain a total price. The server reads authoritative seat 
 
 For an event with admission control enabled, the hold is rejected before seat pricing/inventory is touched unless the user's waiting-room entry is at or before the current admission watermark.
 
+Before waiting-room or inventory access, the regional Booking service also checks that the control-plane owner for the event matches its configured region. A missing owner, unreachable control plane on an uncached lookup, malformed ownership record, or wrong owner fails closed rather than touching regional authoritative state.
+
 The operation is all-or-nothing. If any requested seat cannot be acquired or its price changes after the quote, the hold fails rather than returning a partial group.
 
 ### Checkout Hold
 
 ```http
-POST /holds/{holdId}/checkout
+POST /events/{eventId}/holds/{holdId}/checkout
 ```
 
-Checkout uses an idempotency key so retries do not create duplicate booking/payment workflows.
+Checkout is event-scoped deliberately. An opaque `holdId` alone is not enough for an edge or regional router to determine the event's authoritative booking region without a separate global hold lookup. Carrying `eventId` allows routing/ownership validation before regional hold state is read.
+
+Checkout uses an idempotency key so retries do not create duplicate booking/payment workflows. The loaded hold or idempotent booking must also belong to the event named in the route.
 
 ## Checkout and Payment Workflow
 
@@ -698,7 +702,25 @@ ownerRegion = us-west-2
 epoch = 17
 ```
 
-Regional routers may cache this mapping because writes are rare, but cache freshness is never the correctness mechanism. The globally coordinated ownership item is authoritative.
+The implemented Control Plane exposes a small read-only routing API:
+
+```http
+GET /control-plane/events/{eventId}/ownership
+```
+
+which returns:
+
+```json
+{
+  "eventId": "123",
+  "ownerRegion": "us-west-2",
+  "epoch": 17
+}
+```
+
+Booking consumes this through its own `EventWriteAuthority` port and an HTTP output adapter; it does not import Control Plane domain/application Java types. Before hold creation or checkout state access, the regional Booking service verifies that the returned owner matches its configured local region. Missing/inconsistent ownership and control-plane lookup failures fail closed.
+
+The remote ownership lookup is not performed for every hot-path request. Successful local-owner checks are cached per event for a short configurable TTL (five seconds by default), and concurrent first checks for the same event collapse onto one refresh. Failures are never cached. An upstream regional router can use the same ownership mapping to forward requests to the home region, while the Booking-side check remains a defensive guard against misrouting.
 
 Initial assignment creates epoch 1 only if the event does not already have an owner. A transfer is a single conditional compare-and-swap:
 
@@ -720,6 +742,12 @@ ONLY IF ownerRegion = WEST
 Two operators or automation processes cannot both successfully transfer the same ownership version. Every successful transfer increments the epoch, so stale routing decisions, retries, and restarted processes can be recognized as old.
 
 The ownership table intentionally performs only single-item conditional writes. It does not need DynamoDB transaction APIs. This matters because the authoritative seat inventory still requires multi-item transactions for multi-seat holds and therefore remains a regional transactional table rather than being moved into the MRSC control table.
+
+### Routing Guard versus Hard Fencing
+
+The request-time ownership check and its cache are **routing/defense mechanisms, not the split-brain fence**. They are not atomically coupled to a regional DynamoDB seat transaction. For example, a process could successfully observe `WEST / epoch 17` and ownership could change before its later regional write.
+
+Therefore correctness does not depend on instantaneous cache invalidation or on a read-before-write control-plane call. The controlled failover procedure must first make the old regional writer incapable of mutating authoritative inventory. Only then may ownership move to the new region. A short-lived stale cache on the old region can at worst cause a write attempt against an already-fenced storage path; a stale cache on the new region can temporarily delay availability.
 
 ### Controlled Failover and Hard Fencing
 
@@ -769,6 +797,7 @@ The key invariant remains:
 | Payments | External provider with Payment Intent | Durable provider-side state, idempotency, cancellation at checkout timeout, and reconciliation |
 | Multi-region booking | Single writer/home region per event | Prevent cross-region double booking; consistency over availability |
 | Event ownership control plane | DynamoDB MRSC Global Table | Tiny low-write state with globally coordinated ownership and conditional epoch changes |
+| Ownership routing guard | Cached Control Plane read through Booking port | Prevent ordinary regional misrouting without putting Control Plane on every hot request; hard fencing remains separate |
 
 ## Key Tradeoffs Established
 
@@ -786,3 +815,4 @@ The key invariant remains:
 12. **Client display price versus authoritative hold price:** seat-map prices may be stale; the hold service re-reads authoritative prices, calculates the total server-side, and binds the claim transaction to that quote.
 13. **Waiting-room optimization versus enforcement:** admission tokens may reduce reads later, but the current correctness/load-shedding boundary is the strongly consistent admission check performed before seat pricing and claims.
 14. **Checkout timeout versus payment ambiguity:** a local deadline is not enough to safely free inventory after payment starts. `CHECKOUT` seats stay fenced until provider success is booked or provider failure/cancellation makes release safe.
+15. **Ownership cache versus fencing:** a short cache keeps the rare control plane off the hot path. Correctness comes from controlled writer fencing before ownership transfer, not from cache freshness or a non-atomic ownership read before each DynamoDB transaction.

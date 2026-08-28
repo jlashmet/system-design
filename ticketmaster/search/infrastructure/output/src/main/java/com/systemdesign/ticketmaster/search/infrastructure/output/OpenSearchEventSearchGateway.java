@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.search.domain.EventSearchGateway;
 import com.systemdesign.ticketmaster.search.domain.SearchEvent;
 import com.systemdesign.ticketmaster.search.domain.SearchPage;
 import com.systemdesign.ticketmaster.search.domain.SearchQuery;
+import com.systemdesign.ticketmaster.search.domain.SearchUnavailableException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -63,7 +64,7 @@ public final class OpenSearchEventSearchGateway implements EventSearchGateway {
                     : "";
             return new SearchPage(events, nextCursor);
         } catch (IOException e) {
-            throw new OpenSearchQueryException("event search failed", e);
+            throw new SearchUnavailableException("event search is temporarily unavailable", e);
         }
     }
 

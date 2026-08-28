@@ -39,6 +39,9 @@ import software.amazon.awssdk.services.dynamodb.model.Update;
 
 public final class DynamoHoldRepository implements HoldRepository {
     private static final String PK = "pk";
+    private static final int MAX_QUOTE_BATCH_ATTEMPTS = 5;
+    private static final long INITIAL_QUOTE_BACKOFF_MILLIS = 10L;
+
     private final DynamoDbClient dynamoDb;
     private final String tableName;
 
@@ -67,7 +70,9 @@ public final class DynamoHoldRepository implements HoldRepository {
                 tableName,
                 KeysAndAttributes.builder().keys(keys).consistentRead(true).build());
 
+        int attempt = 0;
         while (!requestItems.isEmpty()) {
+            attempt++;
             BatchGetItemResponse response = dynamoDb.batchGetItem(BatchGetItemRequest.builder()
                     .requestItems(requestItems).build());
             for (Map<String, AttributeValue> item : response.responses().getOrDefault(tableName, List.of())) {
@@ -76,7 +81,16 @@ public final class DynamoHoldRepository implements HoldRepository {
                 if (seatId == null) throw new IllegalStateException("authoritative seat batch returned an unexpected item");
                 prices.put(seatId, priceFromSeatItem(seatId, item));
             }
+
             requestItems = response.unprocessedKeys();
+            if (requestItems == null || requestItems.isEmpty()) break;
+            if (attempt >= MAX_QUOTE_BATCH_ATTEMPTS) {
+                throw new BookingStorageUnavailableException(
+                        "authoritative seat price quote",
+                        new IllegalStateException(
+                                "DynamoDB still returned unprocessed seat keys after " + attempt + " attempts"));
+            }
+            backoffBeforeQuoteRetry(attempt);
         }
 
         for (SeatId seatId : seatIds) {
@@ -126,7 +140,7 @@ public final class DynamoHoldRepository implements HoldRepository {
             dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
         } catch (TransactionCanceledException e) {
             if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
-                throw new BookingStorageUnavailableException("hold creation", e);
+                throw new BookingStorageUnavailableException("seat claim transaction", e);
             }
             throw new SeatClaimConflictException(hold.eventId(), hold.seatIds());
         }
@@ -163,6 +177,16 @@ public final class DynamoHoldRepository implements HoldRepository {
                 .orElseThrow(() -> new IllegalStateException(
                         "hold idempotency record references missing hold " + holdId.s()));
         return Optional.of(hold);
+    }
+
+    private static void backoffBeforeQuoteRetry(int completedAttempt) {
+        long delayMillis = INITIAL_QUOTE_BACKOFF_MILLIS << Math.min(completedAttempt - 1, 4);
+        try {
+            Thread.sleep(delayMillis);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new BookingStorageUnavailableException("authoritative seat price quote", interrupted);
+        }
     }
 
     private Price priceFromSeatItem(SeatId seatId, Map<String, AttributeValue> item) {

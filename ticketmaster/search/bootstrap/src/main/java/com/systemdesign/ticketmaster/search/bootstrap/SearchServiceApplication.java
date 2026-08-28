@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.search.application.IndexSearchEventHandler;
 import com.systemdesign.ticketmaster.search.application.SearchEventsHandler;
 import com.systemdesign.ticketmaster.search.domain.EventSearchGateway;
 import com.systemdesign.ticketmaster.search.domain.EventSearchIndex;
+import com.systemdesign.ticketmaster.search.infrastructure.input.EventSearchProjectionConsumer;
 import com.systemdesign.ticketmaster.search.infrastructure.output.OpenSearchEventSearchGateway;
 import com.systemdesign.ticketmaster.search.infrastructure.output.OpenSearchEventSearchIndex;
 import java.net.URI;
@@ -61,5 +62,10 @@ public class SearchServiceApplication {
     @Bean
     IndexSearchEventHandler indexSearchEventHandler(EventSearchIndex eventSearchIndex) {
         return new IndexSearchEventHandler(eventSearchIndex);
+    }
+
+    @Bean
+    EventSearchProjectionConsumer eventSearchProjectionConsumer(IndexSearchEventHandler handler) {
+        return new EventSearchProjectionConsumer(handler);
     }
 }

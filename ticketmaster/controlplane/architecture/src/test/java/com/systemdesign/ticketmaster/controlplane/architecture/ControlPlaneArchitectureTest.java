@@ -13,19 +13,26 @@ class ControlPlaneArchitectureTest {
     static final ArchRule domain_does_not_depend_outward = noClasses()
             .that().resideInAPackage("..domain..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..application..", "..infrastructure..", "..bootstrap..",
+                    "..api..", "..application..", "..infrastructure..", "..bootstrap..",
                     "org.springframework..", "software.amazon..");
 
     @ArchTest
-    static final ArchRule application_does_not_depend_on_infrastructure = noClasses()
+    static final ArchRule application_depends_only_inward = noClasses()
             .that().resideInAPackage("..application..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..infrastructure..", "..bootstrap..", "org.springframework..", "software.amazon..");
+                    "..api..", "..infrastructure..", "..bootstrap..",
+                    "org.springframework..", "software.amazon..");
 
     @ArchTest
-    static final ArchRule output_does_not_depend_on_application_or_bootstrap = noClasses()
+    static final ArchRule input_does_not_depend_on_output_or_bootstrap = noClasses()
+            .that().resideInAPackage("..infrastructure.input..")
+            .should().dependOnClassesThat().resideInAnyPackage("..infrastructure.output..", "..bootstrap..");
+
+    @ArchTest
+    static final ArchRule output_does_not_depend_on_api_application_input_or_bootstrap = noClasses()
             .that().resideInAPackage("..infrastructure.output..")
-            .should().dependOnClassesThat().resideInAnyPackage("..application..", "..bootstrap..");
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..api..", "..application..", "..infrastructure.input..", "..bootstrap..");
 
     @ArchTest
     static final ArchRule bounded_context_does_not_depend_on_other_contexts = noClasses()

@@ -64,7 +64,7 @@ class DynamoWaitingRoomRepositoryIT {
 
     @Test
     void admissionIsTimestampWatermarkComparison() {
-        givenJoinedUser();
+        givenJoinedUserInEnabledWaitingRoom();
         whenAdvanceWatermarkAcrossUser();
         thenExpectWaitingThenAdmitted();
     }
@@ -83,6 +83,13 @@ class DynamoWaitingRoomRepositoryIT {
         thenExpectFirstAdmissionPreserved();
     }
 
+    @Test
+    void admissionCannotAdvanceBeforeWaitingRoomIsEnabled() {
+        givenWaitingRoom();
+        whenAdvanceAdmissionTo(FIRST_JOIN);
+        thenExpect(AdmissionWatermarkRegressionException.class);
+    }
+
     private void givenWaitingRoom() {
         initialize();
         firstJoin = null;
@@ -92,14 +99,15 @@ class DynamoWaitingRoomRepositoryIT {
         thrown = null;
     }
 
-    private void givenJoinedUser() {
+    private void givenJoinedUserInEnabledWaitingRoom() {
         givenWaitingRoom();
+        repository.initializeAdmission(new EventAdmission(EVENT_ID, FIRST_JOIN.minusSeconds(10)));
         firstJoin = repository.join(new WaitingRoomEntry(EVENT_ID, USER_ID, FIRST_JOIN));
     }
 
     private void givenAdmissionAt(Instant admittedThrough) {
         givenWaitingRoom();
-        repository.advanceAdmission(new EventAdmission(EVENT_ID, admittedThrough));
+        repository.initializeAdmission(new EventAdmission(EVENT_ID, admittedThrough));
     }
 
     private void whenJoinTwice() {

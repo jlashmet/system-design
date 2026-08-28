@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableExc
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
+import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
@@ -51,6 +52,13 @@ class BookingExceptionHandlerTest {
     }
 
     @Test
+    void missingHoldIsNotFound() {
+        givenHoldNotFound();
+        whenExceptionIsHandled();
+        thenExpectNotFound("Hold not found");
+    }
+
+    @Test
     void joiningDisabledWaitingRoomIsConflict() {
         givenWaitingRoomDisabled();
         whenExceptionIsHandled();
@@ -86,6 +94,11 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenHoldNotFound() {
+        exception = new HoldNotFoundException(new HoldId("hold-missing"));
+        response = null;
+    }
+
     private void givenWaitingRoomDisabled() {
         exception = new WaitingRoomDisabledException(new EventId("event-123"));
         response = null;
@@ -103,6 +116,8 @@ class BookingExceptionHandlerTest {
             response = handler.bookingOwnershipUnavailable(unavailable);
         } else if (exception instanceof HoldOwnershipException ownership) {
             response = handler.holdOwnership(ownership);
+        } else if (exception instanceof HoldNotFoundException notFound) {
+            response = handler.holdNotFound(notFound);
         } else if (exception instanceof WaitingRoomDisabledException disabled) {
             response = handler.waitingRoomDisabled(disabled);
         } else if (exception instanceof BookingStorageUnavailableException storageUnavailable) {
@@ -135,6 +150,12 @@ class BookingExceptionHandlerTest {
         assertThat(response.getStatusCode().value()).isEqualTo(403);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getTitle()).isEqualTo("Hold access forbidden");
+    }
+
+    private void thenExpectNotFound(String title) {
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo(title);
     }
 
     private void thenExpectRetryableStorageUnavailable() {

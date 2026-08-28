@@ -70,6 +70,7 @@ public final class SeatMapProjectionLambdaHandler implements RequestHandler<Dyna
         copyString(source, newImage, "priceAmount");
         copyString(source, newImage, "priceCurrency");
         copyString(source, newImage, "status");
+        copyNumber(source, newImage, "holdExpiresAt");
         return StreamRecord.builder().newImage(newImage).build();
     }
 
@@ -80,6 +81,16 @@ public final class SeatMapProjectionLambdaHandler implements RequestHandler<Dyna
         com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue value = source.get(name);
         if (value != null && value.getS() != null) {
             target.put(name, AttributeValue.builder().s(value.getS()).build());
+        }
+    }
+
+    private static void copyNumber(
+            Map<String, com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue> source,
+            Map<String, AttributeValue> target,
+            String name) {
+        com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue value = source.get(name);
+        if (value != null && value.getN() != null) {
+            target.put(name, AttributeValue.builder().n(value.getN()).build());
         }
     }
 }

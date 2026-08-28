@@ -32,7 +32,9 @@ This document captures the Ticketmaster system-design discussion and the decisio
 - Search and seat-map views may be slightly stale.
 - The authoritative hold operation must be strongly consistent.
 - A user should hold all requested seats or none of them; partial fulfillment is not assumed.
+- Seat prices used for a hold are read from authoritative inventory and calculated by the server; the client never supplies the hold total.
 - Waiting-room ordering only needs to be approximately fair. We do not require a globally exact real-world arrival order.
+- A missing `EventAdmission` record means the waiting room is disabled for that event. Enabling a hot-event waiting room therefore creates its admission record before hold traffic is admitted.
 
 ## High-Level Architecture
 
@@ -191,6 +193,30 @@ Both the hold and the inventory item may contain the expiration time. This is de
 - the `Hold` owns the checkout workflow and grouping of seats;
 - the inventory item contains enough information to make an atomic availability decision without consulting another record.
 
+### Authoritative Price Snapshot
+
+The client selects seat IDs, not a total price. Before creating a hold, the booking service strongly reads the requested authoritative seat items and creates a `SeatPriceQuote` from their stored `priceAmount` and `priceCurrency` values.
+
+The server sums those seat prices and stores that total on the hold. The hold response returns the server-calculated total so the customer can see the amount that has been locked for checkout.
+
+The quote read and the seat claim are separate operations, so the transaction also conditions each claimed seat on its quoted price. Conceptually:
+
+```text
+quote A10 = $100
+quote A11 = $125
+        |
+        v
+server total = $225
+        |
+        v
+TransactWriteItems
+  claim A10 only if claimable AND price still $100
+  claim A11 only if claimable AND price still $125
+  create Hold(totalPrice = $225)
+```
+
+If any price changes between the quote and the transactional claim, the entire hold fails rather than silently selling at a stale price.
+
 ## Core Data Model
 
 ### Seat
@@ -238,9 +264,10 @@ expiresAt
 checkoutExpiresAt   nullable
 createdAt
 seatIds
+totalPrice
 ```
 
-The hold groups several exclusive seat claims into one checkout workflow.
+The hold groups several exclusive seat claims into one checkout workflow and preserves the authoritative server-side price snapshot used by checkout.
 
 ### Booking
 
@@ -290,9 +317,9 @@ The primary access pattern is:
 
 ### Atomic Seat Acquisition
 
-A seat claim uses a conditional write. It succeeds only when the seat is currently available or its previous hold has expired.
+A seat claim uses a conditional write. It succeeds only when the seat is currently available or its previous hold has expired, and when the authoritative price still matches the price quoted for this hold attempt.
 
-If two users compete for the same seat, only one conditional write succeeds.
+If two users compete for the same seat, only one conditional write succeeds. If a seat price changes after the quote but before the claim, the claim fails and the caller must refresh/retry instead of receiving a stale price.
 
 ### Multi-Seat Holds
 
@@ -354,7 +381,9 @@ The projection can be rebuilt from durable inventory state if necessary.
 
 The waiting room is not required for inventory correctness. Its purpose is to protect the rest of the system during extreme flash crowds and to control how many users can actively compete for seats.
 
-It can be enabled only for sufficiently hot events.
+It can be enabled only for sufficiently hot events. In the current model, an `EventAdmission` record means admission control is enabled for that event; if the record is absent, the waiting room is disabled and hold creation proceeds without an admission check.
+
+Operationally, a hot event must create its initial admission record before hold traffic is opened. The initial watermark can be set earlier than any legitimate join time so nobody is admitted until the controller intentionally advances it.
 
 ### No Physical Queue Required
 
@@ -418,7 +447,7 @@ overloaded
 
 Small, frequent watermark movements reduce the risk of admitting a large burst at once. The tradeoff is that admission rate is approximate rather than exact.
 
-An admitted user receives a short-lived admission token so the booking APIs can verify that the user was admitted without repeatedly performing complex queue logic.
+The current hold implementation performs strongly consistent reads of `EventAdmission` and the user's waiting-room entry before touching authoritative seat pricing/inventory. Because the watermark only moves forward, admission is monotonic once granted. A short-lived signed admission token could later replace those per-hold waiting-room reads as a performance optimization, but it is not required for correctness or for the current implementation.
 
 ## APIs Discussed
 
@@ -457,11 +486,16 @@ Example:
 
 ```json
 {
+  "userId": "user-456",
   "seatIds": ["A10", "A11", "A12"]
 }
 ```
 
-The operation is all-or-nothing. If any requested seat cannot be acquired, the hold fails rather than returning a partial group.
+The request does not contain a total price. The server reads authoritative seat prices, computes the hold total, and returns that price snapshot in `HoldResponse.totalPrice`.
+
+For an event with admission control enabled, the hold is rejected before seat pricing/inventory is touched unless the user's waiting-room entry is at or before the current admission watermark.
+
+The operation is all-or-nothing. If any requested seat cannot be acquired or its price changes after the quote, the hold fails rather than returning a partial group.
 
 ### Checkout Hold
 
@@ -717,13 +751,5 @@ The key invariant remains:
 9. **Multi-region reads versus writes:** reads may be active-active, while each event has one authoritative booking writer region.
 10. **Control metadata versus hard fencing:** strongly coordinated owner/epoch metadata prevents conflicting ownership transitions, but strict split-brain prevention still requires the previous regional writer to lose write capability before the new writer is enabled.
 11. **CDN versus live inventory:** cache stable/read-heavy content aggressively, but never use CDN state as the authority for seat acquisition.
-
-## Remaining Design Questions
-
-The major architecture is now settled. Remaining interview follow-ups are mostly about operational detail and capacity validation:
-
-- What exact downstream thresholds should control how quickly `admittedThrough` advances?
-- What concrete operational mechanism should automate hard-fencing a failed booking region before ownership transfer?
-- What transport should carry the low-volume enriched Event/Venue search projection when event administration enters scope?
-- What are the expected peak hold attempts per second after admission control, and how much headroom should each tier maintain?
-- What retention/TTL policies should apply to completed bookings, old holds, and waiting-room records?
+12. **Client display price versus authoritative hold price:** seat-map prices may be stale; the hold service re-reads authoritative prices, calculates the total server-side, and binds the claim transaction to that quote.
+13. **Waiting-room optimization versus enforcement:** admission tokens may reduce reads later, but the current correctness/load-shedding boundary is the strongly consistent admission check performed before seat pricing and claims.

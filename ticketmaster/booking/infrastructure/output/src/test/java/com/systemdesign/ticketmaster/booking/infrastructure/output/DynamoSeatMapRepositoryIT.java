@@ -11,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import io.floci.testcontainers.FlociContainer;
 import java.math.BigDecimal;
 import java.net.URI;
+import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
@@ -36,6 +37,7 @@ class DynamoSeatMapRepositoryIT {
     private static final SectionId SECTION_101 = new SectionId("101");
     private static final SectionId SECTION_102 = new SectionId("102");
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
+    private static final Instant HOLD_EXPIRES_AT = Instant.parse("2026-08-28T20:05:00Z");
 
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
@@ -44,6 +46,7 @@ class DynamoSeatMapRepositoryIT {
     private DynamoSeatMapRepository repository;
     private String tableName;
     private List<SeatMapSeat> actual;
+    private List<SectionId> sections;
 
     @AfterEach
     void tearDown() {
@@ -54,26 +57,24 @@ class DynamoSeatMapRepositoryIT {
     }
 
     @Test
-    void sectionReadModelReflectsLatestProjectedSeatState() {
+    void sectionReadModelReflectsLatestProjectedSeatStateAndHoldExpiry() {
         givenProjectedSeats(
-                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE),
-                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE));
-        whenProjectAndRead(seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD));
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE, null),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE, null));
+        whenProjectAndRead(seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD, HOLD_EXPIRES_AT));
         thenExpectSection(
-                seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD),
-                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE));
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD, HOLD_EXPIRES_AT),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE, null));
     }
 
     @Test
     void discoversEachProjectedSectionOnceWithoutScanningSeatPartitions() {
         givenProjectedSeats(
-                seat(SECTION_102, "B10", "B", "10", SeatStatus.AVAILABLE),
-                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE),
-                seat(SECTION_101, "A11", "A", "11", SeatStatus.HELD));
-
-        List<SectionId> sections = repository.findSections(EVENT_ID);
-
-        assertThat(sections).containsExactly(SECTION_101, SECTION_102);
+                seat(SECTION_102, "B10", "B", "10", SeatStatus.AVAILABLE, null),
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE, null),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.HELD, HOLD_EXPIRES_AT));
+        whenSectionsAreRead();
+        thenExpectSections(SECTION_101, SECTION_102);
     }
 
     private void givenProjectedSeats(SeatMapSeat... seats) {
@@ -97,6 +98,7 @@ class DynamoSeatMapRepositoryIT {
         repository = new DynamoSeatMapRepository(dynamoDb, tableName);
         for (SeatMapSeat seat : seats) repository.upsert(seat);
         actual = null;
+        sections = null;
     }
 
     private void whenProjectAndRead(SeatMapSeat updated) {
@@ -104,11 +106,25 @@ class DynamoSeatMapRepositoryIT {
         actual = repository.findSection(EVENT_ID, SECTION_101);
     }
 
+    private void whenSectionsAreRead() {
+        sections = repository.findSections(EVENT_ID);
+    }
+
     private void thenExpectSection(SeatMapSeat... expected) {
         assertThat(actual).containsExactly(expected);
     }
 
-    private static SeatMapSeat seat(SectionId sectionId, String seatId, String row, String number, SeatStatus status) {
-        return new SeatMapSeat(EVENT_ID, sectionId, new SeatId(seatId), row, number, PRICE, status);
+    private void thenExpectSections(SectionId... expected) {
+        assertThat(sections).containsExactly(expected);
+    }
+
+    private static SeatMapSeat seat(
+            SectionId sectionId,
+            String seatId,
+            String row,
+            String number,
+            SeatStatus status,
+            Instant holdExpiresAt) {
+        return new SeatMapSeat(EVENT_ID, sectionId, new SeatId(seatId), row, number, PRICE, status, holdExpiresAt);
     }
 }

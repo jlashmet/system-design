@@ -134,10 +134,16 @@ public final class ReconcileBookingHandler {
 
     private Booking ensurePaymentIntent(Booking booking) {
         if (booking.paymentIntentIdOptional().isPresent()) return booking;
-        PaymentIntent intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
-        Booking withIntent = booking.attachPaymentIntent(intent.id());
-        bookingRepository.savePaymentIntent(withIntent);
-        return withIntent;
+        try {
+            PaymentIntent intent = paymentGateway.createPaymentIntent(
+                    booking.id(), booking.totalPrice(), booking.id().value());
+            Booking withIntent = booking.attachPaymentIntent(intent.id());
+            bookingRepository.savePaymentIntent(withIntent);
+            return withIntent;
+        } catch (RuntimeException providerFailure) {
+            reschedule(booking);
+            throw providerFailure;
+        }
     }
 
     private Booking reschedule(Booking booking) {

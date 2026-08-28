@@ -1,6 +1,6 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import io.floci.testcontainers.FlociContainer;
@@ -32,6 +32,9 @@ class DynamoHoldIdempotencyIntegrityIT {
 
     private DynamoDbClient dynamoDb;
     private String tableName;
+    private HoldIdempotencyKey key;
+    private DynamoHoldRepository repository;
+    private Throwable thrown;
 
     @AfterEach
     void tearDown() {
@@ -45,6 +48,12 @@ class DynamoHoldIdempotencyIntegrityIT {
 
     @Test
     void mappingToMissingHoldFailsClosedInsteadOfLookingLikeANewRequest() {
+        givenIdempotencyMappingToMissingHold();
+        whenMappingIsResolved();
+        thenExpectIntegrityFailure();
+    }
+
+    private void givenIdempotencyMappingToMissingHold() {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
                 .region(Region.of(FLOCI.getRegion()))
@@ -64,8 +73,7 @@ class DynamoHoldIdempotencyIntegrityIT {
                         .keyType(KeyType.HASH)
                         .build())
                 .build());
-
-        HoldIdempotencyKey key = new HoldIdempotencyKey("retry-key");
+        key = new HoldIdempotencyKey("retry-key");
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
                 .item(Map.of(
@@ -73,11 +81,20 @@ class DynamoHoldIdempotencyIntegrityIT {
                         "entityType", string("HOLD_IDEMPOTENCY"),
                         "holdId", string("missing-hold")))
                 .build());
+        repository = new DynamoHoldRepository(dynamoDb, tableName);
+        thrown = null;
+    }
 
-        DynamoHoldRepository repository = new DynamoHoldRepository(dynamoDb, tableName);
+    private void whenMappingIsResolved() {
+        try {
+            repository.findByIdempotencyKey(key);
+        } catch (Throwable error) {
+            thrown = error;
+        }
+    }
 
-        assertThatThrownBy(() -> repository.findByIdempotencyKey(key))
-                .isInstanceOf(IllegalStateException.class)
+    private void thenExpectIntegrityFailure() {
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("references missing hold");
     }
 

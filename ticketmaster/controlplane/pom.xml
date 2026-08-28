@@ -10,6 +10,7 @@
     <artifactId>controlplane-aggregator</artifactId>
     <packaging>pom</packaging>
     <modules>
+        <module>api</module>
         <module>domain</module>
         <module>application</module>
         <module>infrastructure</module>

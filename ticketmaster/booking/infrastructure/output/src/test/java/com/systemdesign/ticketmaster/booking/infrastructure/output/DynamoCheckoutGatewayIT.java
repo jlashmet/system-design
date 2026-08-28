@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
@@ -96,10 +97,10 @@ class DynamoCheckoutGatewayIT {
     }
 
     @Test
-    void checkoutSeatCanBeReclaimedAfterCheckoutDeadlineWithoutCleanup() {
+    void checkoutSeatCannotBeBlindlyReclaimedAfterCheckoutDeadline() {
         givenStartedCheckout("A10");
         whenAttemptNewHoldAfterCheckoutDeadline();
-        thenExpectReclaimedByLaterHold("A10");
+        thenExpectSeatClaimConflictAndOriginalCheckout("A10");
     }
 
     private void givenActiveHold(String... seatIds) {
@@ -170,7 +171,7 @@ class DynamoCheckoutGatewayIT {
                 .containsExactly(pendingBooking);
         for (String seatId : seatIds) {
             Map<String, AttributeValue> item = seatItem(seatId);
-            assertThat(item.get("status").s()).isEqualTo("HELD");
+            assertThat(item.get("status").s()).isEqualTo("CHECKOUT");
             assertThat(item.get("holdId").s()).isEqualTo(activeHold.id().value());
             assertThat(Long.parseLong(item.get("holdExpiresAt").n()))
                     .isEqualTo(checkoutHold.checkoutExpiresAt().toEpochMilli());
@@ -204,13 +205,12 @@ class DynamoCheckoutGatewayIT {
         }
     }
 
-    private void thenExpectReclaimedByLaterHold(String seatId) {
-        assertThat(thrown).isNull();
-        assertThat(holdRepository.findById(laterHold.id())).contains(laterHold);
+    private void thenExpectSeatClaimConflictAndOriginalCheckout(String seatId) {
+        assertThat(thrown).isInstanceOf(SeatClaimConflictException.class);
+        assertThat(holdRepository.findById(laterHold.id())).isEmpty();
         Map<String, AttributeValue> item = seatItem(seatId);
-        assertThat(item.get("status").s()).isEqualTo("HELD");
-        assertThat(item.get("holdId").s()).isEqualTo(laterHold.id().value());
-        assertThat(Long.parseLong(item.get("holdExpiresAt").n())).isEqualTo(laterHold.expiresAt().toEpochMilli());
+        assertThat(item.get("status").s()).isEqualTo("CHECKOUT");
+        assertThat(item.get("holdId").s()).isEqualTo(activeHold.id().value());
     }
 
     private void initializeDynamo() {

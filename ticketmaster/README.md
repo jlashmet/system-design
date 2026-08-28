@@ -141,6 +141,21 @@ The Search Lambda uses the OpenSearch Java client's AWS SDK v2 transport, so req
 
 Malformed/unsupported projection messages fail the Lambda batch rather than being silently dropped. Because projection writes are idempotent, whole-batch retry is the simple default; production queue configuration should include a DLQ/redrive policy for poison messages.
 
+## Search Runtime Notes
+
+The normal Search HTTP service uses the same OpenSearch client boundary as the projection consumer. Local/Floci development keeps unsigned HTTP enabled by default; AWS deployments can enable SigV4 without changing application or infrastructure-output code:
+
+```text
+ticketmaster.search.endpoint=http://localhost:9200
+ticketmaster.search.connect-timeout-ms=200
+ticketmaster.search.response-timeout-ms=450
+ticketmaster.search.aws-signing-enabled=false
+ticketmaster.search.aws-signing-service=es
+ticketmaster.aws.region=us-west-2
+```
+
+For Amazon OpenSearch Service set `ticketmaster.search.aws-signing-enabled=true` with signing service `es`. For OpenSearch Serverless use signing service `aoss`. The 200 ms connect and 450 ms socket/response defaults intentionally bound backend waits to support the sub-500 ms search latency target; callers may receive `503` rather than waiting on a long OpenSearch timeout.
+
 ## Testing
 
 The test layers follow `../docs/TESTING.md`:

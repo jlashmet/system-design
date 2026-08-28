@@ -9,9 +9,11 @@
   </parent>
   <artifactId>controlplane-architecture</artifactId>
   <dependencies>
+    <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-api</artifactId><version>${project.version}</version><scope>test</scope></dependency>
     <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-domain</artifactId><version>${project.version}</version><scope>test</scope></dependency>
     <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-application</artifactId><version>${project.version}</version><scope>test</scope></dependency>
     <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-infrastructure-common</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+    <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-infrastructure-input</artifactId><version>${project.version}</version><scope>test</scope></dependency>
     <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-infrastructure-output</artifactId><version>${project.version}</version><scope>test</scope></dependency>
     <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>controlplane-bootstrap</artifactId><version>${project.version}</version><scope>test</scope></dependency>
     <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>

@@ -15,11 +15,17 @@ import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Currency;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
@@ -105,6 +111,55 @@ class DynamoHoldRepositoryIT {
         assertThat(seatItem("A11").get("status").s()).isEqualTo("AVAILABLE");
     }
 
+    @Test
+    void exactlyOneConcurrentContenderCanClaimTheSameSeat() throws Exception {
+        given(availableSeat("A10", ONE_HUNDRED_DOLLARS));
+        Set<SeatId> seats = seatIds("A10");
+        SeatPriceQuote quote = repository.quoteSeatPrices(EVENT_ID, seats);
+
+        List<RaceResult> results = race(16, index ->
+                claim("race-" + index, seats, quote));
+
+        List<RaceResult> winners = results.stream().filter(RaceResult::won).toList();
+        assertThat(winners).hasSize(1);
+        assertThat(results.stream().filter(result -> result.error() instanceof SeatClaimConflictException).count())
+                .isEqualTo(15);
+        assertThat(seatItem("A10").get("holdId").s()).isEqualTo(winners.getFirst().holdId());
+    }
+
+    @Test
+    void overlappingMultiSeatClaimsRemainAllOrNothingUnderConcurrency() throws Exception {
+        given(
+                availableSeat("A10", ONE_HUNDRED_DOLLARS),
+                availableSeat("A11", ONE_HUNDRED_DOLLARS),
+                availableSeat("A12", ONE_HUNDRED_DOLLARS));
+
+        Set<SeatId> leftSeats = seatIds("A10", "A11");
+        Set<SeatId> rightSeats = seatIds("A11", "A12");
+        SeatPriceQuote leftQuote = repository.quoteSeatPrices(EVENT_ID, leftSeats);
+        SeatPriceQuote rightQuote = repository.quoteSeatPrices(EVENT_ID, rightSeats);
+
+        List<RaceResult> results = race(List.of(
+                () -> claim("left-hold", leftSeats, leftQuote),
+                () -> claim("right-hold", rightSeats, rightQuote)));
+
+        RaceResult winner = results.stream().filter(RaceResult::won).findFirst().orElseThrow();
+        RaceResult loser = results.stream().filter(result -> !result.won()).findFirst().orElseThrow();
+        assertThat(results.stream().filter(RaceResult::won)).hasSize(1);
+        assertThat(loser.error()).isInstanceOf(SeatClaimConflictException.class);
+        assertThat(repository.findById(new HoldId(loser.holdId()))).isEmpty();
+
+        if (winner.holdId().equals("left-hold")) {
+            assertHeldBy("A10", "left-hold");
+            assertHeldBy("A11", "left-hold");
+            assertAvailable("A12");
+        } else {
+            assertAvailable("A10");
+            assertHeldBy("A11", "right-hold");
+            assertHeldBy("A12", "right-hold");
+        }
+    }
+
     private void given(SeatFixture... seats) {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
@@ -154,6 +209,48 @@ class DynamoHoldRepositoryIT {
         }
     }
 
+    private RaceResult claim(String holdId, Set<SeatId> seats, SeatPriceQuote quote) {
+        Hold hold = activeHold(holdId, seats, quote.totalPrice());
+        try {
+            repository.createWithSeatClaims(hold, quote, NOW);
+            return new RaceResult(holdId, null);
+        } catch (Throwable error) {
+            return new RaceResult(holdId, error);
+        }
+    }
+
+    private List<RaceResult> race(int contenders, IndexedClaim claim) throws Exception {
+        List<Claim> claims = new ArrayList<>();
+        for (int i = 0; i < contenders; i++) {
+            int index = i;
+            claims.add(() -> claim.run(index));
+        }
+        return race(claims);
+    }
+
+    private List<RaceResult> race(List<Claim> claims) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(claims.size());
+        CountDownLatch ready = new CountDownLatch(claims.size());
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<RaceResult>> futures = claims.stream()
+                    .map(claim -> executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return claim.run();
+                    }))
+                    .toList();
+            ready.await();
+            start.countDown();
+
+            List<RaceResult> results = new ArrayList<>();
+            for (Future<RaceResult> future : futures) results.add(future.get());
+            return results;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private void thenExpectHeldBy(String holdId, String... seatIds) {
         assertThat(thrown).isNull();
         assertThat(repository.findById(new HoldId(holdId))).contains(requestedHold);
@@ -168,6 +265,16 @@ class DynamoHoldRepositoryIT {
     private void thenExpectConflictAndAvailable(String seatId) {
         assertThat(thrown).isInstanceOf(SeatClaimConflictException.class);
         assertThat(repository.findById(requestedHold.id())).isEmpty();
+        assertAvailable(seatId);
+    }
+
+    private void assertHeldBy(String seatId, String holdId) {
+        Map<String, AttributeValue> item = seatItem(seatId);
+        assertThat(item.get("status").s()).isEqualTo("HELD");
+        assertThat(item.get("holdId").s()).isEqualTo(holdId);
+    }
+
+    private void assertAvailable(String seatId) {
         Map<String, AttributeValue> item = seatItem(seatId);
         assertThat(item.get("status").s()).isEqualTo("AVAILABLE");
         assertThat(item).doesNotContainKeys("holdId", "holdExpiresAt");
@@ -219,6 +326,22 @@ class DynamoHoldRepositoryIT {
 
     private static AttributeValue number(long value) {
         return AttributeValue.builder().n(Long.toString(value)).build();
+    }
+
+    @FunctionalInterface
+    private interface Claim {
+        RaceResult run();
+    }
+
+    @FunctionalInterface
+    private interface IndexedClaim {
+        RaceResult run(int index);
+    }
+
+    private record RaceResult(String holdId, Throwable error) {
+        boolean won() {
+            return error == null;
+        }
     }
 
     private record SeatFixture(String seatId, String status, String holdId, Instant expiresAt, Price price) {

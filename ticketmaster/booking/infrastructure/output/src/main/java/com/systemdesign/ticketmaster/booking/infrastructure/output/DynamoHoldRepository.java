@@ -73,8 +73,12 @@ public final class DynamoHoldRepository implements HoldRepository {
         int attempt = 0;
         while (!requestItems.isEmpty()) {
             attempt++;
-            BatchGetItemResponse response = dynamoDb.batchGetItem(BatchGetItemRequest.builder()
-                    .requestItems(requestItems).build());
+            Map<String, KeysAndAttributes> currentRequestItems = requestItems;
+            BatchGetItemResponse response = DynamoBookingCall.execute(
+                    "authoritative seat price quote",
+                    () -> dynamoDb.batchGetItem(BatchGetItemRequest.builder()
+                            .requestItems(currentRequestItems)
+                            .build()));
             for (Map<String, AttributeValue> item : response.responses().getOrDefault(tableName, List.of())) {
                 AttributeValue pkValue = item.get(PK);
                 SeatId seatId = pkValue == null ? null : seatByPk.get(pkValue.s());
@@ -143,17 +147,22 @@ public final class DynamoHoldRepository implements HoldRepository {
                 throw new BookingStorageUnavailableException("seat claim transaction", e);
             }
             throw new SeatClaimConflictException(hold.eventId(), hold.seatIds());
+        } catch (software.amazon.awssdk.services.dynamodb.model.DynamoDbException
+                 | software.amazon.awssdk.core.exception.SdkClientException unavailable) {
+            throw new BookingStorageUnavailableException("seat claim transaction", unavailable);
         }
     }
 
     @Override
     public Optional<Hold> findById(HoldId holdId) {
         Objects.requireNonNull(holdId, "holdId");
-        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(holdPk(holdId))))
-                        .consistentRead(true)
-                        .build())
+        Map<String, AttributeValue> item = DynamoBookingCall.execute(
+                        "hold lookup",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(holdPk(holdId))))
+                                .consistentRead(true)
+                                .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(fromItem(item));
@@ -162,11 +171,13 @@ public final class DynamoHoldRepository implements HoldRepository {
     @Override
     public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey idempotencyKey) {
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
-        Map<String, AttributeValue> mapping = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(DynamoKeys.holdIdempotencyPk(idempotencyKey))))
-                        .consistentRead(true)
-                        .build())
+        Map<String, AttributeValue> mapping = DynamoBookingCall.execute(
+                        "hold idempotency lookup",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(DynamoKeys.holdIdempotencyPk(idempotencyKey))))
+                                .consistentRead(true)
+                                .build()))
                 .item();
         if (mapping == null || mapping.isEmpty()) return Optional.empty();
         AttributeValue holdId = mapping.get("holdId");

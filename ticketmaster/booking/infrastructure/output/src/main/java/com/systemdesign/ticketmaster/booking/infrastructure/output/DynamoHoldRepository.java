@@ -8,6 +8,8 @@ import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
+import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
+import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -40,9 +42,43 @@ public final class DynamoHoldRepository implements HoldRepository {
     }
 
     @Override
-    public void createWithSeatClaims(Hold hold, Instant now) {
+    public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) {
+        Objects.requireNonNull(eventId, "eventId");
+        Objects.requireNonNull(seatIds, "seatIds");
+        if (seatIds.isEmpty()) throw new IllegalArgumentException("at least one seat is required");
+
+        Map<SeatId, Price> prices = new HashMap<>();
+        for (SeatId seatId : seatIds) {
+            Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
+                            .tableName(tableName)
+                            .key(Map.of(PK, string(seatPk(eventId, seatId))))
+                            .consistentRead(true)
+                            .build())
+                    .item();
+            if (item == null || item.isEmpty()) {
+                throw new SeatUnavailableException(seatId);
+            }
+            AttributeValue amount = item.get("priceAmount");
+            AttributeValue currency = item.get("priceCurrency");
+            if (amount == null || amount.s() == null || currency == null || currency.s() == null) {
+                throw new IllegalStateException("authoritative seat is missing price: " + seatId.value());
+            }
+            prices.put(seatId, new Price(new BigDecimal(amount.s()), Currency.getInstance(currency.s())));
+        }
+        return new SeatPriceQuote(eventId, prices);
+    }
+
+    @Override
+    public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now) {
         Objects.requireNonNull(hold, "hold");
+        Objects.requireNonNull(quote, "quote");
         Objects.requireNonNull(now, "now");
+        if (!quote.eventId().equals(hold.eventId()) || !quote.seatIds().equals(hold.seatIds())) {
+            throw new IllegalArgumentException("seat price quote must match hold event and seats");
+        }
+        if (!quote.totalPrice().equals(hold.totalPrice())) {
+            throw new IllegalArgumentException("hold total must match authoritative seat price quote");
+        }
         if (hold.seatIds().size() > 97) {
             throw new IllegalArgumentException("a hold cannot contain more than 97 seats");
         }
@@ -50,7 +86,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         List<TransactWriteItem> writes = new ArrayList<>();
         for (SeatId seatId : hold.seatIds()) {
             writes.add(TransactWriteItem.builder()
-                    .update(seatClaimUpdate(hold, seatId, now))
+                    .update(seatClaimUpdate(hold, seatId, quote.prices().get(seatId), now))
                     .build());
         }
         writes.add(TransactWriteItem.builder()
@@ -86,22 +122,27 @@ public final class DynamoHoldRepository implements HoldRepository {
         return Optional.of(fromItem(item));
     }
 
-    private Update seatClaimUpdate(Hold hold, SeatId seatId, Instant now) {
+    private Update seatClaimUpdate(Hold hold, SeatId seatId, Price quotedPrice, Instant now) {
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(seatPk(hold.eventId(), seatId))))
                 .updateExpression("SET #status = :held, #holdId = :holdId, #holdExpiresAt = :expires")
-                .conditionExpression("#status = :available OR (#status = :held AND #holdExpiresAt <= :now)")
+                .conditionExpression("(#status = :available OR (#status = :held AND #holdExpiresAt <= :now)) "
+                        + "AND #priceAmount = :priceAmount AND #priceCurrency = :priceCurrency")
                 .expressionAttributeNames(Map.of(
                         "#status", "status",
                         "#holdId", "holdId",
-                        "#holdExpiresAt", "holdExpiresAt"))
+                        "#holdExpiresAt", "holdExpiresAt",
+                        "#priceAmount", "priceAmount",
+                        "#priceCurrency", "priceCurrency"))
                 .expressionAttributeValues(Map.of(
                         ":available", string("AVAILABLE"),
                         ":held", string("HELD"),
                         ":holdId", string(hold.id().value()),
                         ":expires", number(hold.expiresAt().toEpochMilli()),
-                        ":now", number(now.toEpochMilli())))
+                        ":now", number(now.toEpochMilli()),
+                        ":priceAmount", string(quotedPrice.amount().toPlainString()),
+                        ":priceCurrency", string(quotedPrice.currency().getCurrencyCode())))
                 .build();
     }
 

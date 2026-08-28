@@ -42,7 +42,7 @@ public final class CreateHoldHandler {
         if (seats.size() != command.seatIds().size()) throw new IllegalArgumentException("duplicate seats are not allowed");
 
         eventWriteAuthority.assertMayWrite(command.eventId());
-        Hold existing = holdRepository.findByIdempotencyKey(command.idempotencyKey()).orElse(null);
+        Hold existing = findIdempotentHold(command).orElse(null);
         if (existing != null) return requireSameRequest(command, seats, existing);
 
         requireAdmissionWhenEnabled(command);
@@ -58,10 +58,15 @@ public final class CreateHoldHandler {
             holdRepository.createWithSeatClaims(hold, quote, now, command.idempotencyKey());
             return hold;
         } catch (SeatClaimConflictException conflict) {
-            return holdRepository.findByIdempotencyKey(command.idempotencyKey())
+            return findIdempotentHold(command)
                     .map(previous -> requireSameRequest(command, seats, previous))
                     .orElseThrow(() -> conflict);
         }
+    }
+
+    private java.util.Optional<Hold> findIdempotentHold(CreateHoldCommand command) {
+        return holdRepository.findByIdempotencyKey(
+                command.eventId(), command.userId(), command.idempotencyKey());
     }
 
     private Hold requireSameRequest(CreateHoldCommand command, Set<SeatId> seats, Hold existing) {

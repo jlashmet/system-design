@@ -17,6 +17,7 @@ import java.util.Objects;
 import java.util.Optional;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
@@ -64,18 +65,25 @@ public final class DynamoBookingRepository implements BookingRepository {
         Objects.requireNonNull(booking, "booking");
         String intentId = booking.paymentIntentIdOptional()
                 .orElseThrow(() -> new IllegalArgumentException("booking has no payment intent"));
-        DynamoBookingCall.execute("save payment intent", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
-                .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
-                .updateExpression("SET #paymentIntentId = :intent")
-                .conditionExpression("#status = :pending AND (attribute_not_exists(#paymentIntentId) OR #paymentIntentId = :intent)")
-                .expressionAttributeNames(Map.of(
-                        "#status", "status",
-                        "#paymentIntentId", "paymentIntentId"))
-                .expressionAttributeValues(Map.of(
-                        ":pending", string("PENDING_PAYMENT"),
-                        ":intent", string(intentId)))
-                .build()));
+        try {
+            DynamoBookingCall.execute("save payment intent", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
+                    .updateExpression("SET #paymentIntentId = :intent")
+                    .conditionExpression("(#status = :pending AND attribute_not_exists(#paymentIntentId)) "
+                            + "OR #paymentIntentId = :intent")
+                    .expressionAttributeNames(Map.of(
+                            "#status", "status",
+                            "#paymentIntentId", "paymentIntentId"))
+                    .expressionAttributeValues(Map.of(
+                            ":pending", string("PENDING_PAYMENT"),
+                            ":intent", string(intentId)))
+                    .build()));
+        } catch (ConditionalCheckFailedException conflictingIntent) {
+            throw new IllegalStateException(
+                    "booking already has a different payment intent: " + booking.id().value(),
+                    conflictingIntent);
+        }
     }
 
     @Override
@@ -84,20 +92,25 @@ public final class DynamoBookingRepository implements BookingRepository {
         if (booking.nextReconcileAt() == null || booking.reconcileShard() == null) {
             throw new IllegalArgumentException("booking is not scheduled for reconciliation");
         }
-        DynamoBookingCall.execute("reschedule payment reconciliation", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
-                .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
-                .updateExpression("SET #nextReconcileAt = :next")
-                .conditionExpression("#status = :pending AND #reconcileShard = :shard AND #nextReconcileAt < :next")
-                .expressionAttributeNames(Map.of(
-                        "#status", "status",
-                        "#reconcileShard", "reconcileShard",
-                        "#nextReconcileAt", "nextReconcileAt"))
-                .expressionAttributeValues(Map.of(
-                        ":pending", string("PENDING_PAYMENT"),
-                        ":shard", string(DynamoKeys.reconciliationShard(booking.reconcileShard())),
-                        ":next", DynamoItemCodec.number(booking.nextReconcileAt().toEpochMilli())))
-                .build()));
+        try {
+            DynamoBookingCall.execute("reschedule payment reconciliation", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
+                    .updateExpression("SET #nextReconcileAt = :next")
+                    .conditionExpression("#status = :pending AND #reconcileShard = :shard AND #nextReconcileAt < :next")
+                    .expressionAttributeNames(Map.of(
+                            "#status", "status",
+                            "#reconcileShard", "reconcileShard",
+                            "#nextReconcileAt", "nextReconcileAt"))
+                    .expressionAttributeValues(Map.of(
+                            ":pending", string("PENDING_PAYMENT"),
+                            ":shard", string(DynamoKeys.reconciliationShard(booking.reconcileShard())),
+                            ":next", DynamoItemCodec.number(booking.nextReconcileAt().toEpochMilli())))
+                    .build()));
+        } catch (ConditionalCheckFailedException alreadyAdvanced) {
+            // Another reconciler may have scheduled a later attempt or finalized the Booking.
+            // Both outcomes are strictly further along than this stale retry request.
+        }
     }
 
     @Override

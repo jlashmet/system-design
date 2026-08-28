@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 class AdmissionRegulationSchedulerTest {
     private static final Instant NOW = Instant.parse("2026-08-28T17:00:00Z");
+    private static final Clock FIXED_CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final EventId FIRST = new EventId("event-1");
     private static final EventId SECOND = new EventId("event-2");
 
@@ -34,18 +35,18 @@ class AdmissionRegulationSchedulerTest {
         RegulateAdmissionHandler handler = new RegulateAdmissionHandler(
                 repository,
                 ignored -> AdmissionCapacity.OVERLOADED,
-                Clock.fixed(NOW, ZoneOffset.UTC),
+                FIXED_CLOCK,
                 Duration.ofSeconds(2),
                 Duration.ofMillis(500));
 
         new AdmissionRegulationScheduler(
-                new EnableAdmissionHandler(repository),
+                new EnableAdmissionHandler(repository, FIXED_CLOCK),
                 handler,
                 List.of(FIRST, SECOND));
 
         assertThat(repository.admissions).containsKeys(FIRST, SECOND);
-        assertThat(repository.admissions.get(FIRST).admittedThrough()).isEqualTo(Instant.EPOCH);
-        assertThat(repository.admissions.get(SECOND).admittedThrough()).isEqualTo(Instant.EPOCH);
+        assertThat(repository.admissions.get(FIRST).admittedThrough()).isEqualTo(NOW);
+        assertThat(repository.admissions.get(SECOND).admittedThrough()).isEqualTo(NOW);
     }
 
     @Test
@@ -57,11 +58,11 @@ class AdmissionRegulationSchedulerTest {
         RegulateAdmissionHandler handler = new RegulateAdmissionHandler(
                 repository,
                 health,
-                Clock.fixed(NOW, ZoneOffset.UTC),
+                FIXED_CLOCK,
                 Duration.ofSeconds(2),
                 Duration.ofMillis(500));
         AdmissionRegulationScheduler scheduler = new AdmissionRegulationScheduler(
-                new EnableAdmissionHandler(repository),
+                new EnableAdmissionHandler(repository, FIXED_CLOCK),
                 handler,
                 List.of(FIRST, SECOND));
 

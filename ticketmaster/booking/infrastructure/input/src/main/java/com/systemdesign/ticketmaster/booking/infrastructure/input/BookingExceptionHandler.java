@@ -6,6 +6,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableExc
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -15,6 +16,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice(basePackages = "com.systemdesign.ticketmaster.booking.infrastructure.input")
 public final class BookingExceptionHandler {
 
+    static final String BOOKING_REGION_HEADER = "X-Booking-Region";
+
     @ExceptionHandler(AdmissionRequiredException.class)
     ResponseEntity<ProblemDetail> admissionRequired(AdmissionRequiredException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
@@ -22,10 +25,22 @@ public final class BookingExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
     }
 
-    @ExceptionHandler({WrongBookingRegionException.class, EventOwnershipUnavailableException.class})
-    ResponseEntity<ProblemDetail> bookingRegionUnavailable(RuntimeException exception) {
+    @ExceptionHandler(WrongBookingRegionException.class)
+    ResponseEntity<ProblemDetail> wrongBookingRegion(WrongBookingRegionException exception) {
+        HttpStatus status = HttpStatus.valueOf(421);
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(status, exception.getMessage());
+        detail.setTitle("Misdirected booking request");
+        detail.setProperty("eventId", exception.eventId().value());
+        detail.setProperty("ownerRegion", exception.ownerRegion());
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(BOOKING_REGION_HEADER, exception.ownerRegion());
+        return new ResponseEntity<>(detail, headers, status);
+    }
+
+    @ExceptionHandler(EventOwnershipUnavailableException.class)
+    ResponseEntity<ProblemDetail> bookingOwnershipUnavailable(EventOwnershipUnavailableException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
-        detail.setTitle("Booking region unavailable");
+        detail.setTitle("Booking ownership unavailable");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(detail);
     }
 

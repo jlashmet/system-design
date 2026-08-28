@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.application;
 
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
@@ -17,16 +18,19 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class CreateHoldHandler {
+    private final EventWriteAuthority eventWriteAuthority;
     private final HoldRepository holdRepository;
     private final WaitingRoomRepository waitingRoomRepository;
     private final Clock clock;
     private final Duration holdDuration;
 
     public CreateHoldHandler(
+            EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
             WaitingRoomRepository waitingRoomRepository,
             Clock clock,
             Duration holdDuration) {
+        this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
         this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
         this.waitingRoomRepository = Objects.requireNonNull(waitingRoomRepository, "waitingRoomRepository");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -39,6 +43,7 @@ public final class CreateHoldHandler {
         Set<SeatId> seats = new LinkedHashSet<>(command.seatIds());
         if (seats.size() != command.seatIds().size()) throw new IllegalArgumentException("duplicate seats are not allowed");
 
+        eventWriteAuthority.assertMayWrite(command.eventId());
         requireAdmissionWhenEnabled(command);
 
         SeatPriceQuote quote = holdRepository.quoteSeatPrices(command.eventId(), seats);

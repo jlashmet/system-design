@@ -2,7 +2,9 @@ package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
+import com.systemdesign.ticketmaster.booking.domain.UserId;
 import io.floci.testcontainers.FlociContainer;
 import java.net.URI;
 import java.util.Map;
@@ -27,6 +29,9 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 @Testcontainers
 class DynamoHoldIdempotencyIntegrityIT {
+    private static final EventId EVENT_ID = new EventId("event-1");
+    private static final UserId USER_ID = new UserId("user-1");
+
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
 
@@ -77,8 +82,11 @@ class DynamoHoldIdempotencyIntegrityIT {
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
                 .item(Map.of(
-                        "pk", string(DynamoKeys.holdIdempotencyPk(key)),
+                        "pk", string(DynamoKeys.holdIdempotencyPk(EVENT_ID, USER_ID, key)),
                         "entityType", string("HOLD_IDEMPOTENCY"),
+                        "eventId", string(EVENT_ID.value()),
+                        "userId", string(USER_ID.value()),
+                        "idempotencyKey", string(key.value()),
                         "holdId", string("missing-hold")))
                 .build());
         repository = new DynamoHoldRepository(dynamoDb, tableName);
@@ -87,7 +95,7 @@ class DynamoHoldIdempotencyIntegrityIT {
 
     private void whenMappingIsResolved() {
         try {
-            repository.findByIdempotencyKey(key);
+            repository.findByIdempotencyKey(EVENT_ID, USER_ID, key);
         } catch (Throwable error) {
             thrown = error;
         }

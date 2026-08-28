@@ -11,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
@@ -40,49 +41,34 @@ class StartCheckoutHandlerTest {
             throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
         };
         StartCheckoutHandler handler = new StartCheckoutHandler(
-                wrongRegion,
-                new UnusedHoldRepository(),
-                bookingRepository,
-                new UnusedCheckoutGateway(),
-                new UnusedPaymentGateway(),
-                Clock.fixed(NOW, ZoneOffset.UTC),
-                Duration.ofMinutes(10),
-                Duration.ofSeconds(30),
-                16);
+                wrongRegion, new UnusedHoldRepository(), bookingRepository, new UnusedCheckoutGateway(),
+                new UnusedPaymentGateway(), Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofMinutes(10),
+                Duration.ofSeconds(30), 16);
 
         assertThatThrownBy(() -> handler.handle(new StartCheckoutCommand(EVENT_ID, HOLD_ID, "idem-1")))
                 .isInstanceOf(WrongBookingRegionException.class);
-
         assertThat(bookingRepository.idempotencyReads).isZero();
     }
 
     private static final class TrackingBookingRepository implements BookingRepository {
         private int idempotencyReads;
-
         @Override public Optional<Booking> findById(BookingId bookingId) { return Optional.empty(); }
-        @Override
-        public Optional<Booking> findByCheckoutIdempotencyKey(
-                EventId eventId, HoldId holdId, String idempotencyKey) {
+        @Override public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) {
             idempotencyReads++;
             return Optional.empty();
         }
         @Override public void savePaymentIntent(Booking booking) { throw new AssertionError("not expected"); }
         @Override public void rescheduleReconciliation(Booking booking) { throw new AssertionError("not expected"); }
-        @Override public List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit) {
-            return List.of();
-        }
+        @Override public List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit) { return List.of(); }
     }
 
     private static final class UnusedHoldRepository implements HoldRepository {
-        @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) {
+        @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new AssertionError("not expected"); }
+        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) {
             throw new AssertionError("not expected");
         }
-        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now) {
-            throw new AssertionError("not expected");
-        }
-        @Override public Optional<Hold> findById(HoldId holdId) {
-            throw new AssertionError("not expected");
-        }
+        @Override public Optional<Hold> findById(HoldId holdId) { throw new AssertionError("not expected"); }
+        @Override public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) { throw new AssertionError("not expected"); }
     }
 
     private static final class UnusedCheckoutGateway implements CheckoutGateway {
@@ -92,9 +78,7 @@ class StartCheckoutHandlerTest {
     }
 
     private static final class UnusedPaymentGateway implements PaymentGateway {
-        @Override public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String idempotencyKey) {
-            throw new AssertionError("not expected");
-        }
+        @Override public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String key) { throw new AssertionError("not expected"); }
         @Override public PaymentIntentStatus getPaymentStatus(String paymentIntentId) { throw new AssertionError("not expected"); }
         @Override public PaymentIntentStatus cancelPaymentIntent(String paymentIntentId) { throw new AssertionError("not expected"); }
     }

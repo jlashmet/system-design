@@ -1,8 +1,11 @@
 package com.systemdesign.ticketmaster.events.bootstrap;
 
+import com.systemdesign.ticketmaster.events.application.BuildEventSearchProjectionHandler;
 import com.systemdesign.ticketmaster.events.application.GetEventHandler;
 import com.systemdesign.ticketmaster.events.domain.EventRepository;
+import com.systemdesign.ticketmaster.events.domain.VenueRepository;
 import com.systemdesign.ticketmaster.events.infrastructure.output.DynamoEventRepository;
+import com.systemdesign.ticketmaster.events.infrastructure.output.DynamoVenueRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -29,7 +32,21 @@ public class EventsServiceApplication {
     }
 
     @Bean
+    VenueRepository venueRepository(
+            DynamoDbClient dynamoDbClient,
+            @Value("${ticketmaster.events.table-name:ticketmaster-events}") String tableName) {
+        return new DynamoVenueRepository(dynamoDbClient, tableName);
+    }
+
+    @Bean
     GetEventHandler getEventHandler(EventRepository eventRepository) {
         return new GetEventHandler(eventRepository);
+    }
+
+    @Bean
+    BuildEventSearchProjectionHandler buildEventSearchProjectionHandler(
+            EventRepository eventRepository,
+            VenueRepository venueRepository) {
+        return new BuildEventSearchProjectionHandler(eventRepository, venueRepository);
     }
 }

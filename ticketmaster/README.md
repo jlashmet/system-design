@@ -34,6 +34,8 @@ Authoritative booking mutations call the ControlPlane ownership API through `Eve
 
 If a request reaches the wrong booking region, the API returns HTTP `421 Misdirected Request` with `X-Booking-Region` identifying the current owner. If ownership cannot be established at all, Booking fails closed with HTTP `503`.
 
+Expected DynamoDB conditional contention remains a booking conflict (`409`). Transaction cancellations that contain throttling, transaction-conflict, capacity, or otherwise non-conditional/unknown reasons are treated as temporary storage unavailability instead. They surface as `503 Service Unavailable` with `Retry-After: 1`, so a caller is not incorrectly told that the selected seats were necessarily taken when the correct action may simply be to retry.
+
 Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
 
 ### Trusted user identity
@@ -60,6 +62,16 @@ POST /demo/bookings/{bookingId}/payment-success
 
 That endpoint marks only the in-memory demo provider intent successful and immediately invokes the normal `ReconcileBookingHandler`. It therefore reaches `Booking=CONFIRMED`, `Hold=CONVERTED`, and `Seat=BOOKED` through the same authoritative finalization transaction used by provider completion/reconciliation. It does **not** bypass booking ownership, hold state, or checkout invariants. The endpoint is disabled unless the property above is explicitly set and must not be enabled in production; a production `PaymentGateway` learns status from a verified payment provider response/webhook instead.
 
+### Waiting-room runtime
+
+Waiting-room entries, admission watermarks, and regulator leases use a table separate from the regional authoritative booking table:
+
+```text
+ticketmaster.booking.waiting-room-table-name=ticketmaster-waiting-room
+```
+
+The intended AWS deployment for this table is a globally consistent DynamoDB table because waiting-room operations are single-item strongly consistent reads/writes/conditionals and do not require DynamoDB transaction APIs. This lets a user join/check admission in multiple regions while the authoritative hold region observes the same admission state.
+
 Waiting-room regulation is schedulable but conservative by default. Runtime properties include:
 
 ```text
@@ -68,9 +80,14 @@ ticketmaster.booking.admission.capacity=OVERLOADED
 ticketmaster.booking.admission.healthy-advance=PT2S
 ticketmaster.booking.admission.constrained-advance=PT0.5S
 ticketmaster.booking.admission.poll-delay-ms=1000
+ticketmaster.booking.admission.regulator-lease-duration=PT5S
 ```
 
-An empty `event-ids` value means admission control is not enabled for any configured hot event. Every event listed in `event-ids` is initialized synchronously while the scheduler bean is constructed. If its `EventAdmission` row does not already exist, Booking creates a watermark at the service startup time before accepting normal traffic. That means subsequent joins queue behind a live watermark instead of accidentally bypassing admission, while the regulator can advance immediately from a current timestamp. If that initialization fails, service startup fails closed rather than bringing up a configured hot event with its waiting room silently disabled. Existing watermarks are preserved across restarts.
+An empty `event-ids` value means admission control is not enabled for any configured hot event. Joining a waiting room that has not been enabled returns `409`; latent waiting-room entries are not created before an admission watermark exists.
+
+Every event listed in `event-ids` is initialized synchronously while the scheduler bean is constructed. Initial creation is atomic create-if-absent and starts one millisecond behind the service clock so a join stamped in the same millisecond is still queued. Concurrent service starts cannot move an existing watermark forward, and existing watermarks are preserved across restarts. If initialization fails, service startup fails closed rather than bringing up a configured hot event with its waiting room silently disabled.
+
+Multiple Booking replicas do not multiply the admission rate. Each process receives a unique regulator ID and must acquire/renew a short per-event lease stored on the admission item before running the admission policy. The lease is globally coordinated by the waiting-room table. In addition, a regulator must pass `EventWriteAuthority`; only the event's current authoritative booking region is allowed to advance its watermark, so admission decisions are based on the health of the region that will actually execute holds/checkouts. A non-owner region simply skips regulation for that event. Ownership/control-plane/health/storage failures hold the watermark steady.
 
 The initial `ConfiguredAdmissionHealthGateway` defaults to `OVERLOADED`, so initialization alone never advances admission accidentally. It is intentionally a bootstrap/demo adapter and can be replaced by a telemetry-backed `AdmissionHealthGateway` without changing the application policy.
 
@@ -198,4 +215,4 @@ Floci integration tests use the `*IT` naming convention and run through Maven Fa
 mvn verify
 ```
 
-Booking integration tests verify DynamoDB transactional seat claiming, concurrent no-double-booking behavior, hold idempotency, checkout/finalization, reconciliation storage, waiting-room state, and seat-map projection. Events verifies canonical Event/Venue reads and SQS FIFO projection publishing. Search verifies OpenSearch querying/indexing plus the SQS projection contract. Control-plane integration tests verify conditional owner/epoch assignment and transfer semantics.
+Booking integration tests verify DynamoDB transactional seat claiming, concurrent no-double-booking behavior, hold idempotency, checkout/finalization, reconciliation storage, waiting-room state, atomic admission initialization, regulator leasing, and seat-map projection. Events verifies canonical Event/Venue reads and SQS FIFO projection publishing. Search verifies OpenSearch querying/indexing plus the SQS projection contract. Control-plane integration tests verify conditional owner/epoch assignment and transfer semantics.

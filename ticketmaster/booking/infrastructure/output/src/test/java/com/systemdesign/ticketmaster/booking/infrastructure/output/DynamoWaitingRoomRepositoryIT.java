@@ -41,6 +41,8 @@ class DynamoWaitingRoomRepositoryIT {
     private String tableName;
     private WaitingRoomEntry firstJoin;
     private WaitingRoomEntry secondJoin;
+    private EventAdmission firstAdmission;
+    private EventAdmission secondAdmission;
     private boolean beforeWatermark;
     private boolean atWatermark;
     private Throwable thrown;
@@ -74,10 +76,19 @@ class DynamoWaitingRoomRepositoryIT {
         thenExpect(AdmissionWatermarkRegressionException.class);
     }
 
+    @Test
+    void admissionInitializationPreservesFirstWatermark() {
+        givenWaitingRoom();
+        whenInitializeAdmissionTwice();
+        thenExpectFirstAdmissionPreserved();
+    }
+
     private void givenWaitingRoom() {
         initialize();
         firstJoin = null;
         secondJoin = null;
+        firstAdmission = null;
+        secondAdmission = null;
         thrown = null;
     }
 
@@ -94,6 +105,11 @@ class DynamoWaitingRoomRepositoryIT {
     private void whenJoinTwice() {
         firstJoin = repository.join(new WaitingRoomEntry(EVENT_ID, USER_ID, FIRST_JOIN));
         secondJoin = repository.join(new WaitingRoomEntry(EVENT_ID, USER_ID, FIRST_JOIN.plusSeconds(30)));
+    }
+
+    private void whenInitializeAdmissionTwice() {
+        firstAdmission = repository.initializeAdmission(new EventAdmission(EVENT_ID, FIRST_JOIN));
+        secondAdmission = repository.initializeAdmission(new EventAdmission(EVENT_ID, FIRST_JOIN.plusSeconds(30)));
     }
 
     private void whenAdvanceWatermarkAcrossUser() {
@@ -115,6 +131,12 @@ class DynamoWaitingRoomRepositoryIT {
         assertThat(firstJoin.joinedAt()).isEqualTo(FIRST_JOIN);
         assertThat(secondJoin).isEqualTo(firstJoin);
         assertThat(repository.findEntry(EVENT_ID, USER_ID)).contains(firstJoin);
+    }
+
+    private void thenExpectFirstAdmissionPreserved() {
+        assertThat(firstAdmission.admittedThrough()).isEqualTo(FIRST_JOIN);
+        assertThat(secondAdmission).isEqualTo(firstAdmission);
+        assertThat(repository.findAdmission(EVENT_ID)).contains(firstAdmission);
     }
 
     private void thenExpectWaitingThenAdmitted() {

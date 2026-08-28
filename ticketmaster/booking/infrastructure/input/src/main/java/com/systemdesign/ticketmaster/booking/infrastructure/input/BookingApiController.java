@@ -66,10 +66,14 @@ public final class BookingApiController implements BookingApi {
     }
 
     @Override
-    public ResponseEntity<HoldResponse> createHold(String eventId, String idempotencyKey, CreateHoldRequest request) {
+    public ResponseEntity<HoldResponse> createHold(
+            String eventId,
+            String idempotencyKey,
+            String userId,
+            CreateHoldRequest request) {
         List<SeatId> seatIds = request.getSeatIds().stream().map(SeatId::new).toList();
         Hold hold = createHoldHandler.handle(new CreateHoldCommand(
-                new UserId(request.getUserId()), new EventId(eventId), seatIds,
+                new UserId(userId), new EventId(eventId), seatIds,
                 new HoldIdempotencyKey(idempotencyKey)));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
@@ -77,9 +81,17 @@ public final class BookingApiController implements BookingApi {
     }
 
     @Override
-    public ResponseEntity<CheckoutResponse> startCheckout(String eventId, String holdId, String idempotencyKey) {
+    public ResponseEntity<CheckoutResponse> startCheckout(
+            String eventId,
+            String holdId,
+            String idempotencyKey,
+            String userId) {
         StartCheckoutResult result = startCheckoutHandler.handle(
-                new StartCheckoutCommand(new EventId(eventId), new HoldId(holdId), idempotencyKey));
+                new StartCheckoutCommand(
+                        new EventId(eventId),
+                        new HoldId(holdId),
+                        new UserId(userId),
+                        idempotencyKey));
         CheckoutResponse response = new CheckoutResponse();
         response.setBookingId(result.booking().id().value());
         response.setStatus(result.booking().status().name());

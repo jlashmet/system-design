@@ -149,6 +149,7 @@ public class BookingServiceApplication {
 
     @Bean
     ReconcileBookingHandler reconcileBookingHandler(
+            EventWriteAuthority eventWriteAuthority,
             BookingRepository bookingRepository,
             HoldRepository holdRepository,
             CheckoutGateway checkoutGateway,
@@ -156,6 +157,7 @@ public class BookingServiceApplication {
             Clock clock,
             @Value("${ticketmaster.booking.reconciliation-backoff:PT30S}") String reconciliationBackoff) {
         return new ReconcileBookingHandler(
+                eventWriteAuthority,
                 bookingRepository,
                 holdRepository,
                 checkoutGateway,

@@ -36,6 +36,24 @@ If a request reaches the wrong booking region, the API returns HTTP `421 Misdire
 
 Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
 
+### Runnable demo payment completion
+
+`DemoPaymentGateway` is intentionally not presented as a production provider integration. By default it creates a pending demo Payment Intent and there is **no client-controlled success endpoint** exposed.
+
+For local demonstration only, the bootstrap module can enable a guarded development endpoint:
+
+```text
+ticketmaster.booking.demo-payment-endpoint-enabled=true
+```
+
+After `POST /events/{eventId}/holds/{holdId}/checkout` returns a `bookingId`, a local demo can call:
+
+```http
+POST /demo/bookings/{bookingId}/payment-success
+```
+
+That endpoint marks only the in-memory demo provider intent successful and immediately invokes the normal `ReconcileBookingHandler`. It therefore reaches `Booking=CONFIRMED`, `Hold=CONVERTED`, and `Seat=BOOKED` through the same authoritative finalization transaction used by provider completion/reconciliation. It does **not** bypass booking ownership, hold state, or checkout invariants. The endpoint is disabled unless the property above is explicitly set and must not be enabled in production; a production `PaymentGateway` learns status from a verified payment provider response/webhook instead.
+
 Waiting-room regulation is schedulable but conservative by default. Runtime properties include:
 
 ```text

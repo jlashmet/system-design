@@ -33,6 +33,7 @@ This document captures the Ticketmaster system-design discussion and the decisio
 - The authoritative hold operation must be strongly consistent.
 - A user should hold all requested seats or none of them; partial fulfillment is not assumed.
 - Seat prices used for a hold are read from authoritative inventory and calculated by the server; the client never supplies the hold total.
+- Ordinary `HELD` seats can be reclaimed lazily after their hold deadline. Seats in `CHECKOUT` are deliberately protected from blind timestamp reclaim because an external payment may still resolve.
 - Waiting-room ordering only needs to be approximately fair. We do not require a globally exact real-world arrival order.
 - A missing `EventAdmission` record means the waiting room is disabled for that event. Enabling a hot-event waiting room therefore creates its admission record before hold traffic is admitted.
 
@@ -155,20 +156,26 @@ AVAILABLE
    |
    | create hold
    v
- HELD ----------------------+
-   |                        |
-   | checkout succeeds      | hold expires / checkout fails
-   v                        |
-BOOKED                      |
-                            v
-                        AVAILABLE
+ HELD ------------------------------+
+   |                                |
+   | begin checkout                 | normal hold expires
+   v                                |
+CHECKOUT                             |
+   |                                |
+   | payment succeeds               |
+   v                                |
+BOOKED                              |
+                                    v
+                                AVAILABLE
+
+CHECKOUT -- payment safely fails/cancels --> AVAILABLE
 ```
 
-A seat that is actively held cannot be held or booked by another user.
+A seat that is actively held or participating in an unresolved checkout cannot be acquired by another user.
 
 ### Expiration Semantics
 
-Correctness does not require an expiration cleanup worker.
+Correctness does not require an expiration cleanup worker for ordinary pre-checkout holds.
 
 The inventory item contains an expiration timestamp. A seat is logically claimable when either:
 
@@ -186,12 +193,15 @@ else
    reject
 ```
 
-An expired `HELD` value may remain stored indefinitely without preventing the seat from being reclaimed. DynamoDB TTL can optionally remove old hold/workflow records later for storage housekeeping, but TTL or a cleanup process is not part of the correctness mechanism.
+An expired `HELD` value may remain stored indefinitely without preventing the seat from being reclaimed. DynamoDB TTL can optionally remove old hold/workflow records later for storage housekeeping, but TTL or a cleanup process is not part of the ordinary hold correctness mechanism.
 
-Both the hold and the inventory item may contain the expiration time. This is deliberate denormalization:
+`CHECKOUT` is intentionally different. Once an external payment may be in flight, reaching `checkoutExpiresAt` does **not** by itself make the seat claimable. Blindly reassigning the seat could race with a late provider success and create a charged customer with no ticket. Checkout expiration is therefore resolved through payment reconciliation: confirm success, or safely cancel/fail the payment before releasing the seats.
+
+Both the hold and the inventory item may contain expiration/deadline state. This is deliberate denormalization:
 
 - the `Hold` owns the checkout workflow and grouping of seats;
-- the inventory item contains enough information to make an atomic availability decision without consulting another record.
+- the inventory item contains enough information to make an atomic availability decision without consulting another record;
+- the protected `CHECKOUT` state signals that payment resolution, not timestamp-only reclaim, controls release.
 
 ### Authoritative Price Snapshot
 
@@ -243,13 +253,15 @@ EventSeatInventory
 eventId
 seatId
 price
-status             AVAILABLE | HELD | BOOKED
+status             AVAILABLE | HELD | CHECKOUT | BOOKED
 holdId             nullable
 holdExpiresAt      nullable
 bookingId          nullable
 ```
 
 The existence of a `Hold` record alone does not determine seat availability. The authoritative event-seat inventory item does.
+
+`CHECKOUT` is a protected reservation state: it still belongs to the hold, but ordinary expired-hold acquisition cannot steal it while payment state is unresolved.
 
 ### Hold
 
@@ -259,7 +271,7 @@ Hold
 holdId
 userId
 eventId
-status              ACTIVE | CHECKOUT_IN_PROGRESS | CONVERTED
+status              ACTIVE | CHECKOUT_IN_PROGRESS | CONVERTED | FAILED
 expiresAt
 checkoutExpiresAt   nullable
 createdAt
@@ -317,7 +329,9 @@ The primary access pattern is:
 
 ### Atomic Seat Acquisition
 
-A seat claim uses a conditional write. It succeeds only when the seat is currently available or its previous hold has expired, and when the authoritative price still matches the price quoted for this hold attempt.
+A seat claim uses a conditional write. It succeeds only when the seat is currently available or its ordinary `HELD` reservation has expired, and when the authoritative price still matches the price quoted for this hold attempt.
+
+A `CHECKOUT` seat is not claimable through this path even if its checkout deadline has passed; the payment workflow must resolve it first.
 
 If two users compete for the same seat, only one conditional write succeeds. If a seat price changes after the quote but before the claim, the claim fails and the caller must refresh/retry instead of receiving a stale price.
 
@@ -357,6 +371,8 @@ SeatMapBySection
 ```
 
 The UI reads the seat-map projection. If it displays A10 as available but another user has already acquired A10, the authoritative hold request fails and the UI refreshes.
+
+`HELD` and `CHECKOUT` are both unavailable to another shopper in this projection; the distinction exists for the authoritative payment workflow.
 
 This is an intentional consistency tradeoff.
 
@@ -511,17 +527,17 @@ Payment is an external system and cannot participate in the same ACID transactio
 
 ### Start Checkout
 
-When the user begins checkout, atomically transition the hold into checkout and create a pending booking before money can move.
+When the user begins checkout, atomically transition the hold and its seats into protected checkout and create a pending booking before money can move.
 
 ```text
 DynamoDB transaction
 --------------------
-Hold: ACTIVE -> CHECKOUT_IN_PROGRESS
+Hold:  ACTIVE -> CHECKOUT_IN_PROGRESS
+Seats: HELD -> CHECKOUT, deadline = checkoutExpiresAt
 Booking: create PENDING_PAYMENT
-Seats: remain reserved for the checkout window
 ```
 
-Once checkout has started, the normal short seat-hold expiration must not expire underneath an in-flight payment. `CHECKOUT_IN_PROGRESS` uses its own bounded checkout deadline.
+Once checkout has started, the normal short seat-hold expiration must not expire underneath an in-flight payment. The `CHECKOUT` seat state uses the bounded checkout deadline for workflow timing but is not blindly reclaimable when that deadline arrives.
 
 ### Payment Intent Lifecycle
 
@@ -536,7 +552,7 @@ The intended flow is:
 6. Finalize booking
 ```
 
-Creating the intent does not mean the customer has been charged. If checkout is abandoned before confirmation, the unused intent can follow the provider's normal expiration/cancellation lifecycle.
+Creating the intent does not mean the customer has been charged. If checkout is abandoned before confirmation, the unused intent is explicitly resolved by reconciliation at the checkout deadline rather than allowing inventory to race an unresolved payment.
 
 Creating the payment intent should use the `bookingId` as an idempotency key where the provider supports it. This closes the crash window in which the provider creates the intent but our service fails before persisting its ID: retrying the create operation recovers the same intent instead of creating a second one.
 
@@ -549,10 +565,10 @@ DynamoDB transaction
 --------------------
 Booking: PENDING_PAYMENT -> CONFIRMED
 Hold: CHECKOUT_IN_PROGRESS -> CONVERTED
-Seats: HELD -> BOOKED
+Seats: CHECKOUT -> BOOKED
 ```
 
-If payment fails or is canceled, mark the booking failed and allow the seats to become available again.
+If payment fails or is safely canceled, mark the booking failed and atomically release the `CHECKOUT` seats to `AVAILABLE`.
 
 The same idempotent finalization logic is shared by the synchronous payment path, payment webhooks, and reconciliation workers so races between them are safe.
 
@@ -595,15 +611,31 @@ provider = SUCCEEDED
     -> finalize booking
 
 provider = FAILED / CANCELED
-    -> mark failed and release seats
+    -> mark failed and release checkout seats
 
-provider = PROCESSING / PENDING
+provider = PROCESSING / REQUIRES_PAYMENT_METHOD
+AND checkout deadline has not arrived
     -> reschedule reconciliation
+
+provider = PROCESSING / REQUIRES_PAYMENT_METHOD
+AND checkout deadline has arrived
+    -> request provider cancellation
+       |
+       +-> cancellation returns CANCELED / FAILED
+       |      -> mark booking failed and release seats
+       |
+       +-> cancellation races with and returns SUCCEEDED
+       |      -> finalize booking
+       |
+       +-> provider remains ambiguous/non-terminal
+              -> keep seats in CHECKOUT and retry
 ```
+
+This distinction is important. Releasing inventory merely because a local timer expired is unsafe once an external provider can still complete payment. The provider must first give us a terminal outcome that makes release safe.
 
 Once a booking reaches a terminal state, remove the sparse-index attributes so it naturally disappears from the reconciliation index.
 
-The normal path remains webhook/synchronous completion; reconciliation is the recovery path for missed or ambiguous outcomes.
+The normal path remains webhook/synchronous completion; reconciliation is the recovery path for missed or ambiguous outcomes and the safe timeout path for abandoned checkout.
 
 ## Multi-Region Strategy
 
@@ -734,7 +766,7 @@ The key invariant remains:
 | Seat-map read model | DynamoDB | Query-efficient section projection without adding Redis |
 | Projection updates | DynamoDB Streams / asynchronous projection messages | Native change feeds where the source item already contains the required data; explicit enrichment at bounded-context boundaries |
 | Waiting room | DynamoDB timestamp + admission watermark | No physical queue or global sequence needed; approximate fairness is acceptable |
-| Payments | External provider with Payment Intent | Durable provider-side state plus idempotency and reconciliation |
+| Payments | External provider with Payment Intent | Durable provider-side state, idempotency, cancellation at checkout timeout, and reconciliation |
 | Multi-region booking | Single writer/home region per event | Prevent cross-region double booking; consistency over availability |
 | Event ownership control plane | DynamoDB MRSC Global Table | Tiny low-write state with globally coordinated ownership and conditional epoch changes |
 
@@ -746,10 +778,11 @@ The key invariant remains:
 4. **Hot event versus hot seat:** distributing inventory by event+seat avoids concentrating the entire event behind one partition key; competition for the exact same seat still serializes logically.
 5. **Write model versus read model:** the authoritative table is optimized for exact seat claims while a separate section-oriented DynamoDB table serves seat-map queries.
 6. **No Redis by default:** the second DynamoDB table is sufficient for the seat map unless another requirement later justifies Redis.
-7. **Expiration timestamp versus cleanup:** the timestamp determines whether an old hold is reclaimable; no cleanup worker is required for correctness.
-8. **Payment state is distributed:** Payment Intent state at the provider and Booking state in DynamoDB converge through idempotent completion, webhooks, and reconciliation rather than distributed ACID.
+7. **Ordinary hold expiration versus cleanup:** an expired `HELD` timestamp makes the seat reclaimable immediately; no cleanup worker is required for pre-checkout hold correctness.
+8. **Payment state is distributed:** Payment Intent state at the provider and Booking state in DynamoDB converge through idempotent completion, webhooks, cancellation, and reconciliation rather than distributed ACID.
 9. **Multi-region reads versus writes:** reads may be active-active, while each event has one authoritative booking writer region.
 10. **Control metadata versus hard fencing:** strongly coordinated owner/epoch metadata prevents conflicting ownership transitions, but strict split-brain prevention still requires the previous regional writer to lose write capability before the new writer is enabled.
 11. **CDN versus live inventory:** cache stable/read-heavy content aggressively, but never use CDN state as the authority for seat acquisition.
 12. **Client display price versus authoritative hold price:** seat-map prices may be stale; the hold service re-reads authoritative prices, calculates the total server-side, and binds the claim transaction to that quote.
 13. **Waiting-room optimization versus enforcement:** admission tokens may reduce reads later, but the current correctness/load-shedding boundary is the strongly consistent admission check performed before seat pricing and claims.
+14. **Checkout timeout versus payment ambiguity:** a local deadline is not enough to safely free inventory after payment starts. `CHECKOUT` seats stay fenced until provider success is booked or provider failure/cancellation makes release safe.

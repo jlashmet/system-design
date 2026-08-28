@@ -34,6 +34,7 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 class DynamoSeatMapRepositoryIT {
     private static final EventId EVENT_ID = new EventId("event-123");
     private static final SectionId SECTION_101 = new SectionId("101");
+    private static final SectionId SECTION_102 = new SectionId("102");
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
 
     @Container
@@ -55,12 +56,24 @@ class DynamoSeatMapRepositoryIT {
     @Test
     void sectionReadModelReflectsLatestProjectedSeatState() {
         givenProjectedSeats(
-                seat("A10", "A", "10", SeatStatus.AVAILABLE),
-                seat("A11", "A", "11", SeatStatus.AVAILABLE));
-        whenProjectAndRead(seat("A10", "A", "10", SeatStatus.HELD));
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE));
+        whenProjectAndRead(seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD));
         thenExpectSection(
-                seat("A10", "A", "10", SeatStatus.HELD),
-                seat("A11", "A", "11", SeatStatus.AVAILABLE));
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE));
+    }
+
+    @Test
+    void discoversEachProjectedSectionOnceWithoutScanningSeatPartitions() {
+        givenProjectedSeats(
+                seat(SECTION_102, "B10", "B", "10", SeatStatus.AVAILABLE),
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.HELD));
+
+        List<SectionId> sections = repository.findSections(EVENT_ID);
+
+        assertThat(sections).containsExactly(SECTION_101, SECTION_102);
     }
 
     private void givenProjectedSeats(SeatMapSeat... seats) {
@@ -95,7 +108,7 @@ class DynamoSeatMapRepositoryIT {
         assertThat(actual).containsExactly(expected);
     }
 
-    private static SeatMapSeat seat(String seatId, String row, String number, SeatStatus status) {
-        return new SeatMapSeat(EVENT_ID, SECTION_101, new SeatId(seatId), row, number, PRICE, status);
+    private static SeatMapSeat seat(SectionId sectionId, String seatId, String row, String number, SeatStatus status) {
+        return new SeatMapSeat(EVENT_ID, sectionId, new SeatId(seatId), row, number, PRICE, status);
     }
 }

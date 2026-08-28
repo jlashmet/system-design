@@ -1,12 +1,14 @@
 package com.systemdesign.ticketmaster.booking.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
@@ -17,6 +19,7 @@ import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
+import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -36,10 +39,11 @@ class ReconcileBookingHandlerTest {
     private static final Instant CHECKOUT_STARTED_AT = CREATED_AT.plusSeconds(60);
     private static final Instant CHECKOUT_DEADLINE = CREATED_AT.plusSeconds(120);
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
+    private static final EventWriteAuthority LOCAL_OWNER = ignored -> {};
 
     @Test
     void cancelsExpiredPendingPaymentBeforeReleasingSeats() {
-        Scenario scenario = scenario(CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
+        Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED);
 
         Booking result = scenario.handler.handle(BOOKING_ID);
@@ -53,7 +57,7 @@ class ReconcileBookingHandlerTest {
 
     @Test
     void booksWhenCancellationRacesWithPaymentSuccess() {
-        Scenario scenario = scenario(CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
+        Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.SUCCEEDED);
 
         Booking result = scenario.handler.handle(BOOKING_ID);
@@ -67,7 +71,7 @@ class ReconcileBookingHandlerTest {
 
     @Test
     void keepsCheckoutProtectedBeforeDeadline() {
-        Scenario scenario = scenario(CHECKOUT_DEADLINE.minusSeconds(1), PaymentIntentStatus.PROCESSING,
+        Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.minusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED);
 
         Booking result = scenario.handler.handle(BOOKING_ID);
@@ -79,7 +83,26 @@ class ReconcileBookingHandlerTest {
         assertThat(scenario.checkoutGateway.failedBooking).isNull();
     }
 
+    @Test
+    void rejectsReconciliationOutsideOwningRegionBeforePaymentOrHoldAccess() {
+        EventWriteAuthority wrongRegion = eventId -> {
+            throw new WrongBookingRegionException(eventId, "us-east-1", "us-west-2");
+        };
+        Scenario scenario = scenario(wrongRegion, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.SUCCEEDED,
+                PaymentIntentStatus.SUCCEEDED);
+
+        assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
+                .isInstanceOf(WrongBookingRegionException.class);
+
+        assertThat(scenario.paymentGateway.statusCalls).isZero();
+        assertThat(scenario.paymentGateway.cancelCalls).isZero();
+        assertThat(scenario.holdRepository.findCalls).isZero();
+        assertThat(scenario.checkoutGateway.confirmedBooking).isNull();
+        assertThat(scenario.checkoutGateway.failedBooking).isNull();
+    }
+
     private static Scenario scenario(
+            EventWriteAuthority eventWriteAuthority,
             Instant now,
             PaymentIntentStatus paymentStatus,
             PaymentIntentStatus cancelStatus) {
@@ -106,18 +129,20 @@ class ReconcileBookingHandlerTest {
         FakeCheckoutGateway checkoutGateway = new FakeCheckoutGateway();
         FakePaymentGateway paymentGateway = new FakePaymentGateway(paymentStatus, cancelStatus);
         ReconcileBookingHandler handler = new ReconcileBookingHandler(
+                eventWriteAuthority,
                 bookingRepository,
                 holdRepository,
                 checkoutGateway,
                 paymentGateway,
                 Clock.fixed(now, ZoneOffset.UTC),
                 Duration.ofSeconds(30));
-        return new Scenario(handler, bookingRepository, checkoutGateway, paymentGateway);
+        return new Scenario(handler, bookingRepository, holdRepository, checkoutGateway, paymentGateway);
     }
 
     private record Scenario(
             ReconcileBookingHandler handler,
             FakeBookingRepository bookingRepository,
+            FakeHoldRepository holdRepository,
             FakeCheckoutGateway checkoutGateway,
             FakePaymentGateway paymentGateway) {}
 
@@ -158,6 +183,7 @@ class ReconcileBookingHandlerTest {
 
     private static final class FakeHoldRepository implements HoldRepository {
         private final Hold hold;
+        private int findCalls;
 
         private FakeHoldRepository(Hold hold) {
             this.hold = hold;
@@ -175,6 +201,7 @@ class ReconcileBookingHandlerTest {
 
         @Override
         public Optional<Hold> findById(HoldId holdId) {
+            findCalls++;
             return hold.id().equals(holdId) ? Optional.of(hold) : Optional.empty();
         }
     }
@@ -206,6 +233,7 @@ class ReconcileBookingHandlerTest {
     private static final class FakePaymentGateway implements PaymentGateway {
         private final PaymentIntentStatus paymentStatus;
         private final PaymentIntentStatus cancelStatus;
+        private int statusCalls;
         private int cancelCalls;
 
         private FakePaymentGateway(PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
@@ -220,6 +248,7 @@ class ReconcileBookingHandlerTest {
 
         @Override
         public PaymentIntentStatus getPaymentStatus(String paymentIntentId) {
+            statusCalls++;
             return paymentStatus;
         }
 

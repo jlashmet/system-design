@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictExcep
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
+import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ProblemDetail;
@@ -37,7 +38,7 @@ class BookingExceptionHandlerTest {
     void reusedHoldIdempotencyKeyForDifferentRequestIsConflict() {
         givenHoldIdempotencyConflict();
         whenExceptionIsHandled();
-        thenExpectConflict();
+        thenExpectConflict("Booking conflict");
     }
 
     @Test
@@ -45,6 +46,13 @@ class BookingExceptionHandlerTest {
         givenHoldOwnershipViolation();
         whenExceptionIsHandled();
         thenExpectForbidden();
+    }
+
+    @Test
+    void joiningDisabledWaitingRoomIsConflict() {
+        givenWaitingRoomDisabled();
+        whenExceptionIsHandled();
+        thenExpectConflict("Waiting room disabled");
     }
 
     private void givenWrongRegion() {
@@ -69,6 +77,11 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenWaitingRoomDisabled() {
+        exception = new WaitingRoomDisabledException(new EventId("event-123"));
+        response = null;
+    }
+
     private void whenExceptionIsHandled() {
         if (exception instanceof WrongBookingRegionException wrongRegion) {
             response = handler.wrongBookingRegion(wrongRegion);
@@ -76,6 +89,8 @@ class BookingExceptionHandlerTest {
             response = handler.bookingOwnershipUnavailable(unavailable);
         } else if (exception instanceof HoldOwnershipException ownership) {
             response = handler.holdOwnership(ownership);
+        } else if (exception instanceof WaitingRoomDisabledException disabled) {
+            response = handler.waitingRoomDisabled(disabled);
         } else {
             response = handler.conflict(exception);
         }
@@ -94,10 +109,10 @@ class BookingExceptionHandlerTest {
         assertThat(response.getHeaders()).doesNotContainKey(BookingExceptionHandler.BOOKING_REGION_HEADER);
     }
 
-    private void thenExpectConflict() {
+    private void thenExpectConflict(String title) {
         assertThat(response.getStatusCode().value()).isEqualTo(409);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getTitle()).isEqualTo("Booking conflict");
+        assertThat(response.getBody().getTitle()).isEqualTo(title);
     }
 
     private void thenExpectForbidden() {

@@ -7,6 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SeatStatus;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
+import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Currency;
@@ -18,6 +19,7 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 
@@ -69,26 +71,35 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                 .build();
 
         // Keep the derived seat row and its discovery marker consistent for each projected stream image.
-        dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder()
-                .transactItems(
-                        TransactWriteItem.builder().put(seatPut).build(),
-                        TransactWriteItem.builder().put(sectionDirectoryPut).build())
-                .build());
+        try {
+            DynamoBookingCall.execute("seat-map projection transaction", () -> dynamoDb.transactWriteItems(
+                    TransactWriteItemsRequest.builder()
+                            .transactItems(
+                                    TransactWriteItem.builder().put(seatPut).build(),
+                                    TransactWriteItem.builder().put(sectionDirectoryPut).build())
+                            .build()));
+        } catch (TransactionCanceledException cancellation) {
+            // This transaction has no conditional business rule. Any cancellation is therefore
+            // infrastructure pressure/failure rather than a customer-visible booking conflict.
+            throw new BookingStorageUnavailableException("seat-map projection transaction", cancellation);
+        }
     }
 
     @Override
     public List<SectionId> findSections(EventId eventId) {
         Objects.requireNonNull(eventId, "eventId");
-        return dynamoDb.query(QueryRequest.builder()
-                        .tableName(tableName)
-                        .keyConditionExpression("#pk = :pk AND begins_with(#sk, :sectionPrefix)")
-                        .expressionAttributeNames(Map.of("#pk", PK, "#sk", SK))
-                        .expressionAttributeValues(Map.of(
-                                ":pk", string(eventPk(eventId)),
-                                ":sectionPrefix", string("SECTION#")))
-                        .scanIndexForward(true)
-                        .consistentRead(false)
-                        .build())
+        return DynamoBookingCall.execute(
+                        "seat-map section directory read",
+                        () -> dynamoDb.query(QueryRequest.builder()
+                                .tableName(tableName)
+                                .keyConditionExpression("#pk = :pk AND begins_with(#sk, :sectionPrefix)")
+                                .expressionAttributeNames(Map.of("#pk", PK, "#sk", SK))
+                                .expressionAttributeValues(Map.of(
+                                        ":pk", string(eventPk(eventId)),
+                                        ":sectionPrefix", string("SECTION#")))
+                                .scanIndexForward(true)
+                                .consistentRead(false)
+                                .build()))
                 .items().stream()
                 .map(item -> new SectionId(item.get("sectionId").s()))
                 .toList();
@@ -98,14 +109,16 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     public List<SeatMapSeat> findSection(EventId eventId, SectionId sectionId) {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(sectionId, "sectionId");
-        return dynamoDb.query(QueryRequest.builder()
-                        .tableName(tableName)
-                        .keyConditionExpression("#pk = :pk")
-                        .expressionAttributeNames(Map.of("#pk", PK))
-                        .expressionAttributeValues(Map.of(":pk", string(sectionPk(eventId, sectionId))))
-                        .scanIndexForward(true)
-                        .consistentRead(false)
-                        .build())
+        return DynamoBookingCall.execute(
+                        "seat-map section read",
+                        () -> dynamoDb.query(QueryRequest.builder()
+                                .tableName(tableName)
+                                .keyConditionExpression("#pk = :pk")
+                                .expressionAttributeNames(Map.of("#pk", PK))
+                                .expressionAttributeValues(Map.of(":pk", string(sectionPk(eventId, sectionId))))
+                                .scanIndexForward(true)
+                                .consistentRead(false)
+                                .build()))
                 .items().stream()
                 .map(DynamoSeatMapRepository::fromItem)
                 .toList();

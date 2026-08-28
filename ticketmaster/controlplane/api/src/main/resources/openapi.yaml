@@ -1,0 +1,31 @@
+openapi: 3.1.0
+info:
+  title: Ticketmaster Control Plane API
+  version: 0.0.1
+paths:
+  /control-plane/events/{eventId}/ownership:
+    get:
+      tags: [ControlPlane]
+      operationId: getEventOwnership
+      summary: Read the authoritative booking owner for an event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current event ownership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventOwnershipResponse' }
+        '404': { description: Event ownership has not been assigned }
+components:
+  schemas:
+    EventOwnershipResponse:
+      type: object
+      required: [eventId, ownerRegion, epoch]
+      properties:
+        eventId: { type: string }
+        ownerRegion: { type: string }
+        epoch: { type: integer, format: int64, minimum: 1 }

@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
@@ -41,6 +42,7 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 class DynamoBookingRepositoryIT {
     private static final Instant FIRST_DUE = Instant.parse("2026-08-27T22:00:00Z");
     private static final Instant SECOND_DUE = FIRST_DUE.plusSeconds(60);
+    private static final Instant THIRD_DUE = SECOND_DUE.plusSeconds(60);
 
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
@@ -50,6 +52,10 @@ class DynamoBookingRepositoryIT {
     private String tableName;
     private Booking booking;
     private Booking rescheduled;
+    private Booking newest;
+    private Booking stale;
+    private Booking confirmed;
+    private Throwable thrown;
 
     @AfterEach
     void tearDown() {
@@ -66,6 +72,20 @@ class DynamoBookingRepositoryIT {
         thenExpectOnlyDueAtNewTime();
     }
 
+    @Test
+    void staleReconciliationRescheduleDoesNotMoveBookingBackward() {
+        givenPendingBooking();
+        whenNewerThenStaleRescheduleRace();
+        thenExpectNewestSchedulePreserved();
+    }
+
+    @Test
+    void savingSamePaymentIntentAfterConcurrentFinalizationIsIdempotent() {
+        givenConfirmedBookingWithPaymentIntent();
+        whenStaleWorkerSavesSamePaymentIntent();
+        thenExpectConfirmedBookingPreserved();
+    }
+
     private void givenPendingBooking() {
         initialize();
         Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
@@ -73,11 +93,18 @@ class DynamoBookingRepositoryIT {
                 FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
         booking = Booking.pending(new BookingId("booking-1"), hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
                 "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2).attachPaymentIntent("pi-1");
-        dynamoDb.putItem(PutItemRequest.builder()
-                .tableName(tableName)
-                .item(DynamoItemCodec.bookingToItem(booking))
-                .build());
+        put(booking);
         rescheduled = null;
+        newest = null;
+        stale = null;
+        confirmed = null;
+        thrown = null;
+    }
+
+    private void givenConfirmedBookingWithPaymentIntent() {
+        givenPendingBooking();
+        confirmed = booking.confirm();
+        put(confirmed);
     }
 
     private void whenRescheduleTo(Instant nextAttempt) {
@@ -85,10 +112,45 @@ class DynamoBookingRepositoryIT {
         repository.rescheduleReconciliation(rescheduled);
     }
 
+    private void whenNewerThenStaleRescheduleRace() {
+        newest = booking.rescheduleReconciliation(THIRD_DUE);
+        repository.rescheduleReconciliation(newest);
+        stale = booking.rescheduleReconciliation(SECOND_DUE);
+        repository.rescheduleReconciliation(stale);
+    }
+
+    private void whenStaleWorkerSavesSamePaymentIntent() {
+        try {
+            repository.savePaymentIntent(booking);
+        } catch (Throwable error) {
+            thrown = error;
+        }
+    }
+
     private void thenExpectOnlyDueAtNewTime() {
         assertThat(repository.findDueForReconciliation(2, FIRST_DUE, 10)).isEmpty();
         assertThat(repository.findDueForReconciliation(2, SECOND_DUE, 10)).containsExactly(rescheduled);
         assertThat(repository.findById(booking.id())).contains(rescheduled);
+    }
+
+    private void thenExpectNewestSchedulePreserved() {
+        assertThat(repository.findById(booking.id())).contains(newest);
+        assertThat(repository.findDueForReconciliation(2, SECOND_DUE, 10)).isEmpty();
+        assertThat(repository.findDueForReconciliation(2, THIRD_DUE, 10)).containsExactly(newest);
+    }
+
+    private void thenExpectConfirmedBookingPreserved() {
+        assertThatCode(() -> {
+            if (thrown != null) throw thrown;
+        }).doesNotThrowAnyException();
+        assertThat(repository.findById(booking.id())).contains(confirmed);
+    }
+
+    private void put(Booking value) {
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(DynamoItemCodec.bookingToItem(value))
+                .build());
     }
 
     private void initialize() {

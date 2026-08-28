@@ -32,6 +32,13 @@ class DynamoTransactionCancellationTest {
         thenExpectNonConditionalFailure(true);
     }
 
+    @Test
+    void missingMeaningfulReasonsFailClosedAsStorageFailure() {
+        givenCancellationReasons("None", "None");
+        whenCancellationIsClassified();
+        thenExpectNonConditionalFailure(true);
+    }
+
     private void givenCancellationReasons(String... codes) {
         List<CancellationReason> reasons = java.util.Arrays.stream(codes)
                 .map(code -> CancellationReason.builder().code(code).build())

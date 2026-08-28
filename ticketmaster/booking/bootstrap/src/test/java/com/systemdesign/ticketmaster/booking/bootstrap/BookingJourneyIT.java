@@ -65,6 +65,15 @@ class BookingJourneyIT {
 
     private DynamoDbClient dynamoDb;
     private String tableName;
+    private DynamoHoldRepository holdRepository;
+    private DynamoBookingRepository bookingRepository;
+    private DemoPaymentGateway paymentGateway;
+    private CreateHoldHandler createHoldHandler;
+    private StartCheckoutHandler startCheckoutHandler;
+    private ReconcileBookingHandler reconcileBookingHandler;
+    private Hold hold;
+    private StartCheckoutResult checkout;
+    private Booking confirmed;
 
     @AfterEach
     void tearDown() {
@@ -78,53 +87,45 @@ class BookingJourneyIT {
 
     @Test
     void holdCheckoutSuccessfulPaymentAndReconciliationBooksSeatEndToEnd() {
+        givenAvailableSeatAndBookingWorkflow();
+        whenHoldIsCheckedOutAndPaymentSucceeds();
+        thenExpectConfirmedBookingAndBookedSeat();
+    }
+
+    private void givenAvailableSeatAndBookingWorkflow() {
         initializeDynamo();
         seedAvailableSeat();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        DynamoHoldRepository holdRepository = new DynamoHoldRepository(dynamoDb, tableName);
-        DynamoBookingRepository bookingRepository = new DynamoBookingRepository(dynamoDb, tableName);
+        holdRepository = new DynamoHoldRepository(dynamoDb, tableName);
+        bookingRepository = new DynamoBookingRepository(dynamoDb, tableName);
         DynamoCheckoutGateway checkoutGateway = new DynamoCheckoutGateway(dynamoDb, tableName);
         DynamoWaitingRoomRepository waitingRoomRepository = new DynamoWaitingRoomRepository(dynamoDb, tableName);
-        DemoPaymentGateway paymentGateway = new DemoPaymentGateway();
-
-        CreateHoldHandler createHold = new CreateHoldHandler(
-                LOCAL_OWNER,
-                holdRepository,
-                waitingRoomRepository,
-                clock,
-                Duration.ofMinutes(5));
-        StartCheckoutHandler startCheckout = new StartCheckoutHandler(
-                LOCAL_OWNER,
-                holdRepository,
-                bookingRepository,
-                checkoutGateway,
-                paymentGateway,
-                clock,
-                Duration.ofMinutes(10),
-                Duration.ofSeconds(30),
-                16);
-        ReconcileBookingHandler reconcile = new ReconcileBookingHandler(
-                LOCAL_OWNER,
-                bookingRepository,
-                holdRepository,
-                checkoutGateway,
-                paymentGateway,
-                clock,
+        paymentGateway = new DemoPaymentGateway();
+        createHoldHandler = new CreateHoldHandler(
+                LOCAL_OWNER, holdRepository, waitingRoomRepository, clock, Duration.ofMinutes(5));
+        startCheckoutHandler = new StartCheckoutHandler(
+                LOCAL_OWNER, holdRepository, bookingRepository, checkoutGateway, paymentGateway, clock,
+                Duration.ofMinutes(10), Duration.ofSeconds(30), 16);
+        reconcileBookingHandler = new ReconcileBookingHandler(
+                LOCAL_OWNER, bookingRepository, holdRepository, checkoutGateway, paymentGateway, clock,
                 Duration.ofSeconds(30));
+    }
 
-        Hold hold = createHold.handle(new CreateHoldCommand(
+    private void whenHoldIsCheckedOutAndPaymentSucceeds() {
+        hold = createHoldHandler.handle(new CreateHoldCommand(
                 USER_ID,
                 EVENT_ID,
                 List.of(SEAT_ID),
                 new HoldIdempotencyKey("journey-hold-key")));
-        StartCheckoutResult checkout = startCheckout.handle(new StartCheckoutCommand(
+        checkout = startCheckoutHandler.handle(new StartCheckoutCommand(
                 EVENT_ID,
                 hold.id(),
                 "journey-checkout-key"));
-
         paymentGateway.succeedPayment(checkout.booking().id());
-        Booking confirmed = reconcile.handle(EVENT_ID, checkout.booking().id());
+        confirmed = reconcileBookingHandler.handle(EVENT_ID, checkout.booking().id());
+    }
 
+    private void thenExpectConfirmedBookingAndBookedSeat() {
         assertThat(confirmed.status().name()).isEqualTo("CONFIRMED");
         assertThat(bookingRepository.findById(confirmed.id()).orElseThrow().status().name())
                 .isEqualTo("CONFIRMED");

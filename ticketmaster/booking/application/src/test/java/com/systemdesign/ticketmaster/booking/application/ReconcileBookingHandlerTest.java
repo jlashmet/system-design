@@ -11,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
@@ -45,9 +46,7 @@ class ReconcileBookingHandlerTest {
     void cancelsExpiredPendingPaymentBeforeReleasingSeats() {
         Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED);
-
         Booking result = scenario.handler.handle(BOOKING_ID);
-
         assertThat(result.status().name()).isEqualTo("FAILED");
         assertThat(scenario.paymentGateway.cancelCalls).isEqualTo(1);
         assertThat(scenario.checkoutGateway.failedBooking).isEqualTo(result);
@@ -59,9 +58,7 @@ class ReconcileBookingHandlerTest {
     void booksWhenCancellationRacesWithPaymentSuccess() {
         Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.SUCCEEDED);
-
         Booking result = scenario.handler.handle(BOOKING_ID);
-
         assertThat(result.status().name()).isEqualTo("CONFIRMED");
         assertThat(scenario.paymentGateway.cancelCalls).isEqualTo(1);
         assertThat(scenario.checkoutGateway.confirmedBooking).isEqualTo(result);
@@ -73,9 +70,7 @@ class ReconcileBookingHandlerTest {
     void keepsCheckoutProtectedBeforeDeadline() {
         Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.minusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED);
-
         Booking result = scenario.handler.handle(BOOKING_ID);
-
         assertThat(result.status().name()).isEqualTo("PENDING_PAYMENT");
         assertThat(scenario.paymentGateway.cancelCalls).isZero();
         assertThat(scenario.bookingRepository.rescheduled).isEqualTo(result);
@@ -90,10 +85,7 @@ class ReconcileBookingHandlerTest {
         };
         Scenario scenario = scenario(wrongRegion, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.SUCCEEDED,
                 PaymentIntentStatus.SUCCEEDED);
-
-        assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
-                .isInstanceOf(WrongBookingRegionException.class);
-
+        assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID)).isInstanceOf(WrongBookingRegionException.class);
         assertThat(scenario.paymentGateway.statusCalls).isZero();
         assertThat(scenario.paymentGateway.cancelCalls).isZero();
         assertThat(scenario.holdRepository.findCalls).isZero();
@@ -101,110 +93,54 @@ class ReconcileBookingHandlerTest {
         assertThat(scenario.checkoutGateway.failedBooking).isNull();
     }
 
-    private static Scenario scenario(
-            EventWriteAuthority eventWriteAuthority,
-            Instant now,
-            PaymentIntentStatus paymentStatus,
-            PaymentIntentStatus cancelStatus) {
-        Hold active = Hold.active(
-                HOLD_ID,
-                new UserId("user-456"),
-                EVENT_ID,
-                Set.of(new SeatId("A10")),
-                PRICE,
-                CREATED_AT,
-                CREATED_AT.plusSeconds(300));
+    private static Scenario scenario(EventWriteAuthority authority, Instant now,
+                                     PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
+        Hold active = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,
+                CREATED_AT, CREATED_AT.plusSeconds(300));
         Hold checkout = active.startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
-        Booking booking = Booking.pending(
-                        BOOKING_ID,
-                        checkout,
-                        "checkout-idempotency",
-                        CHECKOUT_STARTED_AT,
-                        CHECKOUT_STARTED_AT.plusSeconds(30),
-                        0)
-                .attachPaymentIntent("pi-123");
-
-        FakeBookingRepository bookingRepository = new FakeBookingRepository(booking);
-        FakeHoldRepository holdRepository = new FakeHoldRepository(checkout);
+        Booking booking = Booking.pending(BOOKING_ID, checkout, "checkout-idempotency", CHECKOUT_STARTED_AT,
+                        CHECKOUT_STARTED_AT.plusSeconds(30), 0).attachPaymentIntent("pi-123");
+        FakeBookingRepository bookings = new FakeBookingRepository(booking);
+        FakeHoldRepository holds = new FakeHoldRepository(checkout);
         FakeCheckoutGateway checkoutGateway = new FakeCheckoutGateway();
         FakePaymentGateway paymentGateway = new FakePaymentGateway(paymentStatus, cancelStatus);
-        ReconcileBookingHandler handler = new ReconcileBookingHandler(
-                eventWriteAuthority,
-                bookingRepository,
-                holdRepository,
-                checkoutGateway,
-                paymentGateway,
-                Clock.fixed(now, ZoneOffset.UTC),
-                Duration.ofSeconds(30));
-        return new Scenario(handler, bookingRepository, holdRepository, checkoutGateway, paymentGateway);
+        ReconcileBookingHandler handler = new ReconcileBookingHandler(authority, bookings, holds, checkoutGateway,
+                paymentGateway, Clock.fixed(now, ZoneOffset.UTC), Duration.ofSeconds(30));
+        return new Scenario(handler, bookings, holds, checkoutGateway, paymentGateway);
     }
 
-    private record Scenario(
-            ReconcileBookingHandler handler,
-            FakeBookingRepository bookingRepository,
-            FakeHoldRepository holdRepository,
-            FakeCheckoutGateway checkoutGateway,
-            FakePaymentGateway paymentGateway) {}
+    private record Scenario(ReconcileBookingHandler handler, FakeBookingRepository bookingRepository,
+                            FakeHoldRepository holdRepository, FakeCheckoutGateway checkoutGateway,
+                            FakePaymentGateway paymentGateway) {}
 
     private static final class FakeBookingRepository implements BookingRepository {
         private Booking booking;
         private Booking rescheduled;
-
-        private FakeBookingRepository(Booking booking) {
-            this.booking = booking;
-        }
-
-        @Override
-        public Optional<Booking> findById(BookingId bookingId) {
+        private FakeBookingRepository(Booking booking) { this.booking = booking; }
+        @Override public Optional<Booking> findById(BookingId bookingId) {
             return booking.id().equals(bookingId) ? Optional.of(booking) : Optional.empty();
         }
-
-        @Override
-        public Optional<Booking> findByCheckoutIdempotencyKey(
-                EventId eventId, HoldId holdId, String idempotencyKey) {
+        @Override public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) {
             return Optional.empty();
         }
-
-        @Override
-        public void savePaymentIntent(Booking booking) {
-            this.booking = booking;
-        }
-
-        @Override
-        public void rescheduleReconciliation(Booking booking) {
-            this.booking = booking;
-            this.rescheduled = booking;
-        }
-
-        @Override
-        public List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit) {
-            return List.of();
-        }
+        @Override public void savePaymentIntent(Booking booking) { this.booking = booking; }
+        @Override public void rescheduleReconciliation(Booking booking) { this.booking = booking; this.rescheduled = booking; }
+        @Override public List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit) { return List.of(); }
     }
 
     private static final class FakeHoldRepository implements HoldRepository {
         private final Hold hold;
         private int findCalls;
-
-        private FakeHoldRepository(Hold hold) {
-            this.hold = hold;
-        }
-
-        @Override
-        public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) {
+        private FakeHoldRepository(Hold hold) { this.hold = hold; }
+        @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new UnsupportedOperationException(); }
+        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) {
             throw new UnsupportedOperationException();
         }
-
-        @Override
-        public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Optional<Hold> findById(HoldId holdId) {
+        @Override public Optional<Hold> findById(HoldId holdId) {
             findCalls++;
             return hold.id().equals(holdId) ? Optional.of(hold) : Optional.empty();
         }
+        @Override public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) { throw new UnsupportedOperationException(); }
     }
 
     private static final class FakeCheckoutGateway implements CheckoutGateway {
@@ -212,22 +148,12 @@ class ReconcileBookingHandlerTest {
         private Booking confirmedBooking;
         private Hold failedHold;
         private Booking failedBooking;
-
-        @Override
-        public void startCheckout(Hold checkoutHold, Booking pendingBooking) {
-            throw new UnsupportedOperationException();
+        @Override public void startCheckout(Hold checkoutHold, Booking pendingBooking) { throw new UnsupportedOperationException(); }
+        @Override public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) {
+            this.confirmedHold = convertedHold; this.confirmedBooking = confirmedBooking;
         }
-
-        @Override
-        public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) {
-            this.confirmedHold = convertedHold;
-            this.confirmedBooking = confirmedBooking;
-        }
-
-        @Override
-        public void failBooking(Hold failedHold, Booking failedBooking) {
-            this.failedHold = failedHold;
-            this.failedBooking = failedBooking;
+        @Override public void failBooking(Hold failedHold, Booking failedBooking) {
+            this.failedHold = failedHold; this.failedBooking = failedBooking;
         }
     }
 
@@ -236,27 +162,13 @@ class ReconcileBookingHandlerTest {
         private final PaymentIntentStatus cancelStatus;
         private int statusCalls;
         private int cancelCalls;
-
         private FakePaymentGateway(PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
-            this.paymentStatus = paymentStatus;
-            this.cancelStatus = cancelStatus;
+            this.paymentStatus = paymentStatus; this.cancelStatus = cancelStatus;
         }
-
-        @Override
-        public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String idempotencyKey) {
+        @Override public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String key) {
             return new PaymentIntent("pi-123", paymentStatus);
         }
-
-        @Override
-        public PaymentIntentStatus getPaymentStatus(String paymentIntentId) {
-            statusCalls++;
-            return paymentStatus;
-        }
-
-        @Override
-        public PaymentIntentStatus cancelPaymentIntent(String paymentIntentId) {
-            cancelCalls++;
-            return cancelStatus;
-        }
+        @Override public PaymentIntentStatus getPaymentStatus(String paymentIntentId) { statusCalls++; return paymentStatus; }
+        @Override public PaymentIntentStatus cancelPaymentIntent(String paymentIntentId) { cancelCalls++; return cancelStatus; }
     }
 }

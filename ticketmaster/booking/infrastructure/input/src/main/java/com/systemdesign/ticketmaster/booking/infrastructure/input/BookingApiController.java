@@ -6,10 +6,13 @@ import com.systemdesign.ticketmaster.booking.api.model.CreateHoldRequest;
 import com.systemdesign.ticketmaster.booking.api.model.HoldResponse;
 import com.systemdesign.ticketmaster.booking.api.model.Money;
 import com.systemdesign.ticketmaster.booking.api.model.SeatMapSeatResponse;
+import com.systemdesign.ticketmaster.booking.api.model.SectionResponse;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldCommand;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsQuery;
+import com.systemdesign.ticketmaster.booking.application.GetSectionsHandler;
+import com.systemdesign.ticketmaster.booking.application.GetSectionsQuery;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutCommand;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutResult;
@@ -31,15 +34,28 @@ import org.springframework.web.bind.annotation.RestController;
 public final class BookingApiController implements BookingApi {
     private final CreateHoldHandler createHoldHandler;
     private final StartCheckoutHandler startCheckoutHandler;
+    private final GetSectionsHandler getSectionsHandler;
     private final GetSectionSeatsHandler getSectionSeatsHandler;
 
     public BookingApiController(
             CreateHoldHandler createHoldHandler,
             StartCheckoutHandler startCheckoutHandler,
+            GetSectionsHandler getSectionsHandler,
             GetSectionSeatsHandler getSectionSeatsHandler) {
         this.createHoldHandler = createHoldHandler;
         this.startCheckoutHandler = startCheckoutHandler;
+        this.getSectionsHandler = getSectionsHandler;
         this.getSectionSeatsHandler = getSectionSeatsHandler;
+    }
+
+    @Override
+    public ResponseEntity<List<SectionResponse>> getSections(String eventId) {
+        List<SectionResponse> response = getSectionsHandler
+                .handle(new GetSectionsQuery(new EventId(eventId)))
+                .stream()
+                .map(BookingApiController::toSectionResponse)
+                .toList();
+        return ResponseEntity.ok(response);
     }
 
     @Override
@@ -85,6 +101,12 @@ public final class BookingApiController implements BookingApi {
         response.setTotalPrice(toMoney(hold.totalPrice()));
         response.setStatus(hold.status().name());
         response.setExpiresAt(hold.expiresAt().atOffset(ZoneOffset.UTC));
+        return response;
+    }
+
+    private static SectionResponse toSectionResponse(SectionId sectionId) {
+        SectionResponse response = new SectionResponse();
+        response.setSectionId(sectionId.value());
         return response;
     }
 

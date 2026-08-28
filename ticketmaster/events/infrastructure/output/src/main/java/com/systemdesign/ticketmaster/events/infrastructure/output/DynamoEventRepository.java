@@ -32,11 +32,13 @@ public final class DynamoEventRepository implements EventRepository {
     @Override
     public Optional<Event> findById(EventId eventId) {
         Objects.requireNonNull(eventId, "eventId");
-        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(eventPk(eventId))))
-                        .consistentRead(consistentRead)
-                        .build())
+        Map<String, AttributeValue> item = DynamoEventsCall.execute(
+                        "event metadata read",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(eventPk(eventId))))
+                                .consistentRead(consistentRead)
+                                .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(new Event(

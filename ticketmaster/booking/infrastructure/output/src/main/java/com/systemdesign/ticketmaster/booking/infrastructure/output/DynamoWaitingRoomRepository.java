@@ -67,9 +67,38 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
         Objects.requireNonNull(eventId, "eventId");
         Map<String, AttributeValue> item = get(admissionPk(eventId));
         if (item.isEmpty()) return Optional.empty();
+        AttributeValue storedEventId = item.get("eventId");
+        AttributeValue admittedThrough = item.get("admittedThrough");
+        if (storedEventId == null || storedEventId.s() == null
+                || admittedThrough == null || admittedThrough.n() == null) {
+            throw new IllegalStateException("admission record is incomplete for event " + eventId.value());
+        }
         return Optional.of(new EventAdmission(
-                new EventId(item.get("eventId").s()),
-                Instant.ofEpochMilli(Long.parseLong(item.get("admittedThrough").n()))));
+                new EventId(storedEventId.s()),
+                Instant.ofEpochMilli(Long.parseLong(admittedThrough.n()))));
+    }
+
+    @Override
+    public EventAdmission initializeAdmission(EventAdmission initial) {
+        Objects.requireNonNull(initial, "initial");
+        try {
+            dynamoDb.putItem(PutItemRequest.builder()
+                    .tableName(tableName)
+                    .item(Map.of(
+                            PK, string(admissionPk(initial.eventId())),
+                            "entityType", string("EVENT_ADMISSION"),
+                            "eventId", string(initial.eventId().value()),
+                            "admittedThrough", number(initial.admittedThrough().toEpochMilli())))
+                    .conditionExpression("attribute_not_exists(#pk)")
+                    .expressionAttributeNames(Map.of("#pk", PK))
+                    .build());
+            return initial;
+        } catch (ConditionalCheckFailedException alreadyEnabled) {
+            return findAdmission(initial.eventId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "admission record disappeared after concurrent initialization",
+                            alreadyEnabled));
+        }
     }
 
     @Override

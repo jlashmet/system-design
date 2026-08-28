@@ -19,6 +19,7 @@ import com.systemdesign.ticketmaster.booking.application.StartCheckoutResult;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
@@ -41,11 +42,8 @@ public final class BookingApiController implements BookingApi {
     private final GetSectionsHandler getSectionsHandler;
     private final GetSectionSeatsHandler getSectionSeatsHandler;
 
-    public BookingApiController(
-            CreateHoldHandler createHoldHandler,
-            StartCheckoutHandler startCheckoutHandler,
-            GetSectionsHandler getSectionsHandler,
-            GetSectionSeatsHandler getSectionSeatsHandler) {
+    public BookingApiController(CreateHoldHandler createHoldHandler, StartCheckoutHandler startCheckoutHandler,
+                                GetSectionsHandler getSectionsHandler, GetSectionSeatsHandler getSectionSeatsHandler) {
         this.createHoldHandler = createHoldHandler;
         this.startCheckoutHandler = startCheckoutHandler;
         this.getSectionsHandler = getSectionsHandler;
@@ -54,37 +52,25 @@ public final class BookingApiController implements BookingApi {
 
     @Override
     public ResponseEntity<List<SectionResponse>> getSections(String eventId) {
-        List<SectionResponse> response = getSectionsHandler
-                .handle(new GetSectionsQuery(new EventId(eventId)))
-                .stream()
-                .map(BookingApiController::toSectionResponse)
-                .toList();
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, SECTION_CACHE_CONTROL)
-                .body(response);
+        List<SectionResponse> response = getSectionsHandler.handle(new GetSectionsQuery(new EventId(eventId)))
+                .stream().map(BookingApiController::toSectionResponse).toList();
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, SECTION_CACHE_CONTROL).body(response);
     }
 
     @Override
     public ResponseEntity<List<SeatMapSeatResponse>> getSectionSeats(String eventId, String sectionId) {
         List<SeatMapSeatResponse> response = getSectionSeatsHandler
                 .handle(new GetSectionSeatsQuery(new EventId(eventId), new SectionId(sectionId)))
-                .stream()
-                .map(BookingApiController::toSeatResponse)
-                .toList();
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
-                .body(response);
+                .stream().map(BookingApiController::toSeatResponse).toList();
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, NO_STORE).body(response);
     }
 
     @Override
-    public ResponseEntity<HoldResponse> createHold(String eventId, CreateHoldRequest request) {
+    public ResponseEntity<HoldResponse> createHold(String eventId, String idempotencyKey, CreateHoldRequest request) {
         List<SeatId> seatIds = request.getSeatIds().stream().map(SeatId::new).toList();
-
         Hold hold = createHoldHandler.handle(new CreateHoldCommand(
-                new UserId(request.getUserId()),
-                new EventId(eventId),
-                seatIds));
-
+                new UserId(request.getUserId()), new EventId(eventId), seatIds,
+                new HoldIdempotencyKey(idempotencyKey)));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
                 .body(toHoldResponse(hold));
@@ -94,14 +80,11 @@ public final class BookingApiController implements BookingApi {
     public ResponseEntity<CheckoutResponse> startCheckout(String eventId, String holdId, String idempotencyKey) {
         StartCheckoutResult result = startCheckoutHandler.handle(
                 new StartCheckoutCommand(new EventId(eventId), new HoldId(holdId), idempotencyKey));
-
         CheckoutResponse response = new CheckoutResponse();
         response.setBookingId(result.booking().id().value());
         response.setStatus(result.booking().status().name());
         response.setPaymentIntentId(result.paymentIntent().id());
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
-                .body(response);
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, NO_STORE).body(response);
     }
 
     private static HoldResponse toHoldResponse(Hold hold) {

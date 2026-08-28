@@ -40,7 +40,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Section seat map
+          description: Section seat map; expired ordinary HELD seats are displayed as AVAILABLE, while CHECKOUT remains protected
           headers:
             Cache-Control:
               schema: { type: string, example: no-store }
@@ -86,7 +86,7 @@ paths:
         '403': { description: Waiting-room admission is enabled for the event and the user is not yet admitted }
         '409': { description: Seats are unavailable, a quoted price changed, or the idempotency key was reused for a different request }
         '421': { description: Request reached the wrong booking region; X-Booking-Region identifies the current owner }
-        '503': { description: Booking ownership cannot currently be established }
+        '503': { description: Booking ownership or authoritative storage is temporarily unavailable; retry may succeed }
   /events/{eventId}/holds/{holdId}/checkout:
     post:
       tags: [Booking]
@@ -104,7 +104,7 @@ paths:
         - in: header
           name: Idempotency-Key
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 1, maxLength: 200 }
         - in: header
           name: X-User-Id
           required: true
@@ -112,7 +112,7 @@ paths:
           schema: { type: string, minLength: 1 }
       responses:
         '200':
-          description: Checkout started
+          description: Checkout started or the existing idempotent checkout result returned
           headers:
             Cache-Control:
               schema: { type: string, example: no-store }
@@ -120,9 +120,10 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CheckoutResponse' }
         '403': { description: The Hold belongs to a different user }
+        '404': { description: Hold does not exist }
         '409': { description: Hold is expired or not active }
         '421': { description: Request reached the wrong booking region; X-Booking-Region identifies the current owner }
-        '503': { description: Booking ownership cannot currently be established }
+        '503': { description: Booking ownership or authoritative storage is temporarily unavailable; retry may succeed }
   /events/{eventId}/waiting-room:
     post:
       tags: [WaitingRoom]
@@ -199,6 +200,7 @@ components:
         seatIds:
           type: array
           minItems: 1
+          maxItems: 97
           uniqueItems: true
           items: { type: string }
     HoldResponse:

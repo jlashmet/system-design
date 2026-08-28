@@ -10,6 +10,7 @@ import com.systemdesign.ticketmaster.booking.application.ReconcileDueBookingsHan
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
+import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
@@ -21,6 +22,9 @@ import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckou
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoHoldRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoSeatMapRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoWaitingRoomRepository;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpEventWriteAuthority;
+import java.net.URI;
+import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +50,18 @@ public class BookingServiceApplication {
     @Bean
     DynamoDbClient dynamoDbClient(@Value("${ticketmaster.aws.region:us-west-2}") String region) {
         return DynamoDbClient.builder().region(Region.of(region)).build();
+    }
+
+    @Bean
+    EventWriteAuthority eventWriteAuthority(
+            @Value("${ticketmaster.controlplane.base-url:http://localhost:8083}") String controlPlaneBaseUrl,
+            @Value("${ticketmaster.aws.region:us-west-2}") String localRegion,
+            @Value("${ticketmaster.controlplane.request-timeout:PT1S}") String requestTimeout) {
+        return new HttpEventWriteAuthority(
+                HttpClient.newBuilder().connectTimeout(Duration.parse(requestTimeout)).build(),
+                URI.create(controlPlaneBaseUrl),
+                localRegion,
+                Duration.parse(requestTimeout));
     }
 
     @Bean
@@ -90,11 +106,13 @@ public class BookingServiceApplication {
 
     @Bean
     CreateHoldHandler createHoldHandler(
+            EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
             WaitingRoomRepository waitingRoomRepository,
             Clock clock,
             @Value("${ticketmaster.booking.hold-duration:PT5M}") String holdDuration) {
         return new CreateHoldHandler(
+                eventWriteAuthority,
                 holdRepository,
                 waitingRoomRepository,
                 clock,
@@ -103,6 +121,7 @@ public class BookingServiceApplication {
 
     @Bean
     StartCheckoutHandler startCheckoutHandler(
+            EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
             BookingRepository bookingRepository,
             CheckoutGateway checkoutGateway,
@@ -112,6 +131,7 @@ public class BookingServiceApplication {
             @Value("${ticketmaster.booking.reconciliation-delay:PT30S}") String reconciliationDelay,
             @Value("${ticketmaster.booking.reconciliation-shards:16}") int reconciliationShards) {
         return new StartCheckoutHandler(
+                eventWriteAuthority,
                 holdRepository,
                 bookingRepository,
                 checkoutGateway,

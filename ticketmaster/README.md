@@ -80,6 +80,67 @@ TICKETMASTER_SEAT_MAP_TABLE_NAME=<seat-map-table>
 
 The Lambda event-source mapping owns stream shard checkpoints, retry behavior, and parallelism. The projection writes are idempotent: each projected seat update atomically writes the section seat row and its event-level section-directory marker. Retrying a batch therefore safely converges on the latest processed seat image. A failed batch is intentionally retried as a batch rather than implementing custom stream checkpointing in the application.
 
+## Events to Search Projection
+
+Events and Search remain separate bounded contexts and do not share Java model classes. The production projection path uses a versioned JSON contract over an SQS FIFO queue:
+
+```text
+Events DynamoDB
+      |
+ DynamoDB Stream
+      |
+EventSearchProjectionLambdaHandler
+      |
+  SQS FIFO queue
+      |
+SearchProjectionSqsLambdaHandler
+      |
+EventSearchProjectionConsumer
+      |
+  OpenSearch
+```
+
+The Events Lambda uses strongly consistent Event/Venue reads when building a projection even though customer-facing Event reads are eventually consistent. That prevents an asynchronous stream callback from publishing an older canonical Event version because of read-replica lag.
+
+Events producer Lambda:
+
+```text
+com.systemdesign.ticketmaster.events.bootstrap.EventSearchProjectionLambdaHandler::handleRequest
+```
+
+Required producer environment variables:
+
+```text
+TICKETMASTER_EVENTS_TABLE_NAME=<events-table>
+TICKETMASTER_SEARCH_PROJECTION_QUEUE_URL=<fifo-queue-url>
+```
+
+The queue must be FIFO. `eventId` is the SQS message group ID so updates for one event remain ordered. The DynamoDB Stream event ID is the SQS deduplication ID so normal stream retries do not enqueue duplicate messages inside the FIFO deduplication window. Search indexing is also idempotent by `eventId`, so replay remains safe beyond that window.
+
+Search consumer Lambda:
+
+```text
+com.systemdesign.ticketmaster.search.bootstrap.SearchProjectionSqsLambdaHandler::handleRequest
+```
+
+Required consumer environment variables:
+
+```text
+TICKETMASTER_SEARCH_ENDPOINT=<amazon-opensearch-endpoint>
+AWS_REGION=<deployment-region>
+```
+
+Optional consumer environment variables:
+
+```text
+TICKETMASTER_SEARCH_INDEX_NAME=events
+TICKETMASTER_SEARCH_SIGNING_SERVICE=es
+```
+
+The Search Lambda uses the OpenSearch Java client's AWS SDK v2 transport, so requests to Amazon OpenSearch are SigV4 signed. Use signing service `es` for Amazon OpenSearch Service and `aoss` for OpenSearch Serverless. The JSON envelope currently uses `schemaVersion=1` and message types `UPSERT` and `DELETE`. Search owns its own input DTOs and translates the envelope into its own domain; it never compiles against Events classes.
+
+Malformed/unsupported projection messages fail the Lambda batch rather than being silently dropped. Because projection writes are idempotent, whole-batch retry is the simple default; production queue configuration should include a DLQ/redrive policy for poison messages.
+
 ## Testing
 
 The test layers follow `../docs/TESTING.md`:
@@ -88,7 +149,7 @@ The test layers follow `../docs/TESTING.md`:
 - application tests use fakes for domain gateways;
 - infrastructure integration tests use Floci through Testcontainers and exercise the real AWS SDK adapters;
 - architecture tests include the bootstrap module on their classpath so the executable composition root is also checked;
-- a small real-AWS contract suite can be added separately for behavior that an emulator cannot prove, such as IAM, quotas, networking, MRSC regional behavior, Lambda event-source mapping configuration, and hard-fencing operations.
+- a small real-AWS contract suite can be added separately for behavior that an emulator cannot prove, such as IAM, quotas, networking, MRSC regional behavior, Lambda event-source mapping configuration, SigV4/IAM integration, and hard-fencing operations.
 
 Floci integration tests use the `*IT` naming convention and run through Maven Failsafe during `verify`:
 
@@ -96,4 +157,4 @@ Floci integration tests use the `*IT` naming convention and run through Maven Fa
 mvn verify
 ```
 
-Booking integration tests verify DynamoDB transactional seat claiming, concurrent no-double-booking behavior, hold idempotency, checkout/finalization, reconciliation storage, waiting-room state, and seat-map projection. Events verifies canonical Event/Venue reads. Search verifies OpenSearch querying and indexing. Control-plane integration tests verify conditional owner/epoch assignment and transfer semantics.
+Booking integration tests verify DynamoDB transactional seat claiming, concurrent no-double-booking behavior, hold idempotency, checkout/finalization, reconciliation storage, waiting-room state, and seat-map projection. Events verifies canonical Event/Venue reads and SQS FIFO projection publishing. Search verifies OpenSearch querying/indexing plus the SQS projection contract. Control-plane integration tests verify conditional owner/epoch assignment and transfer semantics.

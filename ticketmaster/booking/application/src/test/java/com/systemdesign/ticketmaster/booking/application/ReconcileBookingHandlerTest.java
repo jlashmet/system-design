@@ -160,7 +160,8 @@ class ReconcileBookingHandlerTest {
         }
 
         @Override
-        public Optional<Booking> findByCheckoutIdempotencyKey(String idempotencyKey) {
+        public Optional<Booking> findByCheckoutIdempotencyKey(
+                EventId eventId, HoldId holdId, String idempotencyKey) {
             return Optional.empty();
         }
 

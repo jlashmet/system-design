@@ -8,6 +8,8 @@ import java.util.Objects;
 import org.springframework.scheduling.annotation.Scheduled;
 
 public final class AdmissionRegulationScheduler {
+    private static final System.Logger LOGGER = System.getLogger(AdmissionRegulationScheduler.class.getName());
+
     private final RegulateAdmissionHandler handler;
     private final List<EventId> eventIds;
 
@@ -21,7 +23,12 @@ public final class AdmissionRegulationScheduler {
             fixedDelayString = "${ticketmaster.booking.admission.poll-delay-ms:1000}")
     public void regulate() {
         for (EventId eventId : eventIds) {
-            handler.handle(new RegulateAdmissionCommand(eventId));
+            try {
+                handler.handle(new RegulateAdmissionCommand(eventId));
+            } catch (RuntimeException failure) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "admission regulation failed for event " + eventId.value(), failure);
+            }
         }
     }
 }

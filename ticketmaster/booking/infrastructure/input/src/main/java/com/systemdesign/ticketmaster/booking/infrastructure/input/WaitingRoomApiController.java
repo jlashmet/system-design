@@ -12,11 +12,14 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
 import java.time.ZoneOffset;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public final class WaitingRoomApiController implements WaitingRoomApi {
+    private static final String NO_STORE = "no-store";
+
     private final JoinWaitingRoomHandler joinWaitingRoomHandler;
     private final CheckAdmissionHandler checkAdmissionHandler;
 
@@ -36,7 +39,9 @@ public final class WaitingRoomApiController implements WaitingRoomApi {
         response.setEventId(entry.eventId().value());
         response.setUserId(entry.userId().value());
         response.setJoinedAt(entry.joinedAt().atOffset(ZoneOffset.UTC));
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
+                .body(response);
     }
 
     @Override
@@ -46,6 +51,8 @@ public final class WaitingRoomApiController implements WaitingRoomApi {
 
         AdmissionStatusResponse response = new AdmissionStatusResponse();
         response.setStatus(AdmissionStatusResponse.StatusEnum.fromValue(decision.name()));
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
+                .body(response);
     }
 }

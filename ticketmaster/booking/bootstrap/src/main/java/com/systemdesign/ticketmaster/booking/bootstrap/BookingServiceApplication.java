@@ -16,6 +16,7 @@ import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.CachedEventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DemoPaymentGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoBookingRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckoutGateway;
@@ -54,14 +55,18 @@ public class BookingServiceApplication {
 
     @Bean
     EventWriteAuthority eventWriteAuthority(
+            Clock clock,
             @Value("${ticketmaster.controlplane.base-url:http://localhost:8083}") String controlPlaneBaseUrl,
             @Value("${ticketmaster.aws.region:us-west-2}") String localRegion,
-            @Value("${ticketmaster.controlplane.request-timeout:PT1S}") String requestTimeout) {
-        return new HttpEventWriteAuthority(
-                HttpClient.newBuilder().connectTimeout(Duration.parse(requestTimeout)).build(),
+            @Value("${ticketmaster.controlplane.request-timeout:PT1S}") String requestTimeout,
+            @Value("${ticketmaster.controlplane.ownership-cache-ttl:PT5S}") String ownershipCacheTtl) {
+        Duration timeout = Duration.parse(requestTimeout);
+        EventWriteAuthority remoteAuthority = new HttpEventWriteAuthority(
+                HttpClient.newBuilder().connectTimeout(timeout).build(),
                 URI.create(controlPlaneBaseUrl),
                 localRegion,
-                Duration.parse(requestTimeout));
+                timeout);
+        return new CachedEventWriteAuthority(remoteAuthority, clock, Duration.parse(ownershipCacheTtl));
     }
 
     @Bean

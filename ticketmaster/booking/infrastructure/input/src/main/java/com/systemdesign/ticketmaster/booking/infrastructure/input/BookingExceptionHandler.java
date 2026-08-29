@@ -6,6 +6,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableExc
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
+import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
@@ -82,6 +83,16 @@ public final class BookingExceptionHandler {
     ResponseEntity<ProblemDetail> bookingStorageUnavailable(BookingStorageUnavailableException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
         detail.setTitle("Booking storage unavailable");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(detail);
+    }
+
+    @ExceptionHandler(PaymentProviderUnavailableException.class)
+    ResponseEntity<ProblemDetail> paymentProviderUnavailable(PaymentProviderUnavailableException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
+        detail.setTitle("Payment provider unavailable");
+        detail.setProperty("operation", exception.operation());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .header(HttpHeaders.RETRY_AFTER, "1")
                 .body(detail);

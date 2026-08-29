@@ -107,9 +107,6 @@ public final class ReconcileBookingHandler {
         } catch (PaymentProviderUnavailableException unavailable) {
             reschedule(booking);
             throw unavailable;
-        } catch (RuntimeException providerFailure) {
-            reschedule(booking);
-            throw new PaymentProviderUnavailableException("payment status lookup", providerFailure);
         }
     }
 
@@ -119,9 +116,6 @@ public final class ReconcileBookingHandler {
         } catch (PaymentProviderUnavailableException unavailable) {
             reschedule(booking);
             throw unavailable;
-        } catch (RuntimeException providerFailure) {
-            reschedule(booking);
-            throw new PaymentProviderUnavailableException("payment cancellation", providerFailure);
         }
     }
 
@@ -148,9 +142,6 @@ public final class ReconcileBookingHandler {
         } catch (PaymentProviderUnavailableException unavailable) {
             reschedule(booking);
             throw unavailable;
-        } catch (RuntimeException providerFailure) {
-            reschedule(booking);
-            throw new PaymentProviderUnavailableException("payment intent creation", providerFailure);
         }
 
         Booking withIntent = booking.attachPaymentIntent(intent.id());

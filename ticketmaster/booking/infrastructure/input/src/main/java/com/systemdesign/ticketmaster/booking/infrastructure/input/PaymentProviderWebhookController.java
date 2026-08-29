@@ -1,8 +1,8 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
 import java.util.Objects;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
@@ -36,8 +36,8 @@ public final class PaymentProviderWebhookController {
 
     @PostMapping(path = "/events", consumes = "application/json")
     public ResponseEntity<Void> paymentStatusChanged(
-            @RequestHeader(TIMESTAMP_HEADER) String timestamp,
-            @RequestHeader(SIGNATURE_HEADER) String signature,
+            @RequestHeader(value = TIMESTAMP_HEADER, required = false) String timestamp,
+            @RequestHeader(value = SIGNATURE_HEADER, required = false) String signature,
             @RequestBody byte[] rawBody) {
         verifier.verify(timestamp, signature, rawBody);
         PaymentStatusChangedRequest request = readRequest(rawBody);
@@ -52,7 +52,7 @@ public final class PaymentProviderWebhookController {
             PaymentStatusChangedRequest request = objectMapper.readValue(rawBody, PaymentStatusChangedRequest.class);
             if (request == null) throw new IllegalArgumentException("payment webhook body must be an object");
             return request;
-        } catch (JsonProcessingException e) {
+        } catch (IOException e) {
             throw new IllegalArgumentException("invalid payment webhook body", e);
         }
     }

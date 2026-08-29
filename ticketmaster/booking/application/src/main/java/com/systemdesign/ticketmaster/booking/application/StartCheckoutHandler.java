@@ -104,7 +104,8 @@ public final class StartCheckoutHandler {
             return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
         }
 
-        PaymentIntent intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
+        PaymentIntent intent = paymentGateway.createPaymentIntent(
+                booking.eventId(), booking.id(), booking.totalPrice(), booking.id().value());
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
         return new StartCheckoutResult(withIntent, intent.id());

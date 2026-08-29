@@ -88,6 +88,13 @@ class BookingExceptionHandlerTest {
         thenExpectRetryablePaymentProviderUnavailable("payment intent creation");
     }
 
+    @Test
+    void invalidPaymentWebhookAuthenticationIsUnauthorized() {
+        givenPaymentWebhookAuthenticationFailure();
+        whenExceptionIsHandled();
+        thenExpectUnauthorizedWebhook();
+    }
+
     private void givenWrongRegion() {
         exception = new WrongBookingRegionException(
                 new EventId("event-123"), "us-west-2", "us-east-1");
@@ -137,8 +144,15 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenPaymentWebhookAuthenticationFailure() {
+        exception = new PaymentWebhookAuthenticationException();
+        response = null;
+    }
+
     private void whenExceptionIsHandled() {
-        if (exception instanceof WrongBookingRegionException wrongRegion) {
+        if (exception instanceof PaymentWebhookAuthenticationException authentication) {
+            response = handler.paymentWebhookAuthentication(authentication);
+        } else if (exception instanceof WrongBookingRegionException wrongRegion) {
             response = handler.wrongBookingRegion(wrongRegion);
         } else if (exception instanceof EventOwnershipUnavailableException unavailable) {
             response = handler.bookingOwnershipUnavailable(unavailable);
@@ -203,5 +217,11 @@ class BookingExceptionHandlerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getTitle()).isEqualTo("Payment provider unavailable");
         assertThat(response.getBody().getProperties()).containsEntry("operation", operation);
+    }
+
+    private void thenExpectUnauthorizedWebhook() {
+        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Payment webhook authentication failed");
     }
 }

@@ -54,6 +54,13 @@ class HttpPaymentGatewayTest {
     }
 
     @Test
+    void refusesPaymentCreationWithoutEventRoutingMetadata() {
+        givenProviderResponse(201, "{\"id\":\"pi-123\",\"status\":\"REQUIRES_PAYMENT_METHOD\"}");
+        whenEventlessPaymentIntentCreated();
+        thenExpectEventRoutingRequired();
+    }
+
+    @Test
     void readsPaymentStatus() {
         givenProviderResponse(200, "{\"id\":\"pi-123\",\"status\":\"SUCCEEDED\"}");
         whenPaymentStatusRead("pi-123");
@@ -113,6 +120,14 @@ class HttpPaymentGatewayTest {
         }
     }
 
+    private void whenEventlessPaymentIntentCreated() {
+        try {
+            paymentIntent = gateway.createPaymentIntent(BOOKING_ID, PRICE, BOOKING_ID.value());
+        } catch (Throwable error) {
+            thrown = error;
+        }
+    }
+
     private void whenPaymentStatusRead(String paymentIntentId) {
         try {
             paymentStatus = gateway.getPaymentStatus(paymentIntentId);
@@ -149,6 +164,13 @@ class HttpPaymentGatewayTest {
         } catch (IOException e) {
             throw new AssertionError(e);
         }
+    }
+
+    private void thenExpectEventRoutingRequired() {
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessage("eventId is required for HTTP payment intent creation");
+        assertThat(paymentIntent).isNull();
+        assertThat(requestMethod).isNull();
     }
 
     private void thenExpectStatus(PaymentIntentStatus expectedStatus, String expectedMethod, String expectedPath) {

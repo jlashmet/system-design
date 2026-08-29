@@ -73,6 +73,13 @@ class HttpAdmissionHealthGatewayTest {
     }
 
     @Test
+    void rejectsMissingSignalTimestampInsteadOfAdmitting() {
+        givenProviderResponse(200, "{\"eventId\":\"event-123\",\"capacity\":\"HEALTHY\"}");
+        whenCapacityAssessed();
+        thenExpectFailure("admission health observedAt must not be blank");
+    }
+
+    @Test
     void rejectsUnavailableTelemetryInsteadOfAdmitting() {
         givenProviderResponse(503, "{\"error\":\"unavailable\"}");
         whenCapacityAssessed();

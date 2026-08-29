@@ -1,5 +1,6 @@
 package com.systemdesign.ticketmaster.booking.bootstrap;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.EnableAdmissionHandler;
@@ -33,6 +34,7 @@ import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoHoldRep
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoSeatMapRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoWaitingRoomRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpEventWriteAuthority;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpPaymentGateway;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Clock;
@@ -44,6 +46,7 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -126,8 +129,25 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    @ConditionalOnProperty(
+            name = "ticketmaster.booking.payment.mode",
+            havingValue = "demo",
+            matchIfMissing = true)
     DemoPaymentGateway paymentGateway() {
         return new DemoPaymentGateway();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "ticketmaster.booking.payment.mode", havingValue = "http")
+    PaymentGateway httpPaymentGateway(
+            @Value("${ticketmaster.booking.payment.base-url}") String baseUrl,
+            @Value("${ticketmaster.booking.payment.request-timeout:PT2S}") String requestTimeout) {
+        Duration timeout = Duration.parse(requestTimeout);
+        return new HttpPaymentGateway(
+                HttpClient.newBuilder().connectTimeout(timeout).build(),
+                URI.create(baseUrl),
+                timeout,
+                new ObjectMapper());
     }
 
     @Bean
@@ -198,6 +218,7 @@ public class BookingServiceApplication {
     @ConditionalOnProperty(
             name = "ticketmaster.booking.demo-payment-endpoint-enabled",
             havingValue = "true")
+    @ConditionalOnBean(DemoPaymentGateway.class)
     DemoPaymentController demoPaymentController(
             DemoPaymentGateway paymentGateway,
             ReconcileBookingHandler reconcileBookingHandler) {

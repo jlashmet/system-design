@@ -12,6 +12,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -103,18 +104,24 @@ public final class ReconcileBookingHandler {
     private PaymentIntentStatus getPaymentStatusOrReschedule(Booking booking) {
         try {
             return paymentGateway.getPaymentStatus(booking.paymentIntentIdOptional().orElseThrow());
+        } catch (PaymentProviderUnavailableException unavailable) {
+            reschedule(booking);
+            throw unavailable;
         } catch (RuntimeException providerFailure) {
             reschedule(booking);
-            throw providerFailure;
+            throw new PaymentProviderUnavailableException("payment status lookup", providerFailure);
         }
     }
 
     private PaymentIntentStatus cancelPaymentOrReschedule(Booking booking) {
         try {
             return paymentGateway.cancelPaymentIntent(booking.paymentIntentIdOptional().orElseThrow());
+        } catch (PaymentProviderUnavailableException unavailable) {
+            reschedule(booking);
+            throw unavailable;
         } catch (RuntimeException providerFailure) {
             reschedule(booking);
-            throw providerFailure;
+            throw new PaymentProviderUnavailableException("payment cancellation", providerFailure);
         }
     }
 
@@ -138,9 +145,12 @@ public final class ReconcileBookingHandler {
         PaymentIntent intent;
         try {
             intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
+        } catch (PaymentProviderUnavailableException unavailable) {
+            reschedule(booking);
+            throw unavailable;
         } catch (RuntimeException providerFailure) {
             reschedule(booking);
-            throw providerFailure;
+            throw new PaymentProviderUnavailableException("payment intent creation", providerFailure);
         }
 
         Booking withIntent = booking.attachPaymentIntent(intent.id());

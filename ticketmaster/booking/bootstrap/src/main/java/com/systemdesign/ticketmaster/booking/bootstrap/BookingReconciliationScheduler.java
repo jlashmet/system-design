@@ -20,12 +20,14 @@ public final class BookingReconciliationScheduler {
             fixedDelayString = "${ticketmaster.booking.reconciliation-poll-delay-ms:5000}")
     public void reconcileDueBookings() {
         ReconciliationBatchResult result = handler.handle();
-        if (!result.errors().isEmpty()) {
+        if (!result.errors().isEmpty() || !result.failedShards().isEmpty()) {
             log.warn(
-                    "Payment reconciliation processed {} bookings with {} failures: {}",
+                    "Payment reconciliation processed {} bookings with {} booking failures and {} shard-read failures; bookingIds={}, shards={}",
                     result.processed(),
                     result.errors().size(),
-                    result.errors());
+                    result.failedShards().size(),
+                    result.errors(),
+                    result.failedShards());
         } else if (result.processed() > 0) {
             log.info("Payment reconciliation processed {} bookings", result.processed());
         }

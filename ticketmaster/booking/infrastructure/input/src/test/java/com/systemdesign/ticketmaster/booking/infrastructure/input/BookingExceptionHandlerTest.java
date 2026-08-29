@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictExcep
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
+import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
@@ -80,6 +81,13 @@ class BookingExceptionHandlerTest {
         thenExpectRetryableStorageUnavailable();
     }
 
+    @Test
+    void transientPaymentProviderFailureIsRetryableServiceUnavailable() {
+        givenPaymentProviderUnavailable();
+        whenExceptionIsHandled();
+        thenExpectRetryablePaymentProviderUnavailable("payment intent creation");
+    }
+
     private void givenWrongRegion() {
         exception = new WrongBookingRegionException(
                 new EventId("event-123"), "us-west-2", "us-east-1");
@@ -123,6 +131,12 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenPaymentProviderUnavailable() {
+        exception = new PaymentProviderUnavailableException(
+                "payment intent creation", new IllegalStateException("provider timeout"));
+        response = null;
+    }
+
     private void whenExceptionIsHandled() {
         if (exception instanceof WrongBookingRegionException wrongRegion) {
             response = handler.wrongBookingRegion(wrongRegion);
@@ -138,6 +152,8 @@ class BookingExceptionHandlerTest {
             response = handler.waitingRoomDisabled(disabled);
         } else if (exception instanceof BookingStorageUnavailableException storageUnavailable) {
             response = handler.bookingStorageUnavailable(storageUnavailable);
+        } else if (exception instanceof PaymentProviderUnavailableException providerUnavailable) {
+            response = handler.paymentProviderUnavailable(providerUnavailable);
         } else {
             response = handler.conflict(exception);
         }
@@ -179,5 +195,13 @@ class BookingExceptionHandlerTest {
         assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getTitle()).isEqualTo("Booking storage unavailable");
+    }
+
+    private void thenExpectRetryablePaymentProviderUnavailable(String operation) {
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Payment provider unavailable");
+        assertThat(response.getBody().getProperties()).containsEntry("operation", operation);
     }
 }

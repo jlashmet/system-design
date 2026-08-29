@@ -12,6 +12,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
+import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -104,7 +105,15 @@ public final class StartCheckoutHandler {
             return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
         }
 
-        PaymentIntent intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
+        PaymentIntent intent;
+        try {
+            intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
+        } catch (PaymentProviderUnavailableException unavailable) {
+            throw unavailable;
+        } catch (RuntimeException providerFailure) {
+            throw new PaymentProviderUnavailableException("payment intent creation", providerFailure);
+        }
+
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
         return new StartCheckoutResult(withIntent, intent.id());

@@ -209,6 +209,7 @@ class StartCheckoutHandlerTest {
         assertThat(result).isNull();
         assertThat(checkoutGateway.startCalls).isOne();
         assertThat(paymentGateway.createCalls).isOne();
+        assertThat(paymentGateway.createEventId).isEqualTo(EVENT_ID);
         assertThat(paymentGateway.statusCalls).isZero();
     }
 
@@ -307,6 +308,7 @@ class StartCheckoutHandlerTest {
         private final boolean failCreate;
         private int createCalls;
         private int statusCalls;
+        private EventId createEventId;
 
         private TrackingPaymentGateway() {
             this(false);
@@ -314,6 +316,13 @@ class StartCheckoutHandlerTest {
 
         private TrackingPaymentGateway(boolean failCreate) {
             this.failCreate = failCreate;
+        }
+
+        @Override
+        public PaymentIntent createPaymentIntent(
+                EventId eventId, BookingId bookingId, Price price, String key) {
+            createEventId = eventId;
+            return createPaymentIntent(bookingId, price, key);
         }
 
         @Override

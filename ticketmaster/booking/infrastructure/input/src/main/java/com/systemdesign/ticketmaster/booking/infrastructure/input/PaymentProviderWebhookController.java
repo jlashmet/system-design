@@ -25,12 +25,10 @@ public final class PaymentProviderWebhookController {
 
     public PaymentProviderWebhookController(
             HmacPaymentWebhookVerifier verifier,
-            VerifiedPaymentStatusChangedHandler handler,
-            ObjectMapper objectMapper) {
+            VerifiedPaymentStatusChangedHandler handler) {
         this.verifier = Objects.requireNonNull(verifier, "verifier");
         this.handler = Objects.requireNonNull(handler, "handler");
-        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper")
-                .copy()
+        this.objectMapper = new ObjectMapper()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
     }
 

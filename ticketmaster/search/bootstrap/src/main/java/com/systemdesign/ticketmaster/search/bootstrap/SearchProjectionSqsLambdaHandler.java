@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.search.bootstrap;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
+import com.amazonaws.services.lambda.runtime.events.SQSBatchResponse;
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +15,8 @@ import com.systemdesign.ticketmaster.search.infrastructure.input.EventSearchProj
 import com.systemdesign.ticketmaster.search.infrastructure.output.OpenSearchEventSearchIndex;
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.transport.aws.AwsSdk2Transport;
@@ -25,12 +28,13 @@ import software.amazon.awssdk.regions.Region;
 /**
  * SQS FIFO Lambda consumer for the cross-context Event search projection.
  *
- * <p>The producer groups messages by event ID, so per-event changes are delivered in order. This
- * handler deliberately fails the whole Lambda batch if parsing or indexing fails. Search projection
- * writes are idempotent by event ID, making whole-batch retry safe and keeping checkpoint logic out
- * of the application.</p>
+ * <p>The producer groups messages by event ID, so per-event changes are delivered in order. The
+ * Lambda event-source mapping should enable {@code ReportBatchItemFailures}. Records processed
+ * before the first failure are acknowledged, while the failed record and every later unprocessed
+ * record are returned for retry. Stopping after the first failure preserves FIFO ordering while
+ * avoiding needless replay of already-successful prefix records.</p>
  */
-public final class SearchProjectionSqsLambdaHandler implements RequestHandler<SQSEvent, Void> {
+public final class SearchProjectionSqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatchResponse> {
     private static final int SUPPORTED_SCHEMA_VERSION = 1;
     private static final String ENDPOINT_ENV = "TICKETMASTER_SEARCH_ENDPOINT";
     private static final String INDEX_ENV = "TICKETMASTER_SEARCH_INDEX_NAME";
@@ -49,14 +53,49 @@ public final class SearchProjectionSqsLambdaHandler implements RequestHandler<SQ
     }
 
     @Override
-    public Void handleRequest(SQSEvent event, Context context) {
+    public SQSBatchResponse handleRequest(SQSEvent event, Context context) {
         Objects.requireNonNull(event, "event");
-        if (event.getRecords() == null) return null;
-        for (SQSEvent.SQSMessage record : event.getRecords()) {
+        List<SQSBatchResponse.BatchItemFailure> failures = new ArrayList<>();
+        List<SQSEvent.SQSMessage> records = event.getRecords();
+        if (records == null) return new SQSBatchResponse(failures);
+
+        for (int index = 0; index < records.size(); index++) {
+            SQSEvent.SQSMessage record = records.get(index);
             if (record == null) continue;
-            accept(record.getBody());
+            try {
+                accept(record.getBody());
+            } catch (RuntimeException failure) {
+                logFailure(context, record, failure);
+                addFailure(failures, record);
+                addUnprocessedFailures(failures, records, index + 1);
+                break;
+            }
         }
-        return null;
+        return new SQSBatchResponse(failures);
+    }
+
+    private static void addUnprocessedFailures(
+            List<SQSBatchResponse.BatchItemFailure> failures,
+            List<SQSEvent.SQSMessage> records,
+            int firstUnprocessedIndex) {
+        for (int index = firstUnprocessedIndex; index < records.size(); index++) {
+            SQSEvent.SQSMessage unprocessed = records.get(index);
+            if (unprocessed != null) addFailure(failures, unprocessed);
+        }
+    }
+
+    private static void addFailure(
+            List<SQSBatchResponse.BatchItemFailure> failures,
+            SQSEvent.SQSMessage record) {
+        failures.add(new SQSBatchResponse.BatchItemFailure(
+                requireNonBlank(record.getMessageId(), "SQS message id")));
+    }
+
+    private static void logFailure(Context context, SQSEvent.SQSMessage record, RuntimeException failure) {
+        if (context == null || context.getLogger() == null) return;
+        String messageId = record.getMessageId() == null ? "<missing>" : record.getMessageId();
+        context.getLogger().log("Search projection failed for SQS message " + messageId
+                + ": " + failure.getClass().getSimpleName() + ": " + failure.getMessage());
     }
 
     private void accept(String body) {

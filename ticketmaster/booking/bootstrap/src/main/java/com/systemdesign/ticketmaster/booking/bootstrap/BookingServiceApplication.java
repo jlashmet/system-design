@@ -36,6 +36,7 @@ import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckou
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoHoldRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoSeatMapRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoWaitingRoomRepository;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpAdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpEventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpPaymentGateway;
 import java.net.URI;
@@ -153,10 +154,33 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    @ConditionalOnProperty(
+            name = "ticketmaster.booking.admission.health.mode",
+            havingValue = "configured",
+            matchIfMissing = true)
     AdmissionHealthGateway admissionHealthGateway(
             @Value("${ticketmaster.booking.admission.capacity:OVERLOADED}") String capacity) {
         return new ConfiguredAdmissionHealthGateway(
                 AdmissionCapacity.valueOf(capacity.trim().toUpperCase(Locale.ROOT)));
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "ticketmaster.booking.admission.health.mode", havingValue = "http")
+    AdmissionHealthGateway httpAdmissionHealthGateway(
+            Clock clock,
+            @Value("${ticketmaster.booking.admission.health.base-url}") String baseUrl,
+            @Value("${ticketmaster.booking.admission.health.request-timeout:PT0.5S}") String requestTimeout,
+            @Value("${ticketmaster.booking.admission.health.max-signal-age:PT3S}") String maxSignalAge,
+            @Value("${ticketmaster.booking.admission.health.max-future-skew:PT1S}") String maxFutureSkew) {
+        Duration timeout = Duration.parse(requestTimeout);
+        return new HttpAdmissionHealthGateway(
+                HttpClient.newBuilder().connectTimeout(timeout).build(),
+                URI.create(baseUrl),
+                timeout,
+                new ObjectMapper(),
+                clock,
+                Duration.parse(maxSignalAge),
+                Duration.parse(maxFutureSkew));
     }
 
     @Bean

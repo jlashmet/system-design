@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
@@ -107,15 +108,32 @@ public final class ReconcileBookingHandler {
     private Booking confirm(Booking booking, Hold hold) {
         Hold converted = hold.convert();
         Booking confirmed = booking.confirm();
-        checkoutGateway.finalizeBooking(converted, confirmed);
-        return confirmed;
+        try {
+            checkoutGateway.finalizeBooking(converted, confirmed);
+            return confirmed;
+        } catch (CheckoutConflictException conflict) {
+            return terminalAfterConcurrentFinalization(booking.id(), BookingStatus.CONFIRMED, conflict);
+        }
     }
 
     private Booking fail(Booking booking, Hold hold) {
         Hold failedHold = hold.fail();
         Booking failedBooking = booking.fail();
-        checkoutGateway.failBooking(failedHold, failedBooking);
-        return failedBooking;
+        try {
+            checkoutGateway.failBooking(failedHold, failedBooking);
+            return failedBooking;
+        } catch (CheckoutConflictException conflict) {
+            return terminalAfterConcurrentFinalization(booking.id(), BookingStatus.FAILED, conflict);
+        }
+    }
+
+    private Booking terminalAfterConcurrentFinalization(
+            BookingId bookingId,
+            BookingStatus expectedStatus,
+            CheckoutConflictException conflict) {
+        Booking current = loadBooking(bookingId);
+        if (current.status() == expectedStatus) return current;
+        throw conflict;
     }
 
     private Booking ensurePaymentIntent(Booking booking) {

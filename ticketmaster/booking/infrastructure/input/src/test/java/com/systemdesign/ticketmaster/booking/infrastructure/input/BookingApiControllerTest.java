@@ -90,7 +90,7 @@ class BookingApiControllerTest {
     private void whenHoldIsCreatedForHeaderUser() {
         CreateHoldRequest request = new CreateHoldRequest();
         request.setSeatIds(List.of("A10"));
-        holdResponse = controller.createHold("event-123", "hold-request-1", "user-header", request);
+        holdResponse = controller.createHold("event-123", "hold-request-1", "user-header", null, request);
     }
 
     private void thenExpectShortSharedCacheResponse() {

@@ -70,11 +70,12 @@ public final class BookingApiController implements BookingApi {
             String eventId,
             String idempotencyKey,
             String userId,
+            String admissionToken,
             CreateHoldRequest request) {
         List<SeatId> seatIds = request.getSeatIds().stream().map(SeatId::new).toList();
         Hold hold = createHoldHandler.handle(new CreateHoldCommand(
                 new UserId(userId), new EventId(eventId), seatIds,
-                new HoldIdempotencyKey(idempotencyKey)));
+                new HoldIdempotencyKey(idempotencyKey), admissionToken));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, NO_STORE)
                 .body(toHoldResponse(hold));

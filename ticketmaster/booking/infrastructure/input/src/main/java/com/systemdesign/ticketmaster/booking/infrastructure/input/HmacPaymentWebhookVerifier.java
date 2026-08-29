@@ -6,7 +6,6 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.format.DateTimeParseException;
 import java.util.HexFormat;
 import java.util.Objects;
 import javax.crypto.Mac;
@@ -66,8 +65,6 @@ public final class HmacPaymentWebhookVerifier {
     private static Instant parseTimestamp(String timestamp) {
         try {
             return Instant.ofEpochSecond(Long.parseLong(timestamp));
-        } catch (NumberFormatException | DateTimeParseException e) {
-            throw new PaymentWebhookAuthenticationException(e);
         } catch (RuntimeException e) {
             throw new PaymentWebhookAuthenticationException(e);
         }

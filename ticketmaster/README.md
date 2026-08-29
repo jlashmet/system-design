@@ -38,6 +38,8 @@ Expected DynamoDB conditional contention remains a booking conflict (`409`). Tra
 
 Retryable payment-provider transport failures, throttling, timeouts, and provider `5xx` responses also surface as `503 Service Unavailable` with `Retry-After: 1`. Payment reconciliation advances `nextReconcileAt` before propagating a retryable provider failure, so a degraded provider is not hammered continuously by an already-due Booking. Provider request/contract errors remain distinct failures rather than being mislabeled as transient outages. Early provider callbacks do not push an already-future fallback reconciliation farther out, so duplicate callback delivery cannot indefinitely postpone the scheduler safety net.
 
+The due-booking scheduler isolates both per-booking failures and per-shard GSI read failures. An unreadable reconciliation shard does not skip later shards. If an unexpected still-pending Booking fails after being read from the due index, the scheduler asks `ReconcileBookingHandler` to move that Booking out by the normal reconciliation backoff. The handler rechecks event write authority before mutating the schedule, so a poison Booking cannot permanently occupy the front of a shard page while a wrong-region replica still remains fail-closed.
+
 Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
 
 ### Trusted user identity
@@ -164,6 +166,7 @@ Waiting-room regulation is schedulable but conservative by default. Runtime prop
 
 ```text
 ticketmaster.booking.admission.event-ids=
+ticketmaster.booking.admission.health.mode=configured
 ticketmaster.booking.admission.capacity=OVERLOADED
 ticketmaster.booking.admission.healthy-advance=PT2S
 ticketmaster.booking.admission.constrained-advance=PT0.5S
@@ -171,13 +174,42 @@ ticketmaster.booking.admission.poll-delay-ms=1000
 ticketmaster.booking.admission.regulator-lease-duration=PT5S
 ```
 
+The default `configured` health mode remains useful for local/interview scenarios and defaults to `OVERLOADED`, so merely enabling a hot-event waiting room never starts admitting users accidentally.
+
+A production deployment can switch regulation to fresh event-specific telemetry:
+
+```text
+ticketmaster.booking.admission.health.mode=http
+ticketmaster.booking.admission.health.base-url=https://capacity.internal.example
+ticketmaster.booking.admission.health.request-timeout=PT0.5S
+ticketmaster.booking.admission.health.max-signal-age=PT3S
+ticketmaster.booking.admission.health.max-future-skew=PT1S
+```
+
+The HTTP health source exposes:
+
+```http
+GET /admission-capacity?eventId=event-123
+Accept: application/json
+```
+
+with a response such as:
+
+```json
+{
+  "eventId": "event-123",
+  "capacity": "HEALTHY",
+  "observedAt": "2026-08-29T12:00:00Z"
+}
+```
+
+Supported capacity values are `HEALTHY`, `CONSTRAINED`, and `OVERLOADED`. The adapter accepts a signal only when its `eventId` matches the requested event and `observedAt` is within the configured freshness/future-skew window. HTTP failures, malformed payloads, mismatched events, stale signals, future-skewed signals, and unknown capacity values all fail the assessment. `AdmissionRegulationScheduler` already treats any health failure as fail-closed and holds the watermark steady, so stale `HEALTHY` telemetry cannot keep releasing users during a monitoring outage.
+
 An empty `event-ids` value means admission control is not enabled for any configured hot event. Joining a waiting room that has not been enabled returns `409`; latent waiting-room entries are not created before an admission watermark exists.
 
 Every event listed in `event-ids` is initialized synchronously while the scheduler bean is constructed. Initial creation is atomic create-if-absent and starts one millisecond behind the service clock so a join stamped in the same millisecond is still queued. Concurrent service starts cannot move an existing watermark forward, and existing watermarks are preserved across restarts. If initialization fails, service startup fails closed rather than bringing up a configured hot event with its waiting room silently disabled.
 
 Multiple Booking replicas do not multiply the admission rate. Each process receives a unique regulator ID and must acquire/renew a short per-event lease stored on the admission item before running the admission policy. The lease is globally coordinated by the waiting-room table. In addition, a regulator must pass `EventWriteAuthority`; only the event's current authoritative booking region is allowed to advance its watermark, so admission decisions are based on the health of the region that will actually execute holds/checkouts. A non-owner region simply skips regulation for that event. Ownership/control-plane/health/storage failures hold the watermark steady.
-
-The initial `ConfiguredAdmissionHealthGateway` defaults to `OVERLOADED`, so initialization alone never advances admission accidentally. It is intentionally a bootstrap/demo adapter and can be replaced by a telemetry-backed `AdmissionHealthGateway` without changing the application policy.
 
 ### Seat-map DynamoDB Stream projection
 
@@ -265,7 +297,7 @@ Optional consumer environment variables:
 
 ```text
 TICKETMASTER_SEARCH_INDEX_NAME=events
-TICKETMASTER_SEARCH_SIGNING_SERVICE=es
+ticketmaster.search.aws-signing-service=es
 ```
 
 The Search Lambda uses the OpenSearch Java client's AWS SDK v2 transport, so requests to Amazon OpenSearch are SigV4 signed. Use signing service `es` for Amazon OpenSearch Service and `aoss` for OpenSearch Serverless. The JSON envelope currently uses `schemaVersion=1` and message types `UPSERT` and `DELETE`. Search owns its own input DTOs and translates the envelope into its own domain; it never compiles against Events classes.

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
+import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
 import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 class HttpPaymentGatewayTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final EventId EVENT_ID = new EventId("event-123");
     private static final BookingId BOOKING_ID = new BookingId("booking-123");
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
 
@@ -45,7 +47,7 @@ class HttpPaymentGatewayTest {
     }
 
     @Test
-    void createsPaymentIntentWithProviderIdempotencyKey() {
+    void createsPaymentIntentWithProviderIdempotencyKeyAndRoutingMetadata() {
         givenProviderResponse(201, "{\"id\":\"pi-123\",\"status\":\"REQUIRES_PAYMENT_METHOD\"}");
         whenPaymentIntentCreated();
         thenExpectCreatedIntent("pi-123", PaymentIntentStatus.REQUIRES_PAYMENT_METHOD, "booking-123", "125.00", "USD");
@@ -105,7 +107,7 @@ class HttpPaymentGatewayTest {
 
     private void whenPaymentIntentCreated() {
         try {
-            paymentIntent = gateway.createPaymentIntent(BOOKING_ID, PRICE, BOOKING_ID.value());
+            paymentIntent = gateway.createPaymentIntent(EVENT_ID, BOOKING_ID, PRICE, BOOKING_ID.value());
         } catch (Throwable error) {
             thrown = error;
         }
@@ -140,6 +142,7 @@ class HttpPaymentGatewayTest {
         assertThat(requestIdempotencyKey).isEqualTo(expectedIdempotencyKey);
         try {
             JsonNode json = MAPPER.readTree(requestBody);
+            assertThat(json.get("eventId").asText()).isEqualTo(EVENT_ID.value());
             assertThat(json.get("bookingId").asText()).isEqualTo(BOOKING_ID.value());
             assertThat(json.get("amount").asText()).isEqualTo(expectedAmount);
             assertThat(json.get("currency").asText()).isEqualTo(expectedCurrency);

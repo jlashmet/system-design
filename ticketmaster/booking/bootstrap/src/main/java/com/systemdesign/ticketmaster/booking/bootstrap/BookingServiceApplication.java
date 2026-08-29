@@ -13,6 +13,7 @@ import com.systemdesign.ticketmaster.booking.application.ReconcileDueBookingsHan
 import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionCapacity;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionGrantService;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRegulationLeaseGateway;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
@@ -36,6 +37,7 @@ import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoCheckou
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoHoldRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoSeatMapRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoWaitingRoomRepository;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.HmacAdmissionGrantService;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpAdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpEventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.HttpPaymentGateway;
@@ -184,16 +186,38 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    @ConditionalOnProperty(
+            name = "ticketmaster.booking.admission.grant.mode",
+            havingValue = "disabled",
+            matchIfMissing = true)
+    AdmissionGrantService admissionGrantService() {
+        return AdmissionGrantService.disabled();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "ticketmaster.booking.admission.grant.mode", havingValue = "hmac")
+    AdmissionGrantService hmacAdmissionGrantService(
+            @Value("${ticketmaster.booking.admission.grant.secret:}") String secret,
+            @Value("${ticketmaster.booking.admission.grant.ttl:PT30S}") String ttl) {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("admission grant secret must not be blank");
+        }
+        return new HmacAdmissionGrantService(secret, Duration.parse(ttl));
+    }
+
+    @Bean
     CreateHoldHandler createHoldHandler(
             EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
             WaitingRoomRepository waitingRoomRepository,
+            AdmissionGrantService admissionGrantService,
             Clock clock,
             @Value("${ticketmaster.booking.hold-duration:PT5M}") String holdDuration) {
         return new CreateHoldHandler(
                 eventWriteAuthority,
                 holdRepository,
                 waitingRoomRepository,
+                admissionGrantService,
                 clock,
                 Duration.parse(holdDuration));
     }

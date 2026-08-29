@@ -25,6 +25,13 @@ public final class BookingExceptionHandler {
 
     static final String BOOKING_REGION_HEADER = "X-Booking-Region";
 
+    @ExceptionHandler(PaymentWebhookAuthenticationException.class)
+    ResponseEntity<ProblemDetail> paymentWebhookAuthentication(PaymentWebhookAuthenticationException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, exception.getMessage());
+        detail.setTitle("Payment webhook authentication failed");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(detail);
+    }
+
     @ExceptionHandler(AdmissionRequiredException.class)
     ResponseEntity<ProblemDetail> admissionRequired(AdmissionRequiredException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());

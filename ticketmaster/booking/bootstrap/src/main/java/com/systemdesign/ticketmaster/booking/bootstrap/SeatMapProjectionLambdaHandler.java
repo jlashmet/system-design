@@ -3,10 +3,12 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent;
+import com.amazonaws.services.lambda.runtime.events.StreamsEventResponse;
 import com.systemdesign.ticketmaster.booking.application.ProjectSeatMapHandler;
 import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoSeatMapRepository;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
@@ -16,11 +18,12 @@ import software.amazon.awssdk.services.dynamodb.model.StreamRecord;
 /**
  * AWS Lambda entry point for the authoritative inventory DynamoDB Stream.
  *
- * <p>The Lambda event-source mapping owns shard checkpoints, retries, and parallelism. This handler
- * only adapts the AWS Lambda event model to the Booking input projector. Seat-map writes are
- * idempotent, so retrying a stream batch safely converges on the latest image.</p>
+ * <p>The Lambda event-source mapping owns shard checkpoints, retries, and parallelism and should
+ * enable {@code ReportBatchItemFailures}. If one record cannot be projected, the handler returns
+ * that record's sequence number immediately so Lambda checkpoints the successful prefix and retries
+ * from the failed record forward. Seat-map writes remain idempotent for unavoidable replay.</p>
  */
-public final class SeatMapProjectionLambdaHandler implements RequestHandler<DynamodbEvent, Void> {
+public final class SeatMapProjectionLambdaHandler implements RequestHandler<DynamodbEvent, StreamsEventResponse> {
     private static final String TABLE_ENV = "TICKETMASTER_SEAT_MAP_TABLE_NAME";
 
     private final DynamoSeatInventoryStreamProjector projector;
@@ -34,14 +37,28 @@ public final class SeatMapProjectionLambdaHandler implements RequestHandler<Dyna
     }
 
     @Override
-    public Void handleRequest(DynamodbEvent event, Context context) {
+    public StreamsEventResponse handleRequest(DynamodbEvent event, Context context) {
         Objects.requireNonNull(event, "event");
-        if (event.getRecords() == null) return null;
+        if (event.getRecords() == null) return new StreamsEventResponse(List.of());
         for (DynamodbEvent.DynamodbStreamRecord record : event.getRecords()) {
             if (record == null || record.getDynamodb() == null) continue;
-            projector.project(toSdkRecord(record.getDynamodb()));
+            String sequenceNumber = requireNonBlank(
+                    record.getDynamodb().getSequenceNumber(), "DynamoDB Stream sequence number");
+            try {
+                projector.project(toSdkRecord(record.getDynamodb()));
+            } catch (RuntimeException failure) {
+                logFailure(context, sequenceNumber, failure);
+                return new StreamsEventResponse(List.of(
+                        new StreamsEventResponse.BatchItemFailure(sequenceNumber)));
+            }
         }
-        return null;
+        return new StreamsEventResponse(List.of());
+    }
+
+    private static void logFailure(Context context, String sequenceNumber, RuntimeException failure) {
+        if (context == null || context.getLogger() == null) return;
+        context.getLogger().log("Seat-map projection failed at DynamoDB sequence " + sequenceNumber
+                + ": " + failure.getClass().getSimpleName() + ": " + failure.getMessage());
     }
 
     private static DynamoSeatInventoryStreamProjector defaultProjector() {
@@ -92,5 +109,10 @@ public final class SeatMapProjectionLambdaHandler implements RequestHandler<Dyna
         if (value != null && value.getN() != null) {
             target.put(name, AttributeValue.builder().n(value.getN()).build());
         }
+    }
+
+    private static String requireNonBlank(String value, String name) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(name + " must not be blank");
+        return value;
     }
 }

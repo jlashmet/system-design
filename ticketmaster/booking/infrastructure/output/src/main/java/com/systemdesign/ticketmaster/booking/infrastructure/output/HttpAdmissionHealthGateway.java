@@ -158,8 +158,7 @@ public final class HttpAdmissionHealthGateway implements AdmissionHealthGateway 
     }
 
     private static String requireNonBlank(String value, String name) {
-        Objects.requireNonNull(value, name);
-        if (value.isBlank()) throw new IllegalStateException(name + " must not be blank");
+        if (value == null || value.isBlank()) throw new IllegalStateException(name + " must not be blank");
         return value;
     }
 

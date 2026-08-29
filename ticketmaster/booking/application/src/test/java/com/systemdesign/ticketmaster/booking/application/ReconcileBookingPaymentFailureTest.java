@@ -14,6 +14,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
@@ -46,7 +47,7 @@ class ReconcileBookingPaymentFailureTest {
     void backsOffWhenPaymentIntentCreationFails() {
         given();
         whenBookingReconciled();
-        thenExpect(RuntimeException.class, NOW.plus(BACKOFF));
+        thenExpect(PaymentProviderUnavailableException.class, "payment intent creation", NOW.plus(BACKOFF));
     }
 
     private void given() {
@@ -87,8 +88,12 @@ class ReconcileBookingPaymentFailureTest {
         }
     }
 
-    private void thenExpect(Class<? extends Throwable> expectedType, Instant expectedNextReconcileAt) {
+    private void thenExpect(
+            Class<? extends Throwable> expectedType,
+            String expectedOperation,
+            Instant expectedNextReconcileAt) {
         assertThat(thrown).isInstanceOf(expectedType);
+        assertThat(((PaymentProviderUnavailableException) thrown).operation()).isEqualTo(expectedOperation);
         assertThat(paymentGateway.createCalls).isOne();
         assertThat(bookingRepository.rescheduled).isNotNull();
         assertThat(bookingRepository.rescheduled.nextReconcileAt()).isEqualTo(expectedNextReconcileAt);

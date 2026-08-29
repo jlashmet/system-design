@@ -62,6 +62,18 @@ public final class ReconcileBookingHandler {
         return reconcileAuthorized(booking);
     }
 
+    /**
+     * Best-effort scheduler backoff after an unexpected per-booking failure. The due Booking is
+     * already known from the reconciliation index, but write ownership is rechecked before moving
+     * its retry time. Terminal/stale entries are ignored and storage failures still propagate.
+     */
+    public void deferAfterFailure(Booking booking) {
+        Objects.requireNonNull(booking, "booking");
+        if (booking.status() != BookingStatus.PENDING_PAYMENT) return;
+        eventWriteAuthority.assertMayWrite(booking.eventId());
+        reschedule(booking);
+    }
+
     private Booking reconcileAuthorized(Booking booking) {
         Booking withIntent = ensurePaymentIntent(booking);
         Hold hold = loadHold(withIntent);

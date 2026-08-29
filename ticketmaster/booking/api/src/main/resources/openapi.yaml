@@ -71,6 +71,11 @@ paths:
           required: true
           description: Authenticated user identity supplied by the trusted request/authentication boundary
           schema: { type: string, minLength: 1 }
+        - in: header
+          name: X-Admission-Token
+          required: false
+          description: Short-lived signed proof returned after waiting-room admission; invalid or absent tokens fall back to authoritative admission reads
+          schema: { type: string, minLength: 1, maxLength: 2000 }
       requestBody:
         required: true
         content:
@@ -166,7 +171,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Current admission status
+          description: Current admission status; admitted users may also receive a short-lived admission grant
           headers:
             Cache-Control:
               schema: { type: string, example: no-store }
@@ -243,3 +248,10 @@ components:
         status:
           type: string
           enum: [WAITING, ADMITTED]
+        admissionToken:
+          type: string
+          description: Present only when admission-grant issuance is enabled and status is ADMITTED
+        admissionTokenExpiresAt:
+          type: string
+          format: date-time
+          description: Expiration of admissionToken when present

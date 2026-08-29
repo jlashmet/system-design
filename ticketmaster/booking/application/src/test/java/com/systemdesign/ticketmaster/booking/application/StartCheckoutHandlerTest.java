@@ -17,6 +17,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
@@ -84,6 +85,13 @@ class StartCheckoutHandlerTest {
         thenExpectExistingCheckoutReturnedWithoutProviderAccess();
     }
 
+    @Test
+    void exposesPaymentProviderFailureAfterCheckoutHasStarted() {
+        givenActiveHoldWithUnavailablePaymentProvider();
+        whenCheckoutStartsAs(OWNER, "idem-provider-down");
+        thenExpectRetryableProviderFailureAfterCheckoutStarted("payment intent creation");
+    }
+
     private void givenWrongBookingRegion() {
         bookingRepository = new TrackingBookingRepository();
         holdRepository = new TrackingHoldRepository(null);
@@ -110,6 +118,15 @@ class StartCheckoutHandlerTest {
         holdRepository = new TrackingHoldRepository(activeHold(owner));
         checkoutGateway = new TrackingCheckoutGateway();
         paymentGateway = new TrackingPaymentGateway();
+        handler = handler(ignored -> {});
+        resetResult();
+    }
+
+    private void givenActiveHoldWithUnavailablePaymentProvider() {
+        bookingRepository = new TrackingBookingRepository();
+        holdRepository = new TrackingHoldRepository(activeHold(OWNER));
+        checkoutGateway = new TrackingCheckoutGateway();
+        paymentGateway = new TrackingPaymentGateway(true);
         handler = handler(ignored -> {});
         resetResult();
     }
@@ -183,6 +200,15 @@ class StartCheckoutHandlerTest {
         assertThat(holdRepository.findByIdReads).isZero();
         assertThat(checkoutGateway.startCalls).isZero();
         assertThat(paymentGateway.createCalls).isZero();
+        assertThat(paymentGateway.statusCalls).isZero();
+    }
+
+    private void thenExpectRetryableProviderFailureAfterCheckoutStarted(String expectedOperation) {
+        assertThat(thrown).isInstanceOf(PaymentProviderUnavailableException.class);
+        assertThat(((PaymentProviderUnavailableException) thrown).operation()).isEqualTo(expectedOperation);
+        assertThat(result).isNull();
+        assertThat(checkoutGateway.startCalls).isOne();
+        assertThat(paymentGateway.createCalls).isOne();
         assertThat(paymentGateway.statusCalls).isZero();
     }
 
@@ -278,12 +304,22 @@ class StartCheckoutHandlerTest {
     }
 
     private static final class TrackingPaymentGateway implements PaymentGateway {
+        private final boolean failCreate;
         private int createCalls;
         private int statusCalls;
+
+        private TrackingPaymentGateway() {
+            this(false);
+        }
+
+        private TrackingPaymentGateway(boolean failCreate) {
+            this.failCreate = failCreate;
+        }
 
         @Override
         public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String key) {
             createCalls++;
+            if (failCreate) throw new RuntimeException("payment provider unavailable");
             return new PaymentIntent("pi-created", PaymentIntentStatus.REQUIRES_PAYMENT_METHOD);
         }
 

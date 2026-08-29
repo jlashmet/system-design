@@ -1,5 +1,7 @@
 package com.systemdesign.ticketmaster.booking.domain;
 
+import java.util.Objects;
+
 /**
  * Port to the external payment-intent provider.
  *
@@ -9,6 +11,18 @@ package com.systemdesign.ticketmaster.booking.domain;
  */
 public interface PaymentGateway {
     PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String idempotencyKey);
+
+    /**
+     * Event-aware creation used by Booking so a provider-facing service can retain the event ID as
+     * routing metadata for verified completion callbacks. Implementations that do not need callback
+     * routing may rely on the backward-compatible default.
+     */
+    default PaymentIntent createPaymentIntent(
+            EventId eventId, BookingId bookingId, Price price, String idempotencyKey) {
+        Objects.requireNonNull(eventId, "eventId");
+        return createPaymentIntent(bookingId, price, idempotencyKey);
+    }
+
     PaymentIntentStatus getPaymentStatus(String paymentIntentId);
     PaymentIntentStatus cancelPaymentIntent(String paymentIntentId);
 }

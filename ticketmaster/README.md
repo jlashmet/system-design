@@ -297,7 +297,7 @@ Optional consumer environment variables:
 
 ```text
 TICKETMASTER_SEARCH_INDEX_NAME=events
-ticketmaster.search.aws-signing-service=es
+TICKETMASTER_SEARCH_SIGNING_SERVICE=es
 ```
 
 The Search Lambda uses the OpenSearch Java client's AWS SDK v2 transport, so requests to Amazon OpenSearch are SigV4 signed. Use signing service `es` for Amazon OpenSearch Service and `aoss` for OpenSearch Serverless. The JSON envelope currently uses `schemaVersion=1` and message types `UPSERT` and `DELETE`. Search owns its own input DTOs and translates the envelope into its own domain; it never compiles against Events classes.

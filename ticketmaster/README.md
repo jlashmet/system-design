@@ -243,7 +243,7 @@ Required environment variable:
 TICKETMASTER_SEAT_MAP_TABLE_NAME=<seat-map-table>
 ```
 
-The Lambda event-source mapping owns stream shard checkpoints, retry behavior, and parallelism. The projection writes are idempotent: each projected seat update atomically writes the section seat row and its event-level section-directory marker. Retrying a batch therefore safely converges on the latest processed seat image. A failed batch is intentionally retried as a batch rather than implementing custom stream checkpointing in the application.
+The Lambda event-source mapping owns stream shard checkpoints, retry behavior, and parallelism and must enable `ReportBatchItemFailures`. If projection of a stream record fails, the handler returns that record's DynamoDB sequence number immediately. Lambda can therefore checkpoint the successful prefix and retry from the failed record forward rather than replaying the entire batch. Projection writes remain idempotent, so unavoidable retries still converge safely on the latest processed seat image.
 
 ## Events to Search Projection
 

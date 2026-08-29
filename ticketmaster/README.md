@@ -36,6 +36,8 @@ If a request reaches the wrong booking region, the API returns HTTP `421 Misdire
 
 Expected DynamoDB conditional contention remains a booking conflict (`409`). Transaction cancellations that contain throttling, transaction-conflict, capacity, or otherwise non-conditional/unknown reasons are treated as temporary storage unavailability instead. They surface as `503 Service Unavailable` with `Retry-After: 1`, so a caller is not incorrectly told that the selected seats were necessarily taken when the correct action may simply be to retry.
 
+Retryable payment-provider transport failures, throttling, timeouts, and provider `5xx` responses also surface as `503 Service Unavailable` with `Retry-After: 1`. Payment reconciliation advances `nextReconcileAt` before propagating a retryable provider failure, so a degraded provider is not hammered continuously by an already-due Booking. Provider request/contract errors remain distinct failures rather than being mislabeled as transient outages.
+
 Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
 
 ### Trusted user identity
@@ -43,6 +45,54 @@ Hold creation and checkout both require an `Idempotency-Key`. Hold creation pers
 Waiting-room join/status, hold creation, and checkout all use the same `X-User-Id` request header as the current interview-project representation of authenticated identity. The Hold request body contains seat selection only; it cannot choose its owner. Checkout carries the same identity into the application layer and rejects a Hold or idempotent Booking owned by a different user with HTTP `403` before payment-provider access.
 
 `X-User-Id` is an integration-boundary simplification, not a claim that an internet client may self-assert identity safely. In a production deployment the public ingress/authentication layer must authenticate the user, strip any untrusted inbound copy of this header, and inject the trusted user ID (or the controller would read the authenticated principal directly). The domain/application code consumes the resulting `UserId` and does not depend on the authentication technology.
+
+### Payment gateway modes
+
+Booking defaults to the in-memory demo gateway for local/interview use:
+
+```text
+ticketmaster.booking.payment.mode=demo
+```
+
+A deployment can instead use the external HTTP payment adapter:
+
+```text
+ticketmaster.booking.payment.mode=http
+ticketmaster.booking.payment.base-url=https://payments.internal.example
+ticketmaster.booking.payment.request-timeout=PT2S
+```
+
+The HTTP adapter expects the provider-facing service to expose this small payment-intent contract:
+
+```http
+POST /payment-intents
+Idempotency-Key: <booking-id>
+Content-Type: application/json
+
+{
+  "bookingId": "booking-123",
+  "amount": 125.00,
+  "currency": "USD"
+}
+```
+
+A successful create/status/cancel response is:
+
+```json
+{
+  "id": "pi-123",
+  "status": "REQUIRES_PAYMENT_METHOD"
+}
+```
+
+Supported status values are `REQUIRES_PAYMENT_METHOD`, `PROCESSING`, `SUCCEEDED`, `FAILED`, and `CANCELED`. Status and cancellation use:
+
+```http
+GET  /payment-intents/{paymentIntentId}
+POST /payment-intents/{paymentIntentId}/cancel
+```
+
+The Booking ID is the provider idempotency key. If the provider creates an intent but the response is lost before Booking persists the returned ID, a retry therefore converges on the same provider intent instead of creating a second charge workflow.
 
 ### Runnable demo payment completion
 
@@ -60,7 +110,9 @@ After `POST /events/{eventId}/holds/{holdId}/checkout` returns a `bookingId`, a 
 POST /demo/bookings/{bookingId}/payment-success
 ```
 
-That endpoint marks only the in-memory demo provider intent successful and immediately invokes the normal `ReconcileBookingHandler`. It therefore reaches `Booking=CONFIRMED`, `Hold=CONVERTED`, and `Seat=BOOKED` through the same authoritative finalization transaction used by provider completion/reconciliation. It does **not** bypass booking ownership, hold state, or checkout invariants. The endpoint is disabled unless the property above is explicitly set and must not be enabled in production; a production `PaymentGateway` learns status from a verified payment provider response/webhook instead.
+That endpoint marks only the in-memory demo provider intent successful and immediately invokes the normal `ReconcileBookingHandler`. It therefore reaches `Booking=CONFIRMED`, `Hold=CONVERTED`, and `Seat=BOOKED` through the same authoritative finalization transaction used by provider completion/reconciliation. It does **not** bypass booking ownership, hold state, or checkout invariants. The endpoint is disabled unless the property above is explicitly set and must not be enabled in production. If the endpoint is enabled while `ticketmaster.booking.payment.mode=http`, Booking fails startup rather than exposing a demo completion path against a real provider configuration.
+
+A production provider webhook/message adapter must authenticate and validate the provider event before invoking `VerifiedPaymentStatusChangedConsumer`. The trusted consumer does not accept a payment status from the event; it re-reads provider state through `PaymentGateway` before confirming or releasing inventory.
 
 ### Waiting-room runtime
 

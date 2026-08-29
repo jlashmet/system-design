@@ -4,7 +4,9 @@ import com.systemdesign.ticketmaster.controlplane.application.AssignEventOwnersh
 import com.systemdesign.ticketmaster.controlplane.application.GetEventOwnershipHandler;
 import com.systemdesign.ticketmaster.controlplane.application.TransferEventOwnershipHandler;
 import com.systemdesign.ticketmaster.controlplane.domain.EventOwnershipRepository;
+import com.systemdesign.ticketmaster.controlplane.domain.EventWriterFence;
 import com.systemdesign.ticketmaster.controlplane.infrastructure.output.DynamoEventOwnershipRepository;
+import com.systemdesign.ticketmaster.controlplane.infrastructure.output.FailClosedEventWriterFence;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -31,6 +33,11 @@ public class ControlPlaneApplication {
     }
 
     @Bean
+    EventWriterFence eventWriterFence() {
+        return new FailClosedEventWriterFence();
+    }
+
+    @Bean
     AssignEventOwnershipHandler assignEventOwnershipHandler(EventOwnershipRepository repository) {
         return new AssignEventOwnershipHandler(repository);
     }
@@ -41,7 +48,9 @@ public class ControlPlaneApplication {
     }
 
     @Bean
-    TransferEventOwnershipHandler transferEventOwnershipHandler(EventOwnershipRepository repository) {
-        return new TransferEventOwnershipHandler(repository);
+    TransferEventOwnershipHandler transferEventOwnershipHandler(
+            EventOwnershipRepository repository,
+            EventWriterFence writerFence) {
+        return new TransferEventOwnershipHandler(repository, writerFence);
     }
 }

@@ -49,9 +49,19 @@ public final class ReconcileDueBookingsHandler {
                     reconcileBookingHandler.handle(booking.id());
                 } catch (RuntimeException failure) {
                     errors.add(booking.id());
+                    deferBestEffort(booking);
                 }
             }
         }
         return new ReconciliationBatchResult(processed, errors, failedShards);
+    }
+
+    private void deferBestEffort(Booking booking) {
+        try {
+            reconcileBookingHandler.deferAfterFailure(booking);
+        } catch (RuntimeException ignored) {
+            // The original failure remains the batch result. If authority or storage is also
+            // unavailable, leaving the item due is safer than hiding the second failure.
+        }
     }
 }

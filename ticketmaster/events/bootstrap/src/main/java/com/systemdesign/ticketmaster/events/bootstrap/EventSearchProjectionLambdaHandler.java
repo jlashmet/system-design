@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.events.bootstrap;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent;
+import com.amazonaws.services.lambda.runtime.events.StreamsEventResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.ticketmaster.events.application.BuildEventSearchProjectionHandler;
 import com.systemdesign.ticketmaster.events.application.BuildEventSearchProjectionQuery;
@@ -11,6 +12,7 @@ import com.systemdesign.ticketmaster.events.application.EventSearchProjectionAct
 import com.systemdesign.ticketmaster.events.domain.EventId;
 import com.systemdesign.ticketmaster.events.infrastructure.output.DynamoEventRepository;
 import com.systemdesign.ticketmaster.events.infrastructure.output.DynamoVenueRepository;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
@@ -20,10 +22,12 @@ import software.amazon.awssdk.services.sqs.SqsClient;
  * DynamoDB Stream Lambda that publishes the Events bounded-context search projection to SQS FIFO.
  *
  * <p>Each event ID is used as the FIFO message group, preserving per-event update order. The
- * DynamoDB Stream event ID is used as the SQS deduplication ID, so retrying a stream record does
- * not duplicate the projection message.</p>
+ * DynamoDB Stream event ID is used as the SQS deduplication ID. The Lambda event-source mapping
+ * should enable {@code ReportBatchItemFailures}; if one stream record fails, this handler returns
+ * that record's sequence number immediately so Lambda checkpoints the successful prefix and retries
+ * from the failed record forward.</p>
  */
-public final class EventSearchProjectionLambdaHandler implements RequestHandler<DynamodbEvent, Void> {
+public final class EventSearchProjectionLambdaHandler implements RequestHandler<DynamodbEvent, StreamsEventResponse> {
     private static final String TABLE_ENV = "TICKETMASTER_EVENTS_TABLE_NAME";
     private static final String QUEUE_ENV = "TICKETMASTER_SEARCH_PROJECTION_QUEUE_URL";
     private static final String EVENT_PK_PREFIX = "EVENT#";
@@ -47,14 +51,32 @@ public final class EventSearchProjectionLambdaHandler implements RequestHandler<
     }
 
     @Override
-    public Void handleRequest(DynamodbEvent event, Context context) {
+    public StreamsEventResponse handleRequest(DynamodbEvent event, Context context) {
         Objects.requireNonNull(event, "event");
-        if (event.getRecords() == null) return null;
+        if (event.getRecords() == null) return new StreamsEventResponse(List.of());
         for (DynamodbEvent.DynamodbStreamRecord record : event.getRecords()) {
             if (record == null || record.getDynamodb() == null) continue;
-            handleRecord(record);
+            String sequenceNumber = requireNonBlank(
+                    record.getDynamodb().getSequenceNumber(), "DynamoDB Stream sequence number");
+            try {
+                handleRecord(record);
+            } catch (RuntimeException failure) {
+                logFailure(context, record, failure);
+                return new StreamsEventResponse(List.of(
+                        new StreamsEventResponse.BatchItemFailure(sequenceNumber)));
+            }
         }
-        return null;
+        return new StreamsEventResponse(List.of());
+    }
+
+    private static void logFailure(
+            Context context,
+            DynamodbEvent.DynamodbStreamRecord record,
+            RuntimeException failure) {
+        if (context == null || context.getLogger() == null) return;
+        String eventId = record.getEventID() == null ? "<missing>" : record.getEventID();
+        context.getLogger().log("Event search projection publish failed for stream event " + eventId
+                + ": " + failure.getClass().getSimpleName() + ": " + failure.getMessage());
     }
 
     private void handleRecord(DynamodbEvent.DynamodbStreamRecord record) {

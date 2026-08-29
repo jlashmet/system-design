@@ -43,9 +43,6 @@ public final class ReconcileBookingHandler {
         }
     }
 
-    /**
-     * Reconciliation-scheduler entry point. The Booking itself determines the event ownership scope.
-     */
     public Booking handle(BookingId bookingId) {
         Booking booking = loadBooking(bookingId);
         if (booking.status() != BookingStatus.PENDING_PAYMENT) return booking;
@@ -53,11 +50,6 @@ public final class ReconcileBookingHandler {
         return reconcileAuthorized(booking);
     }
 
-    /**
-     * Region-routable provider-completion entry point. A verified provider adapter can carry the
-     * event ID as routing metadata without trusting the callback's payment status. Booking still
-     * re-reads the provider through PaymentGateway before finalizing anything.
-     */
     public Booking handle(EventId eventId, BookingId bookingId) {
         Objects.requireNonNull(eventId, "eventId");
         eventWriteAuthority.assertMayWrite(eventId);
@@ -73,26 +65,19 @@ public final class ReconcileBookingHandler {
         Booking withIntent = ensurePaymentIntent(booking);
         Hold hold = loadHold(withIntent);
         PaymentIntentStatus paymentStatus = getPaymentStatusOrReschedule(withIntent);
-
-        if (paymentStatus == PaymentIntentStatus.SUCCEEDED) {
-            return confirm(withIntent, hold);
-        }
+        if (paymentStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, hold);
         if (paymentStatus == PaymentIntentStatus.FAILED || paymentStatus == PaymentIntentStatus.CANCELED) {
             return fail(withIntent, hold);
         }
-
         Instant checkoutDeadline = Objects.requireNonNull(
                 hold.checkoutExpiresAt(), "pending booking hold must have checkout expiration");
         if (!clock.instant().isBefore(checkoutDeadline)) {
             PaymentIntentStatus cancelStatus = cancelPaymentOrReschedule(withIntent);
-            if (cancelStatus == PaymentIntentStatus.SUCCEEDED) {
-                return confirm(withIntent, hold);
-            }
+            if (cancelStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, hold);
             if (cancelStatus == PaymentIntentStatus.FAILED || cancelStatus == PaymentIntentStatus.CANCELED) {
                 return fail(withIntent, hold);
             }
         }
-
         return reschedule(withIntent);
     }
 
@@ -135,7 +120,6 @@ public final class ReconcileBookingHandler {
 
     private Booking ensurePaymentIntent(Booking booking) {
         if (booking.paymentIntentIdOptional().isPresent()) return booking;
-
         PaymentIntent intent;
         try {
             intent = paymentGateway.createPaymentIntent(
@@ -144,7 +128,6 @@ public final class ReconcileBookingHandler {
             reschedule(booking);
             throw unavailable;
         }
-
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
         return withIntent;
@@ -152,9 +135,7 @@ public final class ReconcileBookingHandler {
 
     private Booking reschedule(Booking booking) {
         Instant nextAttempt = clock.instant().plus(pendingBackoff);
-        if (!nextAttempt.isAfter(booking.nextReconcileAt())) {
-            nextAttempt = booking.nextReconcileAt().plus(pendingBackoff);
-        }
+        if (!nextAttempt.isAfter(booking.nextReconcileAt())) return booking;
         Booking rescheduled = booking.rescheduleReconciliation(nextAttempt);
         bookingRepository.rescheduleReconciliation(rescheduled);
         return rescheduled;

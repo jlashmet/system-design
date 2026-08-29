@@ -24,7 +24,7 @@ architecture/
 bootstrap/
 ```
 
-`controlplane` is deliberately smaller because ownership transfer is an internal operational concern rather than a public customer API. It currently contains domain, application, DynamoDB output, architecture, and bootstrap modules; an operator/admin input adapter can be added when the failover control surface is defined.
+`controlplane` is deliberately smaller because ownership transfer is an internal operational concern rather than a public customer API. It currently contains domain, application, API/input, DynamoDB output, architecture, and bootstrap modules; an authenticated operator/admin mutation surface can be added when the failover control surface is defined.
 
 Dependencies point inward. Bounded contexts do not directly depend on one another; integration between them uses explicit API or projection/event boundaries. The executable `bootstrap` module is the composition root allowed to depend on both input and output adapters.
 
@@ -211,6 +211,8 @@ Every event listed in `event-ids` is initialized synchronously while the schedul
 
 Multiple Booking replicas do not multiply the admission rate. Each process receives a unique regulator ID and must acquire/renew a short per-event lease stored on the admission item before running the admission policy. The lease is globally coordinated by the waiting-room table. In addition, a regulator must pass `EventWriteAuthority`; only the event's current authoritative booking region is allowed to advance its watermark, so admission decisions are based on the health of the region that will actually execute holds/checkouts. A non-owner region simply skips regulation for that event. Ownership/control-plane/health/storage failures hold the watermark steady.
 
+Optional short-lived signed admission grants can remove repeated waiting-room reads from the admitted hold hot path without becoming a correctness dependency. See `ADMISSION_GRANTS.md` for the token contract, fallback behavior, and configuration.
+
 ### Seat-map DynamoDB Stream projection
 
 The authoritative Booking table publishes DynamoDB Stream records to a Lambda event-source mapping. Configure the stream with `NEW_IMAGE` or `NEW_AND_OLD_IMAGES`; the projector requires the new seat image.
@@ -278,7 +280,7 @@ TICKETMASTER_EVENTS_TABLE_NAME=<events-table>
 TICKETMASTER_SEARCH_PROJECTION_QUEUE_URL=<fifo-queue-url>
 ```
 
-The queue must be FIFO. `eventId` is the SQS message group ID so updates for one event remain ordered. The DynamoDB Stream event ID is the SQS deduplication ID so normal stream retries do not enqueue duplicate messages inside the FIFO deduplication window. Search indexing is also idempotent by `eventId`, so replay remains safe beyond that window.
+The DynamoDB Stream event-source mapping for this producer must enable `ReportBatchItemFailures`. On the first record that cannot be projected or published, the handler returns that record's DynamoDB sequence number. Lambda can therefore checkpoint the successful prefix and retry from the failed record forward instead of republishing the whole batch. The queue must be FIFO. `eventId` is the SQS message group ID so updates for one event remain ordered. The DynamoDB Stream event ID is the SQS deduplication ID, and Search indexing is idempotent by `eventId`, so unavoidable replay remains safe.
 
 Search consumer Lambda:
 
@@ -302,7 +304,7 @@ TICKETMASTER_SEARCH_SIGNING_SERVICE=es
 
 The Search Lambda uses the OpenSearch Java client's AWS SDK v2 transport, so requests to Amazon OpenSearch are SigV4 signed. Use signing service `es` for Amazon OpenSearch Service and `aoss` for OpenSearch Serverless. The JSON envelope currently uses `schemaVersion=1` and message types `UPSERT` and `DELETE`. Search owns its own input DTOs and translates the envelope into its own domain; it never compiles against Events classes.
 
-Malformed/unsupported projection messages fail the Lambda batch rather than being silently dropped. Because projection writes are idempotent, whole-batch retry is the simple default; production queue configuration should include a DLQ/redrive policy for poison messages.
+The SQS FIFO event-source mapping must also enable `ReportBatchItemFailures`. The consumer acknowledges records successfully processed before the first failure, then returns the failed message ID plus every later unprocessed message ID. Stopping at the first failure preserves FIFO ordering while avoiding replay of the already-successful prefix. Malformed/unsupported messages and downstream indexing failures remain retryable and should eventually be isolated by the queue's DLQ/redrive policy rather than being silently dropped.
 
 ## Search Runtime Notes
 

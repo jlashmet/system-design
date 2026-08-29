@@ -138,7 +138,8 @@ public final class ReconcileBookingHandler {
 
         PaymentIntent intent;
         try {
-            intent = paymentGateway.createPaymentIntent(booking.id(), booking.totalPrice(), booking.id().value());
+            intent = paymentGateway.createPaymentIntent(
+                    booking.eventId(), booking.id(), booking.totalPrice(), booking.id().value());
         } catch (PaymentProviderUnavailableException unavailable) {
             reschedule(booking);
             throw unavailable;

@@ -2,7 +2,6 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -43,6 +42,13 @@ class PaymentProviderWebhookControllerTest {
     }
 
     @Test
+    void missingSignatureNeverReachesTrustedConsumer() {
+        givenRequestWithMissingSignature();
+        whenWebhookReceived();
+        thenExpectRejected(PaymentWebhookAuthenticationException.class);
+    }
+
+    @Test
     void malformedJsonAfterValidAuthenticationIsBadRequest() {
         givenSignedBody("{\"eventId\":");
         whenWebhookReceived();
@@ -68,13 +74,18 @@ class PaymentProviderWebhookControllerTest {
         signature = "00".repeat(32);
     }
 
+    private void givenRequestWithMissingSignature() {
+        givenSignedBody("{\"eventId\":\"event-123\",\"bookingId\":\"booking-123\"}");
+        signature = null;
+    }
+
     private void givenSignedBody(String json) {
         handler = new TrackingHandler();
         HmacPaymentWebhookVerifier verifier = new HmacPaymentWebhookVerifier(
                 SECRET,
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofMinutes(5));
-        controller = new PaymentProviderWebhookController(verifier, handler, new ObjectMapper());
+        controller = new PaymentProviderWebhookController(verifier, handler);
         timestamp = Long.toString(NOW.getEpochSecond());
         body = json.getBytes(StandardCharsets.UTF_8);
         signature = sign(timestamp, body);

@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.output;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
+import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
@@ -24,8 +25,9 @@ import java.util.Objects;
  *
  * <p>The provider contract is deliberately small and mirrors the domain port:
  * POST /payment-intents, GET /payment-intents/{id}, and POST /payment-intents/{id}/cancel.
- * Creation carries the Booking ID as the provider idempotency key so a lost response can be retried
- * without creating a second payment intent.</p>
+ * Creation carries the Booking ID as the provider idempotency key and the Event ID as callback
+ * routing metadata. A lost response can therefore be retried without creating a second payment
+ * intent, and a later verified callback can be routed before regional Booking storage is touched.</p>
  */
 public final class HttpPaymentGateway implements PaymentGateway {
     private static final String JSON = "application/json";
@@ -52,11 +54,18 @@ public final class HttpPaymentGateway implements PaymentGateway {
 
     @Override
     public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String idempotencyKey) {
+        throw new IllegalStateException("eventId is required for HTTP payment intent creation");
+    }
+
+    @Override
+    public PaymentIntent createPaymentIntent(
+            EventId eventId, BookingId bookingId, Price price, String idempotencyKey) {
+        Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(bookingId, "bookingId");
         Objects.requireNonNull(price, "price");
         String key = requireNonBlank(idempotencyKey, "idempotencyKey");
         String body = writeJson(new CreatePaymentIntentRequest(
-                bookingId.value(), price.amount(), price.currency().getCurrencyCode()));
+                eventId.value(), bookingId.value(), price.amount(), price.currency().getCurrencyCode()));
         HttpRequest request = HttpRequest.newBuilder(uri("/payment-intents"))
                 .timeout(requestTimeout)
                 .header("Accept", JSON)
@@ -174,7 +183,7 @@ public final class HttpPaymentGateway implements PaymentGateway {
         return value;
     }
 
-    record CreatePaymentIntentRequest(String bookingId, java.math.BigDecimal amount, String currency) {}
+    record CreatePaymentIntentRequest(String eventId, String bookingId, java.math.BigDecimal amount, String currency) {}
 
     record ProviderPaymentIntent(String id, String status) {}
 }

@@ -24,6 +24,9 @@ import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
+import com.systemdesign.ticketmaster.booking.infrastructure.input.HmacPaymentWebhookVerifier;
+import com.systemdesign.ticketmaster.booking.infrastructure.input.VerifiedPaymentStatusChangedConsumer;
+import com.systemdesign.ticketmaster.booking.infrastructure.input.VerifiedPaymentStatusChangedHandler;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.CachedEventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.ConfiguredAdmissionHealthGateway;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DemoPaymentGateway;
@@ -211,6 +214,28 @@ public class BookingServiceApplication {
                 paymentGateway,
                 clock,
                 Duration.parse(reconciliationBackoff));
+    }
+
+    @Bean
+    VerifiedPaymentStatusChangedHandler verifiedPaymentStatusChangedHandler(
+            ReconcileBookingHandler reconcileBookingHandler) {
+        return new VerifiedPaymentStatusChangedConsumer(reconcileBookingHandler);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "ticketmaster.booking.payment.webhook.enabled", havingValue = "true")
+    HmacPaymentWebhookVerifier paymentWebhookVerifier(
+            Clock clock,
+            @Value("${ticketmaster.booking.payment.mode:demo}") String paymentMode,
+            @Value("${ticketmaster.booking.payment.webhook.secret:}") String secret,
+            @Value("${ticketmaster.booking.payment.webhook.max-age:PT5M}") String maxAge) {
+        if (!"http".equalsIgnoreCase(paymentMode.trim())) {
+            throw new IllegalStateException("payment webhook requires ticketmaster.booking.payment.mode=http");
+        }
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("payment webhook secret must not be blank");
+        }
+        return new HmacPaymentWebhookVerifier(secret, clock, Duration.parse(maxAge));
     }
 
     @Bean

@@ -36,7 +36,7 @@ If a request reaches the wrong booking region, the API returns HTTP `421 Misdire
 
 Expected DynamoDB conditional contention remains a booking conflict (`409`). Transaction cancellations that contain throttling, transaction-conflict, capacity, or otherwise non-conditional/unknown reasons are treated as temporary storage unavailability instead. They surface as `503 Service Unavailable` with `Retry-After: 1`, so a caller is not incorrectly told that the selected seats were necessarily taken when the correct action may simply be to retry.
 
-Retryable payment-provider transport failures, throttling, timeouts, and provider `5xx` responses also surface as `503 Service Unavailable` with `Retry-After: 1`. Payment reconciliation advances `nextReconcileAt` before propagating a retryable provider failure, so a degraded provider is not hammered continuously by an already-due Booking. Provider request/contract errors remain distinct failures rather than being mislabeled as transient outages.
+Retryable payment-provider transport failures, throttling, timeouts, and provider `5xx` responses also surface as `503 Service Unavailable` with `Retry-After: 1`. Payment reconciliation advances `nextReconcileAt` before propagating a retryable provider failure, so a degraded provider is not hammered continuously by an already-due Booking. Provider request/contract errors remain distinct failures rather than being mislabeled as transient outages. Early provider callbacks do not push an already-future fallback reconciliation farther out, so duplicate callback delivery cannot indefinitely postpone the scheduler safety net.
 
 Hold creation and checkout both require an `Idempotency-Key`. Hold creation persists the idempotency mapping in the same DynamoDB transaction as the seat claims and Hold record. A retry after a lost successful response therefore returns the original Hold instead of attempting to reacquire the seats. Reusing the same key for a materially different hold request is a conflict.
 
@@ -70,6 +70,7 @@ Idempotency-Key: <booking-id>
 Content-Type: application/json
 
 {
+  "eventId": "event-123",
   "bookingId": "booking-123",
   "amount": 125.00,
   "currency": "USD"
@@ -92,7 +93,44 @@ GET  /payment-intents/{paymentIntentId}
 POST /payment-intents/{paymentIntentId}/cancel
 ```
 
-The Booking ID is the provider idempotency key. If the provider creates an intent but the response is lost before Booking persists the returned ID, a retry therefore converges on the same provider intent instead of creating a second charge workflow.
+The Booking ID is the provider idempotency key. If the provider creates an intent but the response is lost before Booking persists the returned ID, a retry therefore converges on the same provider intent instead of creating a second charge workflow. The Event ID is routing metadata retained by the provider-facing service so a later completion callback can reach the authoritative Booking region before that region's storage is accessed.
+
+### Verified payment provider callback
+
+The provider callback endpoint is disabled by default. It can be enabled only with the external HTTP payment mode:
+
+```text
+ticketmaster.booking.payment.mode=http
+ticketmaster.booking.payment.webhook.enabled=true
+ticketmaster.booking.payment.webhook.secret=<shared-secret>
+ticketmaster.booking.payment.webhook.max-age=PT5M
+```
+
+Enabling the webhook with demo payment mode or a blank secret fails service startup. The endpoint is:
+
+```http
+POST /internal/payment-provider/events
+X-Payment-Timestamp: <epoch-seconds>
+X-Payment-Signature: <hex-hmac-sha256>
+Content-Type: application/json
+
+{
+  "eventId": "event-123",
+  "bookingId": "booking-123"
+}
+```
+
+The signature is HMAC-SHA256 over the exact bytes of:
+
+```text
+<timestamp>.<raw-request-body>
+```
+
+The timestamp must be inside the configured replay/clock-skew window and the signature is compared in constant time. Missing, malformed, stale, future-out-of-window, or mismatched authentication returns `401` and never reaches reconciliation.
+
+The callback body deliberately contains only `eventId` and `bookingId`. Unknown properties are rejected with `400`; in particular a provider-supplied `status` field is not accepted. After authentication, `VerifiedPaymentStatusChangedConsumer` checks regional write ownership, loads the Booking, and re-reads authoritative provider state through `PaymentGateway` before confirming or releasing inventory. A valid callback returns `204`; wrong-region routing keeps the existing `421` behavior and retryable payment-provider failures keep the existing `503` + `Retry-After: 1` behavior.
+
+Application-layer HMAC verification does not replace network controls. A production deployment should also restrict this internal endpoint to the provider-facing payment service through the normal private-ingress/service-identity controls.
 
 ### Runnable demo payment completion
 
@@ -111,8 +149,6 @@ POST /demo/bookings/{bookingId}/payment-success
 ```
 
 That endpoint marks only the in-memory demo provider intent successful and immediately invokes the normal `ReconcileBookingHandler`. It therefore reaches `Booking=CONFIRMED`, `Hold=CONVERTED`, and `Seat=BOOKED` through the same authoritative finalization transaction used by provider completion/reconciliation. It does **not** bypass booking ownership, hold state, or checkout invariants. The endpoint is disabled unless the property above is explicitly set and must not be enabled in production. If the endpoint is enabled while `ticketmaster.booking.payment.mode=http`, Booking fails startup rather than exposing a demo completion path against a real provider configuration.
-
-A production provider webhook/message adapter must authenticate and validate the provider event before invoking `VerifiedPaymentStatusChangedConsumer`. The trusted consumer does not accept a payment status from the event; it re-reads provider state through `PaymentGateway` before confirming or releasing inventory.
 
 ### Waiting-room runtime
 

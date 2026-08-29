@@ -46,7 +46,6 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -218,11 +217,13 @@ public class BookingServiceApplication {
     @ConditionalOnProperty(
             name = "ticketmaster.booking.demo-payment-endpoint-enabled",
             havingValue = "true")
-    @ConditionalOnBean(DemoPaymentGateway.class)
     DemoPaymentController demoPaymentController(
-            DemoPaymentGateway paymentGateway,
+            PaymentGateway paymentGateway,
             ReconcileBookingHandler reconcileBookingHandler) {
-        return new DemoPaymentController(paymentGateway, reconcileBookingHandler);
+        if (!(paymentGateway instanceof DemoPaymentGateway demoPaymentGateway)) {
+            throw new IllegalStateException("demo payment endpoint requires ticketmaster.booking.payment.mode=demo");
+        }
+        return new DemoPaymentController(demoPaymentGateway, reconcileBookingHandler);
     }
 
     @Bean

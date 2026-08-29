@@ -18,7 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 /**
  * Compact HMAC-SHA256 admission grants scoped to one event/user pair.
  *
- * <p>Token format: {@code v1.<event-b64url>.<user-b64url>.<expiry-epoch-seconds>.<signature-b64url>}.
+ * <p>Token format: {@code v1.<event-b64url>.<user-b64url>.<expiry-epoch-millis>.<signature-b64url>}.
  * The signature covers every segment before the signature itself.</p>
  */
 public final class HmacAdmissionGrantService implements AdmissionGrantService {
@@ -45,7 +45,7 @@ public final class HmacAdmissionGrantService implements AdmissionGrantService {
         String unsigned = VERSION
                 + "." + encode(eventId.value())
                 + "." + encode(userId.value())
-                + "." + expiresAt.getEpochSecond();
+                + "." + expiresAt.toEpochMilli();
         String token = unsigned + "." + ENCODER.encodeToString(sign(unsigned));
         return Optional.of(new AdmissionGrant(token, expiresAt));
     }
@@ -62,12 +62,12 @@ public final class HmacAdmissionGrantService implements AdmissionGrantService {
 
         String tokenEvent;
         String tokenUser;
-        long expiresEpochSecond;
+        long expiresEpochMilli;
         byte[] suppliedSignature;
         try {
             tokenEvent = decode(parts[1]);
             tokenUser = decode(parts[2]);
-            expiresEpochSecond = Long.parseLong(parts[3]);
+            expiresEpochMilli = Long.parseLong(parts[3]);
             suppliedSignature = DECODER.decode(parts[4]);
         } catch (IllegalArgumentException malformed) {
             return false;
@@ -77,7 +77,7 @@ public final class HmacAdmissionGrantService implements AdmissionGrantService {
 
         Instant expiresAt;
         try {
-            expiresAt = Instant.ofEpochSecond(expiresEpochSecond);
+            expiresAt = Instant.ofEpochMilli(expiresEpochMilli);
         } catch (RuntimeException malformedExpiry) {
             return false;
         }

@@ -141,7 +141,8 @@ class ReconcileBookingPaymentFailureTest {
         @Override
         public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String idempotencyKey) {
             createCalls++;
-            throw new RuntimeException("payment provider unavailable");
+            throw new PaymentProviderUnavailableException(
+                    "payment intent creation", new RuntimeException("payment provider unavailable"));
         }
 
         @Override

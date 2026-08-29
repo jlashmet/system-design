@@ -319,7 +319,10 @@ class StartCheckoutHandlerTest {
         @Override
         public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String key) {
             createCalls++;
-            if (failCreate) throw new RuntimeException("payment provider unavailable");
+            if (failCreate) {
+                throw new PaymentProviderUnavailableException(
+                        "payment intent creation", new RuntimeException("payment provider unavailable"));
+            }
             return new PaymentIntent("pi-created", PaymentIntentStatus.REQUIRES_PAYMENT_METHOD);
         }
 

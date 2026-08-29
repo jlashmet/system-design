@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.events.bootstrap;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent;
+import com.amazonaws.services.lambda.runtime.events.StreamsEventResponse;
 import com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue;
 import com.amazonaws.services.lambda.runtime.events.models.dynamodb.StreamRecord;
 import com.systemdesign.ticketmaster.events.application.BuildEventSearchProjectionHandler;
@@ -29,6 +30,7 @@ class EventSearchProjectionLambdaHandlerTest {
     private CapturingPublisher publisher;
     private EventSearchProjectionLambdaHandler handler;
     private DynamodbEvent streamEvent;
+    private StreamsEventResponse response;
 
     @Test
     void publishesUpsertForEventInsertOrModify() {
@@ -65,16 +67,30 @@ class EventSearchProjectionLambdaHandlerTest {
         thenExpectNoProjection();
     }
 
+    @Test
+    void checkpointsSuccessfulPrefixAndRetriesFromFirstPublishFailure() {
+        givenPublisherFailureOnSecondRecord();
+        whenThreeRecordBatchIsProcessed();
+        thenExpectOnlyPrefixPublishedAndSecondSequenceRetried();
+    }
+
     private void givenCanonicalEvent(EventStatus status) {
         publisher = new CapturingPublisher();
         handler = handler(event(status), publisher);
         streamEvent = null;
+        response = null;
     }
 
     private void givenMissingCanonicalEvent() {
         publisher = new CapturingPublisher();
         handler = handler(null, publisher);
         streamEvent = null;
+        response = null;
+    }
+
+    private void givenPublisherFailureOnSecondRecord() {
+        givenCanonicalEvent(EventStatus.SCHEDULED);
+        publisher.failDeduplicationId = "stream-2";
     }
 
     private void whenStreamRecordIsProcessed(
@@ -82,14 +98,23 @@ class EventSearchProjectionLambdaHandlerTest {
             String eventId,
             Map<String, AttributeValue> newImage,
             Map<String, AttributeValue> oldImage) {
-        streamEvent = event(eventName, eventId, newImage, oldImage);
-        handler.handleRequest(streamEvent, null);
+        streamEvent = event(record(eventName, eventId, newImage, oldImage));
+        response = handler.handleRequest(streamEvent, null);
     }
 
     private void whenRemovalWithOnlyEventKeyIsProcessed() {
-        streamEvent = event("REMOVE", "stream-keys", null, null);
-        streamEvent.getRecords().getFirst().getDynamodb().setKeys(Map.of("pk", string("EVENT#event-1")));
-        handler.handleRequest(streamEvent, null);
+        DynamodbEvent.DynamodbStreamRecord record = record("REMOVE", "stream-keys", null, null);
+        record.getDynamodb().setKeys(Map.of("pk", string("EVENT#event-1")));
+        streamEvent = event(record);
+        response = handler.handleRequest(streamEvent, null);
+    }
+
+    private void whenThreeRecordBatchIsProcessed() {
+        streamEvent = event(
+                record("MODIFY", "stream-1", eventImage(), null),
+                record("MODIFY", "stream-2", eventImage(), null),
+                record("MODIFY", "stream-3", eventImage(), null));
+        response = handler.handleRequest(streamEvent, null);
     }
 
     private void thenExpectUpsert(String deduplicationId) {
@@ -101,15 +126,30 @@ class EventSearchProjectionLambdaHandlerTest {
             assertThat(projection.venue()).isEqualTo("SoFi Stadium");
             assertThat(projection.city()).isEqualTo("Los Angeles");
         });
+        assertThat(failureIds()).isEmpty();
     }
 
     private void thenExpectDelete(String deduplicationId) {
         assertThat(publisher.messages).containsExactly(
                 new Published(new DeleteEventSearchProjection("event-1"), deduplicationId));
+        assertThat(failureIds()).isEmpty();
     }
 
     private void thenExpectNoProjection() {
         assertThat(publisher.messages).isEmpty();
+        assertThat(failureIds()).isEmpty();
+    }
+
+    private void thenExpectOnlyPrefixPublishedAndSecondSequenceRetried() {
+        assertThat(publisher.messages).hasSize(1);
+        assertThat(publisher.messages.getFirst().deduplicationId()).isEqualTo("stream-1");
+        assertThat(failureIds()).containsExactly("sequence-stream-2");
+    }
+
+    private List<String> failureIds() {
+        return response.getBatchItemFailures().stream()
+                .map(StreamsEventResponse.BatchItemFailure::getItemIdentifier)
+                .toList();
     }
 
     private static EventSearchProjectionLambdaHandler handler(Event event, CapturingPublisher publisher) {
@@ -130,21 +170,26 @@ class EventSearchProjectionLambdaHandlerTest {
                 "Opening night");
     }
 
-    private static DynamodbEvent event(
+    private static DynamodbEvent event(DynamodbEvent.DynamodbStreamRecord... records) {
+        DynamodbEvent event = new DynamodbEvent();
+        event.setRecords(List.of(records));
+        return event;
+    }
+
+    private static DynamodbEvent.DynamodbStreamRecord record(
             String eventName,
             String eventId,
             Map<String, AttributeValue> newImage,
             Map<String, AttributeValue> oldImage) {
         StreamRecord streamRecord = new StreamRecord();
+        streamRecord.setSequenceNumber("sequence-" + eventId);
         streamRecord.setNewImage(newImage);
         streamRecord.setOldImage(oldImage);
         DynamodbEvent.DynamodbStreamRecord record = new DynamodbEvent.DynamodbStreamRecord();
         record.setEventName(eventName);
         record.setEventID(eventId);
         record.setDynamodb(streamRecord);
-        DynamodbEvent event = new DynamodbEvent();
-        event.setRecords(List.of(record));
-        return event;
+        return record;
     }
 
     private static Map<String, AttributeValue> eventImage() {
@@ -165,9 +210,13 @@ class EventSearchProjectionLambdaHandlerTest {
 
     private static final class CapturingPublisher implements EventSearchProjectionPublisher {
         private final List<Published> messages = new ArrayList<>();
+        private String failDeduplicationId;
 
         @Override
         public void publish(EventSearchProjectionAction action, String deduplicationId) {
+            if (deduplicationId.equals(failDeduplicationId)) {
+                throw new IllegalStateException("simulated SQS publish failure");
+            }
             messages.add(new Published(action, deduplicationId));
         }
     }

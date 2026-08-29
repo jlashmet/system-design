@@ -34,8 +34,15 @@ public final class ReconcileDueBookingsHandler {
         Instant dueAtOrBefore = clock.instant();
         int processed = 0;
         List<BookingId> errors = new ArrayList<>();
+        List<Integer> failedShards = new ArrayList<>();
         for (int shard = 0; shard < reconciliationShards; shard++) {
-            List<Booking> due = bookingRepository.findDueForReconciliation(shard, dueAtOrBefore, batchSizePerShard);
+            List<Booking> due;
+            try {
+                due = bookingRepository.findDueForReconciliation(shard, dueAtOrBefore, batchSizePerShard);
+            } catch (RuntimeException failure) {
+                failedShards.add(shard);
+                continue;
+            }
             for (Booking booking : due) {
                 processed++;
                 try {
@@ -45,6 +52,6 @@ public final class ReconcileDueBookingsHandler {
                 }
             }
         }
-        return new ReconciliationBatchResult(processed, errors);
+        return new ReconciliationBatchResult(processed, errors, failedShards);
     }
 }

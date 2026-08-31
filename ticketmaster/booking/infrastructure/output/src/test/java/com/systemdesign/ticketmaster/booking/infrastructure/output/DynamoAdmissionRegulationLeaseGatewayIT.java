@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
@@ -25,6 +26,7 @@ import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
+import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 @Testcontainers
@@ -56,6 +58,19 @@ class DynamoAdmissionRegulationLeaseGatewayIT {
         givenEnabledAdmission();
         whenTwoRegulatorsContendAcrossLeaseExpiry();
         thenExpectSingleOwnerUntilExpiry();
+    }
+
+    @Test
+    void leaseAcquisitionRejectsMismatchedAdmissionIdentityWithoutMutatingRow() {
+        initialize();
+        putRawAdmission("event-other");
+        leaseGateway = new DynamoAdmissionRegulationLeaseGateway(dynamoDb, tableName);
+
+        assertThatThrownBy(() -> leaseGateway.tryAcquireOrRenew(
+                        EVENT_ID, "regulator-a", NOW, NOW.plusSeconds(5)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("admission record identity mismatch for event event-123");
+        assertThat(admissionItem()).doesNotContainKeys("regulatorId", "regulatorLeaseExpiresAt");
     }
 
     private void givenEnabledAdmission() {
@@ -90,6 +105,17 @@ class DynamoAdmissionRegulationLeaseGatewayIT {
                 .isEqualTo(NOW.plusSeconds(12).toEpochMilli());
     }
 
+    private void putRawAdmission(String storedEventId) {
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(Map.of(
+                        "pk", string(DynamoWaitingRoomRepository.admissionPk(EVENT_ID)),
+                        "entityType", string("EVENT_ADMISSION"),
+                        "eventId", string(storedEventId),
+                        "admittedThrough", number(NOW.toEpochMilli())))
+                .build());
+    }
+
     private void initialize() {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
@@ -111,11 +137,17 @@ class DynamoAdmissionRegulationLeaseGatewayIT {
     private Map<String, AttributeValue> admissionItem() {
         return dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
-                        .key(Map.of("pk", AttributeValue.builder()
-                                .s(DynamoWaitingRoomRepository.admissionPk(EVENT_ID))
-                                .build()))
+                        .key(Map.of("pk", string(DynamoWaitingRoomRepository.admissionPk(EVENT_ID))))
                         .consistentRead(true)
                         .build())
                 .item();
+    }
+
+    private static AttributeValue string(String value) {
+        return AttributeValue.builder().s(value).build();
+    }
+
+    private static AttributeValue number(long value) {
+        return AttributeValue.builder().n(Long.toString(value)).build();
     }
 }

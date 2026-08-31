@@ -159,7 +159,7 @@ class HttpPaymentGatewayTest {
             JsonNode json = MAPPER.readTree(requestBody);
             assertThat(json.get("eventId").asText()).isEqualTo(EVENT_ID.value());
             assertThat(json.get("bookingId").asText()).isEqualTo(BOOKING_ID.value());
-            assertThat(json.get("amount").asText()).isEqualTo(expectedAmount);
+            assertThat(json.get("amount").decimalValue()).isEqualByComparingTo(new BigDecimal(expectedAmount));
             assertThat(json.get("currency").asText()).isEqualTo(expectedCurrency);
         } catch (IOException e) {
             throw new AssertionError(e);

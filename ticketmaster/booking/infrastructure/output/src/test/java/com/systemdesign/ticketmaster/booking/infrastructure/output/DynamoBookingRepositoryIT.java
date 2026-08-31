@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Instant;
 import java.util.Currency;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -149,7 +150,29 @@ class DynamoBookingRepositoryIT {
 
         assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("checkout idempotency record resolved outside its event/hold/key scope");
+                .hasMessage("checkout idempotency record resolved outside its booking/event/hold/key scope");
+    }
+
+    @Test
+    void checkoutIdempotencyLookupRejectsBookingWhoseStoredIdDisagreesWithPrimaryKey() {
+        initialize();
+        EventId eventId = new EventId("event-1");
+        HoldId holdId = new HoldId("hold-1");
+        String idempotencyKey = "checkout-1";
+        Hold hold = Hold.active(holdId, new UserId("user-1"), eventId,
+                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
+                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Booking booking = Booking.pending(new BookingId("booking-1"),
+                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                idempotencyKey, FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+        Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
+        corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
+        putRaw(corruptBooking);
+        putRaw(DynamoItemCodec.idempotencyItem(booking));
+
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("checkout idempotency record resolved outside its booking/event/hold/key scope");
     }
 
     private void givenPendingBooking() {

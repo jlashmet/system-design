@@ -75,8 +75,8 @@ public final class ReconcileBookingHandler {
     }
 
     private Booking reconcileAuthorized(Booking booking) {
+        Hold hold = loadHold(booking);
         Booking withIntent = ensurePaymentIntent(booking);
-        Hold hold = loadHold(withIntent);
         PaymentIntentStatus paymentStatus = getPaymentStatusOrReschedule(withIntent);
         if (paymentStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, hold);
         if (paymentStatus == PaymentIntentStatus.FAILED || paymentStatus == PaymentIntentStatus.CANCELED) {

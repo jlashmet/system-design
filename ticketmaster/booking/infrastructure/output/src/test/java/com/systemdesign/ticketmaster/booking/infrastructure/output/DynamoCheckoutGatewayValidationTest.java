@@ -62,7 +62,7 @@ class DynamoCheckoutGatewayValidationTest {
 
     @Test
     void startCheckoutRejectsBookingFromDifferentEventBeforeStorageMutation() {
-        Booking booking = bookingFor(OTHER_EVENT, BookingStatus.PENDING_PAYMENT);
+        Booking booking = bookingFor(OTHER_EVENT, USER_ID, PRICE, BookingStatus.PENDING_PAYMENT);
 
         assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, booking))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -70,8 +70,27 @@ class DynamoCheckoutGatewayValidationTest {
     }
 
     @Test
+    void startCheckoutRejectsBookingFromDifferentUserBeforeStorageMutation() {
+        Booking booking = bookingFor(HOLD_EVENT, new UserId("user-2"), PRICE, BookingStatus.PENDING_PAYMENT);
+
+        assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, booking))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("booking does not belong to hold user");
+    }
+
+    @Test
+    void startCheckoutRejectsBookingWithDifferentPriceBeforeStorageMutation() {
+        Price differentPrice = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
+        Booking booking = bookingFor(HOLD_EVENT, USER_ID, differentPrice, BookingStatus.PENDING_PAYMENT);
+
+        assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, booking))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("booking price does not match hold price");
+    }
+
+    @Test
     void finalizeBookingRejectsBookingFromDifferentEventBeforeStorageMutation() {
-        Booking booking = bookingFor(OTHER_EVENT, BookingStatus.CONFIRMED);
+        Booking booking = bookingFor(OTHER_EVENT, USER_ID, PRICE, BookingStatus.CONFIRMED);
 
         assertThatThrownBy(() -> gateway.finalizeBooking(checkoutHold.convert(), booking))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -80,23 +99,23 @@ class DynamoCheckoutGatewayValidationTest {
 
     @Test
     void failBookingRejectsBookingFromDifferentEventBeforeStorageMutation() {
-        Booking booking = bookingFor(OTHER_EVENT, BookingStatus.FAILED);
+        Booking booking = bookingFor(OTHER_EVENT, USER_ID, PRICE, BookingStatus.FAILED);
 
         assertThatThrownBy(() -> gateway.failBooking(checkoutHold.fail(), booking))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("booking does not belong to hold event");
     }
 
-    private Booking bookingFor(EventId eventId, BookingStatus status) {
+    private Booking bookingFor(EventId eventId, UserId userId, Price price, BookingStatus status) {
         Instant nextReconcileAt = status == BookingStatus.PENDING_PAYMENT ? NOW.plusSeconds(60) : null;
         Integer reconcileShard = status == BookingStatus.PENDING_PAYMENT ? 1 : null;
         return new Booking(
                 new BookingId("booking-1"),
-                USER_ID,
+                userId,
                 eventId,
                 HOLD_ID,
                 status,
-                PRICE,
+                price,
                 "checkout-1",
                 "pi-1",
                 nextReconcileAt,

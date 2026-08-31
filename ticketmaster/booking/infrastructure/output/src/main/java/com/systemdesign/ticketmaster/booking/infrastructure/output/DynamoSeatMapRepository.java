@@ -26,6 +26,8 @@ import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 public final class DynamoSeatMapRepository implements SeatMapRepository {
     private static final String PK = "pk";
     private static final String SK = "sk";
+    private static final String SECTION_PREFIX = "SECTION#";
+    private static final String SEAT_PREFIX = "SEAT#";
     private final DynamoDbClient dynamoDb;
     private final String tableName;
 
@@ -96,12 +98,12 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                                 .expressionAttributeNames(Map.of("#pk", PK, "#sk", SK))
                                 .expressionAttributeValues(Map.of(
                                         ":pk", string(eventPk(eventId)),
-                                        ":sectionPrefix", string("SECTION#")))
+                                        ":sectionPrefix", string(SECTION_PREFIX)))
                                 .scanIndexForward(true)
                                 .consistentRead(false)
                                 .build()))
                 .items().stream()
-                .map(item -> new SectionId(item.get("sectionId").s()))
+                .map(item -> sectionFromDirectoryItem(item, eventId))
                 .toList();
     }
 
@@ -120,7 +122,7 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                                 .consistentRead(false)
                                 .build()))
                 .items().stream()
-                .map(DynamoSeatMapRepository::fromItem)
+                .map(item -> seatFromStoredItem(item, eventId, sectionId))
                 .toList();
     }
 
@@ -133,11 +135,60 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     }
 
     private static String sectionSk(SectionId sectionId) {
-        return "SECTION#" + sectionId.value();
+        return SECTION_PREFIX + sectionId.value();
     }
 
     private static String seatSk(SeatId seatId) {
-        return "SEAT#" + seatId.value();
+        return SEAT_PREFIX + seatId.value();
+    }
+
+    private static SectionId sectionFromDirectoryItem(Map<String, AttributeValue> item, EventId expectedEventId) {
+        String pk = stringValue(item.get(PK));
+        String sk = stringValue(item.get(SK));
+        String storedEventId = stringValue(item.get("eventId"));
+        String storedSectionId = stringValue(item.get("sectionId"));
+        String keyedSectionId = suffix(sk, SECTION_PREFIX);
+        String displaySectionId = keyedSectionId == null ? "unknown" : keyedSectionId;
+        if (!eventPk(expectedEventId).equals(pk)
+                || keyedSectionId == null
+                || keyedSectionId.isBlank()
+                || !expectedEventId.value().equals(storedEventId)
+                || !keyedSectionId.equals(storedSectionId)) {
+            throw new IllegalStateException(
+                    "seat-map section directory identity mismatch for "
+                            + expectedEventId.value() + "/" + displaySectionId);
+        }
+        return new SectionId(keyedSectionId);
+    }
+
+    private static SeatMapSeat seatFromStoredItem(
+            Map<String, AttributeValue> item, EventId expectedEventId, SectionId expectedSectionId) {
+        String pk = stringValue(item.get(PK));
+        String sk = stringValue(item.get(SK));
+        String storedEventId = stringValue(item.get("eventId"));
+        String storedSectionId = stringValue(item.get("sectionId"));
+        String storedSeatId = stringValue(item.get("seatId"));
+        String keyedSeatId = suffix(sk, SEAT_PREFIX);
+        String displaySeatId = keyedSeatId == null ? "unknown" : keyedSeatId;
+        if (!sectionPk(expectedEventId, expectedSectionId).equals(pk)
+                || keyedSeatId == null
+                || keyedSeatId.isBlank()
+                || !expectedEventId.value().equals(storedEventId)
+                || !expectedSectionId.value().equals(storedSectionId)
+                || !keyedSeatId.equals(storedSeatId)) {
+            throw new IllegalStateException(
+                    "seat-map seat identity mismatch for "
+                            + expectedEventId.value() + "/" + expectedSectionId.value() + "/" + displaySeatId);
+        }
+        return fromItem(item);
+    }
+
+    private static String suffix(String value, String prefix) {
+        return value != null && value.startsWith(prefix) ? value.substring(prefix.length()) : null;
+    }
+
+    private static String stringValue(AttributeValue value) {
+        return value == null ? null : value.s();
     }
 
     private static SeatMapSeat fromItem(Map<String, AttributeValue> item) {

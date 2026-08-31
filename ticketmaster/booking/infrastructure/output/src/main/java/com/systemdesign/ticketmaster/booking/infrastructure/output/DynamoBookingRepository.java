@@ -34,7 +34,21 @@ public final class DynamoBookingRepository implements BookingRepository {
     @Override
     public Optional<Booking> findById(BookingId bookingId) {
         Objects.requireNonNull(bookingId, "bookingId");
-        return getBooking(DynamoKeys.bookingPk(bookingId));
+        Map<String, AttributeValue> item = DynamoBookingCall.execute(
+                        "booking lookup",
+                        () -> dynamoDb.getItem(GetItemRequest.builder()
+                                .tableName(tableName)
+                                .key(Map.of(PK, string(DynamoKeys.bookingPk(bookingId))))
+                                .consistentRead(true)
+                                .build()))
+                .item();
+        if (item == null || item.isEmpty()) return Optional.empty();
+
+        Booking booking = bookingFromItem(item);
+        if (!booking.id().equals(bookingId)) {
+            throw new IllegalStateException("booking record identity mismatch for " + bookingId.value());
+        }
+        return Optional.of(booking);
     }
 
     @Override
@@ -65,8 +79,7 @@ public final class DynamoBookingRepository implements BookingRepository {
         Booking booking = findById(mappedBookingId)
                 .orElseThrow(() -> new IllegalStateException(
                         "checkout idempotency record references missing booking " + bookingIdValue.s()));
-        if (!booking.id().equals(mappedBookingId)
-                || !booking.eventId().equals(eventId)
+        if (!booking.eventId().equals(eventId)
                 || !booking.holdId().equals(holdId)
                 || !booking.checkoutIdempotencyKey().equals(idempotencyKey)) {
             throw new IllegalStateException("checkout idempotency record resolved outside its booking/event/hold/key scope");
@@ -163,19 +176,6 @@ public final class DynamoBookingRepository implements BookingRepository {
                 .items().stream()
                 .map(DynamoItemCodec::bookingFromItem)
                 .toList();
-    }
-
-    private Optional<Booking> getBooking(String pk) {
-        Map<String, AttributeValue> item = DynamoBookingCall.execute(
-                        "booking lookup",
-                        () -> dynamoDb.getItem(GetItemRequest.builder()
-                                .tableName(tableName)
-                                .key(Map.of(PK, string(pk)))
-                                .consistentRead(true)
-                                .build()))
-                .item();
-        if (item == null || item.isEmpty()) return Optional.empty();
-        return Optional.of(bookingFromItem(item));
     }
 
     private static void requireMappingValue(Map<String, AttributeValue> mapping, String name, String expected) {

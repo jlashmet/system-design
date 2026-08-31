@@ -12,6 +12,7 @@ import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
 public final class DynamoAdmissionRegulationLeaseGateway implements AdmissionRegulationLeaseGateway {
     private static final String PK = "pk";
+    private static final String EVENT_ADMISSION = "EVENT_ADMISSION";
 
     private final DynamoDbClient dynamoDb;
     private final String tableName;
@@ -40,19 +41,28 @@ public final class DynamoAdmissionRegulationLeaseGateway implements AdmissionReg
                     .tableName(tableName)
                     .key(Map.of(PK, string(DynamoWaitingRoomRepository.admissionPk(eventId))))
                     .updateExpression("SET #regulatorId = :regulatorId, #leaseExpiresAt = :leaseExpiresAt")
-                    .conditionExpression("attribute_exists(#pk) AND (attribute_not_exists(#leaseExpiresAt) "
-                            + "OR #leaseExpiresAt <= :now OR #regulatorId = :regulatorId)")
+                    .conditionExpression("attribute_exists(#pk) AND #entityType = :entityType AND #eventId = :eventId "
+                            + "AND (attribute_not_exists(#leaseExpiresAt) OR #leaseExpiresAt <= :now "
+                            + "OR #regulatorId = :regulatorId)")
                     .expressionAttributeNames(Map.of(
                             "#pk", PK,
+                            "#entityType", "entityType",
+                            "#eventId", "eventId",
                             "#regulatorId", "regulatorId",
                             "#leaseExpiresAt", "regulatorLeaseExpiresAt"))
                     .expressionAttributeValues(Map.of(
+                            ":entityType", string(EVENT_ADMISSION),
+                            ":eventId", string(eventId.value()),
                             ":regulatorId", string(regulatorId),
                             ":now", number(now.toEpochMilli()),
                             ":leaseExpiresAt", number(leaseExpiresAt.toEpochMilli())))
                     .build()));
             return true;
-        } catch (ConditionalCheckFailedException notOwner) {
+        } catch (ConditionalCheckFailedException notOwnerAbsentOrCorrupt) {
+            // The conditional update is atomic, so a failed identity predicate cannot mutate the
+            // admission row. A consistent validated read surfaces corruption while preserving the
+            // existing false result for normal contention or absent admission state.
+            new DynamoWaitingRoomRepository(dynamoDb, tableName).findAdmission(eventId);
             return false;
         }
     }

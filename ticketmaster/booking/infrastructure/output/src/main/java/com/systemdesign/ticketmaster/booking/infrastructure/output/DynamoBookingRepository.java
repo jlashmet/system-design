@@ -84,18 +84,33 @@ public final class DynamoBookingRepository implements BookingRepository {
                     .tableName(tableName)
                     .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
                     .updateExpression("SET #paymentIntentId = :intent")
-                    .conditionExpression("(#status = :pending AND attribute_not_exists(#paymentIntentId)) "
-                            + "OR #paymentIntentId = :intent")
+                    .conditionExpression("#eventId = :eventId AND #holdId = :holdId AND #userId = :userId "
+                            + "AND #checkoutIdempotencyKey = :checkoutIdempotencyKey "
+                            + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
+                            + "AND ((#status = :pending AND attribute_not_exists(#paymentIntentId)) "
+                            + "OR #paymentIntentId = :intent)")
                     .expressionAttributeNames(Map.of(
                             "#status", "status",
-                            "#paymentIntentId", "paymentIntentId"))
+                            "#paymentIntentId", "paymentIntentId",
+                            "#eventId", "eventId",
+                            "#holdId", "holdId",
+                            "#userId", "userId",
+                            "#checkoutIdempotencyKey", "checkoutIdempotencyKey",
+                            "#totalPriceAmount", "totalPriceAmount",
+                            "#totalPriceCurrency", "totalPriceCurrency"))
                     .expressionAttributeValues(Map.of(
                             ":pending", string("PENDING_PAYMENT"),
-                            ":intent", string(intentId)))
+                            ":intent", string(intentId),
+                            ":eventId", string(booking.eventId().value()),
+                            ":holdId", string(booking.holdId().value()),
+                            ":userId", string(booking.userId().value()),
+                            ":checkoutIdempotencyKey", string(booking.checkoutIdempotencyKey()),
+                            ":totalPriceAmount", string(booking.totalPrice().amount().toPlainString()),
+                            ":totalPriceCurrency", string(booking.totalPrice().currency().getCurrencyCode())))
                     .build()));
         } catch (ConditionalCheckFailedException conflictingIntent) {
             throw new IllegalStateException(
-                    "booking already has a different payment intent: " + booking.id().value(),
+                    "booking payment intent state changed or scope mismatched: " + booking.id().value(),
                     conflictingIntent);
         }
     }

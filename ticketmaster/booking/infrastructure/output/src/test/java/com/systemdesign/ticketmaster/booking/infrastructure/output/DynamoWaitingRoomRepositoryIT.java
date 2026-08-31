@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.booking.domain.AdmissionWatermarkRegressionException;
 import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
@@ -10,6 +11,7 @@ import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
 import io.floci.testcontainers.FlociContainer;
 import java.net.URI;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -20,11 +22,13 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
+import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 @Testcontainers
@@ -88,6 +92,35 @@ class DynamoWaitingRoomRepositoryIT {
         givenWaitingRoom();
         whenAdvanceAdmissionTo(FIRST_JOIN);
         thenExpect(AdmissionWatermarkRegressionException.class);
+    }
+
+    @Test
+    void entryReadRejectsPayloadIdentityThatDisagreesWithPrimaryKey() {
+        givenWaitingRoom();
+        putRaw(Map.of(
+                "pk", string(DynamoWaitingRoomRepository.entryPk(EVENT_ID, USER_ID)),
+                "entityType", string("WAITING_ROOM_ENTRY"),
+                "eventId", string("event-other"),
+                "userId", string("user-other"),
+                "joinedAt", number(FIRST_JOIN.toEpochMilli())));
+
+        assertThatThrownBy(() -> repository.findEntry(EVENT_ID, USER_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("waiting-room entry identity mismatch for event-123/user-456");
+    }
+
+    @Test
+    void admissionReadRejectsPayloadIdentityThatDisagreesWithPrimaryKey() {
+        givenWaitingRoom();
+        putRaw(Map.of(
+                "pk", string(DynamoWaitingRoomRepository.admissionPk(EVENT_ID)),
+                "entityType", string("EVENT_ADMISSION"),
+                "eventId", string("event-other"),
+                "admittedThrough", number(FIRST_JOIN.toEpochMilli())));
+
+        assertThatThrownBy(() -> repository.findAdmission(EVENT_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("admission record identity mismatch for event event-123");
     }
 
     private void givenWaitingRoom() {
@@ -156,6 +189,10 @@ class DynamoWaitingRoomRepositoryIT {
         assertThat(thrown).isInstanceOf(type);
     }
 
+    private void putRaw(Map<String, AttributeValue> item) {
+        dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
+    }
+
     private void initialize() {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
@@ -172,5 +209,13 @@ class DynamoWaitingRoomRepositoryIT {
                 .keySchema(KeySchemaElement.builder().attributeName("pk").keyType(KeyType.HASH).build())
                 .build());
         repository = new DynamoWaitingRoomRepository(dynamoDb, tableName);
+    }
+
+    private static AttributeValue string(String value) {
+        return AttributeValue.builder().s(value).build();
+    }
+
+    private static AttributeValue number(long value) {
+        return AttributeValue.builder().n(Long.toString(value)).build();
     }
 }

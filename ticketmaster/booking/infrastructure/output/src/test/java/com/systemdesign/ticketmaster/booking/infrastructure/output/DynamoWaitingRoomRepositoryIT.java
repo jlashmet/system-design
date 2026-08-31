@@ -26,6 +26,7 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
@@ -123,6 +124,23 @@ class DynamoWaitingRoomRepositoryIT {
                 .hasMessage("admission record identity mismatch for event event-123");
     }
 
+    @Test
+    void admissionAdvanceRejectsMismatchedIdentityWithoutMutatingWatermark() {
+        givenWaitingRoom();
+        putRaw(Map.of(
+                "pk", string(DynamoWaitingRoomRepository.admissionPk(EVENT_ID)),
+                "entityType", string("EVENT_ADMISSION"),
+                "eventId", string("event-other"),
+                "admittedThrough", number(FIRST_JOIN.toEpochMilli())));
+
+        whenAdvanceAdmissionTo(FIRST_JOIN.plusSeconds(30));
+
+        assertThat(rawAdmissionWatermark()).isEqualTo(FIRST_JOIN);
+        assertThat(thrown)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("admission record identity mismatch for event event-123");
+    }
+
     private void givenWaitingRoom() {
         initialize();
         firstJoin = null;
@@ -191,6 +209,16 @@ class DynamoWaitingRoomRepositoryIT {
 
     private void putRaw(Map<String, AttributeValue> item) {
         dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
+    }
+
+    private Instant rawAdmissionWatermark() {
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
+                        .tableName(tableName)
+                        .key(Map.of("pk", string(DynamoWaitingRoomRepository.admissionPk(EVENT_ID))))
+                        .consistentRead(true)
+                        .build())
+                .item();
+        return Instant.ofEpochMilli(Long.parseLong(item.get("admittedThrough").n()));
     }
 
     private void initialize() {

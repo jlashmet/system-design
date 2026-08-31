@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Price;
@@ -14,6 +15,7 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -24,11 +26,13 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
+import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 @Testcontainers
@@ -77,6 +81,40 @@ class DynamoSeatMapRepositoryIT {
         thenExpectSections(SECTION_101, SECTION_102);
     }
 
+    @Test
+    void sectionDirectoryReadRejectsPayloadIdentityThatDisagreesWithKey() {
+        givenProjectedSeats();
+        putRaw(Map.of(
+                "pk", string("EVENT#event-123"),
+                "sk", string("SECTION#101"),
+                "eventId", string("event-other"),
+                "sectionId", string("different-section")));
+
+        assertThatThrownBy(() -> repository.findSections(EVENT_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("seat-map section directory identity mismatch for event-123/101");
+    }
+
+    @Test
+    void sectionReadRejectsSeatPayloadIdentityThatDisagreesWithKey() {
+        givenProjectedSeats();
+        putRaw(Map.of(
+                "pk", string("EVENT#event-123#SECTION#101"),
+                "sk", string("SEAT#A10"),
+                "eventId", string("event-other"),
+                "sectionId", string("different-section"),
+                "seatId", string("different-seat"),
+                "row", string("A"),
+                "number", string("10"),
+                "priceAmount", string("125.00"),
+                "priceCurrency", string("USD"),
+                "status", string("AVAILABLE")));
+
+        assertThatThrownBy(() -> repository.findSection(EVENT_ID, SECTION_101))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("seat-map seat identity mismatch for event-123/101/A10");
+    }
+
     private void givenProjectedSeats(SeatMapSeat... seats) {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
@@ -99,6 +137,10 @@ class DynamoSeatMapRepositoryIT {
         for (SeatMapSeat seat : seats) repository.upsert(seat);
         actual = null;
         sections = null;
+    }
+
+    private void putRaw(Map<String, AttributeValue> item) {
+        dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
     }
 
     private void whenProjectAndRead(SeatMapSeat updated) {
@@ -126,5 +168,9 @@ class DynamoSeatMapRepositoryIT {
             SeatStatus status,
             Instant holdExpiresAt) {
         return new SeatMapSeat(EVENT_ID, sectionId, new SeatId(seatId), row, number, PRICE, status, holdExpiresAt);
+    }
+
+    private static AttributeValue string(String value) {
+        return AttributeValue.builder().s(value).build();
     }
 }

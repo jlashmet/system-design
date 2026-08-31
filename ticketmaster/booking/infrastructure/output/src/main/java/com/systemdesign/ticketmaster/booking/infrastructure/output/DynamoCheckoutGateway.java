@@ -210,7 +210,7 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         if (hold.status() != HoldStatus.CHECKOUT_IN_PROGRESS || booking.status() != BookingStatus.PENDING_PAYMENT) {
             throw new IllegalArgumentException("checkout must start with checkout hold and pending booking");
         }
-        if (!hold.id().equals(booking.holdId())) throw new IllegalArgumentException("booking does not belong to hold");
+        requireSameCheckoutScope(hold, booking);
     }
 
     private static void requireFinalState(Hold hold, Booking booking, HoldStatus holdStatus, BookingStatus bookingStatus) {
@@ -219,6 +219,15 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         if (hold.status() != holdStatus || booking.status() != bookingStatus) {
             throw new IllegalArgumentException("terminal checkout state does not match requested operation");
         }
-        if (!hold.id().equals(booking.holdId())) throw new IllegalArgumentException("booking does not belong to hold");
+        requireSameCheckoutScope(hold, booking);
+    }
+
+    private static void requireSameCheckoutScope(Hold hold, Booking booking) {
+        if (!hold.id().equals(booking.holdId())) {
+            throw new IllegalArgumentException("booking does not belong to hold");
+        }
+        if (!hold.eventId().equals(booking.eventId())) {
+            throw new IllegalArgumentException("booking does not belong to hold event");
+        }
     }
 }

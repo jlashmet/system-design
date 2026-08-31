@@ -168,7 +168,16 @@ public final class DynamoHoldRepository implements HoldRepository {
                                 .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
-        return Optional.of(fromItem(item));
+
+        Hold hold = fromItem(item);
+        AttributeValue pk = item.get(PK);
+        if (!hold.id().equals(holdId)
+                || pk == null
+                || pk.s() == null
+                || !holdPk(holdId).equals(pk.s())) {
+            throw new IllegalStateException("hold record identity mismatch for " + holdId.value());
+        }
+        return Optional.of(hold);
     }
 
     @Override

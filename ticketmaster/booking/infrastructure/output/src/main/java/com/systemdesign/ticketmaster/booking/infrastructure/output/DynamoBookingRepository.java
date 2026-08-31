@@ -44,11 +44,7 @@ public final class DynamoBookingRepository implements BookingRepository {
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
 
-        Booking booking = bookingFromItem(item);
-        if (!booking.id().equals(bookingId)) {
-            throw new IllegalStateException("booking record identity mismatch for " + bookingId.value());
-        }
-        return Optional.of(booking);
+        return Optional.of(requireBookingIdentity(item, bookingFromItem(item), bookingId));
     }
 
     @Override
@@ -174,8 +170,25 @@ public final class DynamoBookingRepository implements BookingRepository {
                         .limit(limit)
                         .build()))
                 .items().stream()
-                .map(DynamoItemCodec::bookingFromItem)
+                .map(DynamoBookingRepository::bookingFromStoredItem)
                 .toList();
+    }
+
+    private static Booking bookingFromStoredItem(Map<String, AttributeValue> item) {
+        Booking booking = bookingFromItem(item);
+        return requireBookingIdentity(item, booking, booking.id());
+    }
+
+    private static Booking requireBookingIdentity(
+            Map<String, AttributeValue> item, Booking booking, BookingId expectedId) {
+        AttributeValue pk = item.get(PK);
+        if (!booking.id().equals(expectedId)
+                || pk == null
+                || pk.s() == null
+                || !DynamoKeys.bookingPk(expectedId).equals(pk.s())) {
+            throw new IllegalStateException("booking record identity mismatch for " + expectedId.value());
+        }
+        return booking;
     }
 
     private static void requireMappingValue(Map<String, AttributeValue> mapping, String name, String expected) {

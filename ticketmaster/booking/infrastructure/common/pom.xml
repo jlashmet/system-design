@@ -3,5 +3,4 @@
     <modelVersion>4.0.0</modelVersion>
     <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
     <artifactId>booking-infrastructure-common</artifactId>
-    <dependencies><dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-domain</artifactId><version>${project.version}</version></dependency></dependencies>
 </project>

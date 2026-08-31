@@ -11,9 +11,13 @@
     <packaging>pom</packaging>
     <modules>
         <module>api</module>
-        <module>domain</module>
-        <module>application</module>
+        <module>shared</module>
+        <module>admission</module>
+        <module>reservation</module>
+        <module>checkout</module>
+        <module>payment</module>
         <module>infrastructure</module>
+        <module>tests</module>
         <module>architecture</module>
         <module>bootstrap</module>
     </modules>

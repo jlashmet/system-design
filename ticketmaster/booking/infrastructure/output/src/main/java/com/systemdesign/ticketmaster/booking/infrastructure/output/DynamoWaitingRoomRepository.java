@@ -102,19 +102,26 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                             .tableName(tableName)
                             .key(Map.of(PK, string(admissionPk(admission.eventId()))))
                             .updateExpression("SET #admittedThrough = :newWatermark")
-                            .conditionExpression("attribute_exists(#pk) AND #admittedThrough <= :newWatermark")
+                            .conditionExpression(
+                                    "attribute_exists(#pk) AND #entityType = :entityType AND #eventId = :eventId "
+                                            + "AND #admittedThrough <= :newWatermark")
                             .expressionAttributeNames(Map.of(
                                     "#pk", PK,
+                                    "#entityType", "entityType",
+                                    "#eventId", "eventId",
                                     "#admittedThrough", "admittedThrough"))
                             .expressionAttributeValues(Map.of(
+                                    ":entityType", string(EVENT_ADMISSION),
+                                    ":eventId", string(admission.eventId().value()),
                                     ":newWatermark", number(admission.admittedThrough().toEpochMilli())))
                             .returnValues(ReturnValue.ALL_NEW)
                             .build()))
                     .attributes();
-            return new EventAdmission(
-                    new EventId(updated.get("eventId").s()),
-                    Instant.ofEpochMilli(Long.parseLong(updated.get("admittedThrough").n())));
-        } catch (ConditionalCheckFailedException regressionOrDisabled) {
+            return admissionFromItem(updated, admission.eventId());
+        } catch (ConditionalCheckFailedException regressionDisabledOrCorrupt) {
+            // The conditional write failed atomically. A consistent read distinguishes a corrupt
+            // keyed record (which findAdmission rejects) from the existing disabled/backward case.
+            findAdmission(admission.eventId());
             throw new AdmissionWatermarkRegressionException(admission.eventId());
         }
     }

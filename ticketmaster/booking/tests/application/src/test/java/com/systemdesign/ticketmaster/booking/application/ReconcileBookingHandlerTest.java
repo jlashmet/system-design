@@ -129,13 +129,37 @@ class ReconcileBookingHandlerTest {
         assertThat(scenario.checkoutGateway.failedBooking).isNull();
     }
 
+    @Test
+    void validatesHoldBeforeCreatingMissingPaymentIntent() {
+        Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.minusSeconds(1), PaymentIntentStatus.PROCESSING,
+                PaymentIntentStatus.CANCELED, false);
+        Hold mismatched = Hold.active(HOLD_ID, new UserId("user-456"), new EventId("event-other"),
+                        Set.of(new SeatId("A10")), PRICE, CREATED_AT, CREATED_AT.plusSeconds(300))
+                .startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
+        scenario.holdRepository.hold = mismatched;
+
+        assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("booking hold scope mismatch for booking-123");
+        assertThat(scenario.paymentGateway.createCalls).isZero();
+        assertThat(scenario.paymentGateway.statusCalls).isZero();
+        assertThat(scenario.bookingRepository.rescheduled).isNull();
+    }
+
     private static Scenario scenario(EventWriteAuthority authority, Instant now,
                                      PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
+        return scenario(authority, now, paymentStatus, cancelStatus, true);
+    }
+
+    private static Scenario scenario(EventWriteAuthority authority, Instant now,
+                                     PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus,
+                                     boolean attachPaymentIntent) {
         Hold active = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,
                 CREATED_AT, CREATED_AT.plusSeconds(300));
         Hold checkout = active.startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
         Booking booking = Booking.pending(BOOKING_ID, checkout, "checkout-idempotency", CHECKOUT_STARTED_AT,
-                        CHECKOUT_STARTED_AT.plusSeconds(30), 0).attachPaymentIntent("pi-123");
+                CHECKOUT_STARTED_AT.plusSeconds(30), 0);
+        if (attachPaymentIntent) booking = booking.attachPaymentIntent("pi-123");
         FakeBookingRepository bookings = new FakeBookingRepository(booking);
         FakeHoldRepository holds = new FakeHoldRepository(checkout);
         FakeCheckoutGateway checkoutGateway = new FakeCheckoutGateway();
@@ -196,12 +220,14 @@ class ReconcileBookingHandlerTest {
     private static final class FakePaymentGateway implements PaymentGateway {
         private final PaymentIntentStatus paymentStatus;
         private final PaymentIntentStatus cancelStatus;
+        private int createCalls;
         private int statusCalls;
         private int cancelCalls;
         private FakePaymentGateway(PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
             this.paymentStatus = paymentStatus; this.cancelStatus = cancelStatus;
         }
         @Override public PaymentIntent createPaymentIntent(BookingId bookingId, Price price, String key) {
+            createCalls++;
             return new PaymentIntent("pi-123", paymentStatus);
         }
         @Override public PaymentIntentStatus getPaymentStatus(String paymentIntentId) { statusCalls++; return paymentStatus; }

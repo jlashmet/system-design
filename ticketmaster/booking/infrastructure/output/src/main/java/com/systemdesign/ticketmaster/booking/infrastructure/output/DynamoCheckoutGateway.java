@@ -229,5 +229,11 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         if (!hold.eventId().equals(booking.eventId())) {
             throw new IllegalArgumentException("booking does not belong to hold event");
         }
+        if (!hold.userId().equals(booking.userId())) {
+            throw new IllegalArgumentException("booking does not belong to hold user");
+        }
+        if (!hold.totalPrice().equals(booking.totalPrice())) {
+            throw new IllegalArgumentException("booking price does not match hold price");
+        }
     }
 }

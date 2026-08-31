@@ -91,6 +91,25 @@ class DynamoBookingRepositoryIT {
     }
 
     @Test
+    void directLookupRejectsBookingWhoseStoredIdDisagreesWithPrimaryKey() {
+        initialize();
+        BookingId requestedId = new BookingId("booking-1");
+        Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
+                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
+                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Booking booking = Booking.pending(requestedId,
+                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+        Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
+        corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
+        putRaw(corruptBooking);
+
+        assertThatThrownBy(() -> repository.findById(requestedId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("booking record identity mismatch for booking-1");
+    }
+
+    @Test
     void checkoutIdempotencyLookupFailsClosedWhenMappingIsMissingBookingId() {
         initialize();
         EventId eventId = new EventId("event-1");
@@ -172,7 +191,7 @@ class DynamoBookingRepositoryIT {
 
         assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("checkout idempotency record resolved outside its booking/event/hold/key scope");
+                .hasMessage("booking record identity mismatch for booking-1");
     }
 
     private void givenPendingBooking() {

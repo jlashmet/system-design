@@ -93,6 +93,25 @@ class ReconcileBookingHandlerTest {
         assertThat(scenario.checkoutGateway.failedBooking).isNull();
     }
 
+    @Test
+    void rejectsMismatchedHoldScopeBeforePaymentAccessOrReschedule() {
+        Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
+                PaymentIntentStatus.CANCELED);
+        Hold mismatched = Hold.active(HOLD_ID, new UserId("user-456"), new EventId("event-other"),
+                        Set.of(new SeatId("A10")), PRICE, CREATED_AT, CREATED_AT.plusSeconds(300))
+                .startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
+        scenario.holdRepository.hold = mismatched;
+
+        assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("booking hold scope mismatch for booking-123");
+        assertThat(scenario.paymentGateway.statusCalls).isZero();
+        assertThat(scenario.paymentGateway.cancelCalls).isZero();
+        assertThat(scenario.bookingRepository.rescheduled).isNull();
+        assertThat(scenario.checkoutGateway.confirmedBooking).isNull();
+        assertThat(scenario.checkoutGateway.failedBooking).isNull();
+    }
+
     private static Scenario scenario(EventWriteAuthority authority, Instant now,
                                      PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
         Hold active = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,
@@ -129,7 +148,7 @@ class ReconcileBookingHandlerTest {
     }
 
     private static final class FakeHoldRepository implements HoldRepository {
-        private final Hold hold;
+        private Hold hold;
         private int findCalls;
         private FakeHoldRepository(Hold hold) { this.hold = hold; }
         @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new UnsupportedOperationException(); }

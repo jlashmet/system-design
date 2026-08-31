@@ -183,7 +183,7 @@ class BookingExceptionHandlerTest {
 
     private void thenExpectServiceUnavailable() {
         assertThat(response.getStatusCode().value()).isEqualTo(503);
-        assertThat(response.getHeaders()).doesNotContainKey(BookingExceptionHandler.BOOKING_REGION_HEADER);
+        assertThat(response.getHeaders().containsKey(BookingExceptionHandler.BOOKING_REGION_HEADER)).isFalse();
     }
 
     private void thenExpectConflict(String title) {

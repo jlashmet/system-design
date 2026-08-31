@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
@@ -16,6 +17,7 @@ import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Instant;
 import java.util.Currency;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -27,6 +29,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
@@ -84,6 +87,69 @@ class DynamoBookingRepositoryIT {
         givenConfirmedBookingWithPaymentIntent();
         whenStaleWorkerSavesSamePaymentIntent();
         thenExpectConfirmedBookingPreserved();
+    }
+
+    @Test
+    void checkoutIdempotencyLookupFailsClosedWhenMappingIsMissingBookingId() {
+        initialize();
+        EventId eventId = new EventId("event-1");
+        HoldId holdId = new HoldId("hold-1");
+        String idempotencyKey = "checkout-1";
+        putRaw(Map.of(
+                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey)),
+                "entityType", DynamoItemCodec.string("CHECKOUT_IDEMPOTENCY"),
+                "eventId", DynamoItemCodec.string(eventId.value()),
+                "holdId", DynamoItemCodec.string(holdId.value()),
+                "idempotencyKey", DynamoItemCodec.string(idempotencyKey)));
+
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("checkout idempotency record is missing bookingId");
+    }
+
+    @Test
+    void checkoutIdempotencyLookupFailsClosedWhenMappingReferencesMissingBooking() {
+        initialize();
+        EventId eventId = new EventId("event-1");
+        HoldId holdId = new HoldId("hold-1");
+        String idempotencyKey = "checkout-1";
+        putRaw(Map.of(
+                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey)),
+                "entityType", DynamoItemCodec.string("CHECKOUT_IDEMPOTENCY"),
+                "eventId", DynamoItemCodec.string(eventId.value()),
+                "holdId", DynamoItemCodec.string(holdId.value()),
+                "idempotencyKey", DynamoItemCodec.string(idempotencyKey),
+                "bookingId", DynamoItemCodec.string("missing-booking")));
+
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("checkout idempotency record references missing booking missing-booking");
+    }
+
+    @Test
+    void checkoutIdempotencyLookupRejectsReferencedBookingOutsideMappingScope() {
+        initialize();
+        EventId eventId = new EventId("event-1");
+        HoldId holdId = new HoldId("hold-1");
+        String idempotencyKey = "checkout-1";
+        Hold hold = Hold.active(holdId, new UserId("user-1"), eventId,
+                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
+                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Booking wrongKeyBooking = Booking.pending(new BookingId("booking-1"),
+                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                "different-checkout-key", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+        put(wrongKeyBooking);
+        putRaw(Map.of(
+                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey)),
+                "entityType", DynamoItemCodec.string("CHECKOUT_IDEMPOTENCY"),
+                "eventId", DynamoItemCodec.string(eventId.value()),
+                "holdId", DynamoItemCodec.string(holdId.value()),
+                "idempotencyKey", DynamoItemCodec.string(idempotencyKey),
+                "bookingId", DynamoItemCodec.string(wrongKeyBooking.id().value())));
+
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("checkout idempotency record resolved outside its event/hold/key scope");
     }
 
     private void givenPendingBooking() {
@@ -147,9 +213,13 @@ class DynamoBookingRepositoryIT {
     }
 
     private void put(Booking value) {
+        putRaw(DynamoItemCodec.bookingToItem(value));
+    }
+
+    private void putRaw(Map<String, AttributeValue> item) {
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
-                .item(DynamoItemCodec.bookingToItem(value))
+                .item(item)
                 .build());
     }
 

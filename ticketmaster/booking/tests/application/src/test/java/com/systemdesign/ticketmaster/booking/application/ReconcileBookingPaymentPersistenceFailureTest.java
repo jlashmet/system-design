@@ -70,7 +70,7 @@ class ReconcileBookingPaymentPersistenceFailureTest {
         handler = new ReconcileBookingHandler(
                 ignored -> {},
                 bookingRepository,
-                new UnusedHoldRepository(),
+                new MatchingHoldRepository(checkout),
                 new UnusedCheckoutGateway(),
                 paymentGateway,
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -149,7 +149,13 @@ class ReconcileBookingPaymentPersistenceFailureTest {
         }
     }
 
-    private static final class UnusedHoldRepository implements HoldRepository {
+    private static final class MatchingHoldRepository implements HoldRepository {
+        private final Hold hold;
+
+        private MatchingHoldRepository(Hold hold) {
+            this.hold = hold;
+        }
+
         @Override
         public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) {
             throw new AssertionError("not expected");
@@ -162,7 +168,7 @@ class ReconcileBookingPaymentPersistenceFailureTest {
 
         @Override
         public Optional<Hold> findById(HoldId holdId) {
-            throw new AssertionError("hold access must wait until intent persistence succeeds");
+            return hold.id().equals(holdId) ? Optional.of(hold) : Optional.empty();
         }
 
         @Override

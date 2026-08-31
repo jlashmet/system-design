@@ -69,6 +69,6 @@ class EventsApiControllerTest {
     private void thenExpectUncachedNotFound() {
         assertThat(response.getStatusCode().value()).isEqualTo(404);
         assertThat(response.getBody()).isNull();
-        assertThat(response.getHeaders().containsKey(HttpHeaders.CACHE_CONTROL)).isFalse();
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isNull();
     }
 }

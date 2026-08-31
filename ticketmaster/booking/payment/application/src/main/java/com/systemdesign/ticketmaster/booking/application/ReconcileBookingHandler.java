@@ -172,7 +172,8 @@ public final class ReconcileBookingHandler {
     }
 
     private Hold loadHold(Booking booking) {
-        return holdRepository.findById(booking.holdId())
+        Hold hold = holdRepository.findById(booking.holdId())
                 .orElseThrow(() -> new IllegalStateException("hold not found for booking: " + booking.id().value()));
+        return ReconciliationScopeGuard.requireMatchingHold(booking, hold);
     }
 }

@@ -20,6 +20,8 @@ import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
 public final class DynamoWaitingRoomRepository implements WaitingRoomRepository {
     private static final String PK = "pk";
+    private static final String WAITING_ROOM_ENTRY = "WAITING_ROOM_ENTRY";
+    private static final String EVENT_ADMISSION = "EVENT_ADMISSION";
     private final DynamoDbClient dynamoDb;
     private final String tableName;
 
@@ -36,7 +38,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                     .tableName(tableName)
                     .item(Map.of(
                             PK, string(entryPk(entry.eventId(), entry.userId())),
-                            "entityType", string("WAITING_ROOM_ENTRY"),
+                            "entityType", string(WAITING_ROOM_ENTRY),
                             "eventId", string(entry.eventId().value()),
                             "userId", string(entry.userId().value()),
                             "joinedAt", number(entry.joinedAt().toEpochMilli())))
@@ -56,10 +58,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
         Objects.requireNonNull(userId, "userId");
         Map<String, AttributeValue> item = get(entryPk(eventId, userId));
         if (item.isEmpty()) return Optional.empty();
-        return Optional.of(new WaitingRoomEntry(
-                new EventId(item.get("eventId").s()),
-                new UserId(item.get("userId").s()),
-                Instant.ofEpochMilli(Long.parseLong(item.get("joinedAt").n()))));
+        return Optional.of(entryFromItem(item, eventId, userId));
     }
 
     @Override
@@ -67,15 +66,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
         Objects.requireNonNull(eventId, "eventId");
         Map<String, AttributeValue> item = get(admissionPk(eventId));
         if (item.isEmpty()) return Optional.empty();
-        AttributeValue storedEventId = item.get("eventId");
-        AttributeValue admittedThrough = item.get("admittedThrough");
-        if (storedEventId == null || storedEventId.s() == null
-                || admittedThrough == null || admittedThrough.n() == null) {
-            throw new IllegalStateException("admission record is incomplete for event " + eventId.value());
-        }
-        return Optional.of(new EventAdmission(
-                new EventId(storedEventId.s()),
-                Instant.ofEpochMilli(Long.parseLong(admittedThrough.n()))));
+        return Optional.of(admissionFromItem(item, eventId));
     }
 
     @Override
@@ -86,7 +77,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                     .tableName(tableName)
                     .item(Map.of(
                             PK, string(admissionPk(initial.eventId())),
-                            "entityType", string("EVENT_ADMISSION"),
+                            "entityType", string(EVENT_ADMISSION),
                             "eventId", string(initial.eventId().value()),
                             "admittedThrough", number(initial.admittedThrough().toEpochMilli())))
                     .conditionExpression("attribute_not_exists(#pk)")
@@ -128,6 +119,43 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
         }
     }
 
+    private WaitingRoomEntry entryFromItem(
+            Map<String, AttributeValue> item, EventId expectedEventId, UserId expectedUserId) {
+        if (!entryPk(expectedEventId, expectedUserId).equals(stringValue(item.get(PK)))
+                || !WAITING_ROOM_ENTRY.equals(stringValue(item.get("entityType")))
+                || !expectedEventId.value().equals(stringValue(item.get("eventId")))
+                || !expectedUserId.value().equals(stringValue(item.get("userId")))) {
+            throw new IllegalStateException(
+                    "waiting-room entry identity mismatch for "
+                            + expectedEventId.value() + "/" + expectedUserId.value());
+        }
+        AttributeValue joinedAt = item.get("joinedAt");
+        if (joinedAt == null || joinedAt.n() == null) {
+            throw new IllegalStateException(
+                    "waiting-room entry is incomplete for "
+                            + expectedEventId.value() + "/" + expectedUserId.value());
+        }
+        return new WaitingRoomEntry(
+                expectedEventId,
+                expectedUserId,
+                Instant.ofEpochMilli(Long.parseLong(joinedAt.n())));
+    }
+
+    private EventAdmission admissionFromItem(Map<String, AttributeValue> item, EventId expectedEventId) {
+        if (!admissionPk(expectedEventId).equals(stringValue(item.get(PK)))
+                || !EVENT_ADMISSION.equals(stringValue(item.get("entityType")))
+                || !expectedEventId.value().equals(stringValue(item.get("eventId")))) {
+            throw new IllegalStateException("admission record identity mismatch for event " + expectedEventId.value());
+        }
+        AttributeValue admittedThrough = item.get("admittedThrough");
+        if (admittedThrough == null || admittedThrough.n() == null) {
+            throw new IllegalStateException("admission record is incomplete for event " + expectedEventId.value());
+        }
+        return new EventAdmission(
+                expectedEventId,
+                Instant.ofEpochMilli(Long.parseLong(admittedThrough.n())));
+    }
+
     private Map<String, AttributeValue> get(String pk) {
         Map<String, AttributeValue> item = DynamoBookingCall.execute(
                         "waiting-room state read",
@@ -146,6 +174,10 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
 
     static String admissionPk(EventId eventId) {
         return "ADMISSION#EVENT#" + eventId.value();
+    }
+
+    private static String stringValue(AttributeValue value) {
+        return value == null ? null : value.s();
     }
 
     private static AttributeValue string(String value) {

@@ -110,6 +110,24 @@ class DynamoBookingRepositoryIT {
     }
 
     @Test
+    void reconciliationQueryRejectsBookingWhoseStoredIdDisagreesWithPrimaryKey() {
+        initialize();
+        Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
+                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
+                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Booking booking = Booking.pending(new BookingId("booking-1"),
+                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+        Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
+        corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
+        putRaw(corruptBooking);
+
+        assertThatThrownBy(() -> repository.findDueForReconciliation(2, FIRST_DUE, 10))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("booking record identity mismatch for different-booking-id");
+    }
+
+    @Test
     void checkoutIdempotencyLookupFailsClosedWhenMappingIsMissingBookingId() {
         initialize();
         EventId eventId = new EventId("event-1");

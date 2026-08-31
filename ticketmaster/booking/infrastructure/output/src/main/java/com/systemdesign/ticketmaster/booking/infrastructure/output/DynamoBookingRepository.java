@@ -52,12 +52,23 @@ public final class DynamoBookingRepository implements BookingRepository {
                                 .build()))
                 .item();
         if (mapping == null || mapping.isEmpty()) return Optional.empty();
-        if (!eventId.value().equals(mapping.get("eventId").s())
-                || !holdId.value().equals(mapping.get("holdId").s())
-                || !idempotencyKey.equals(mapping.get("idempotencyKey").s())) {
-            throw new IllegalStateException("checkout idempotency mapping does not match lookup scope");
+
+        requireMappingValue(mapping, "eventId", eventId.value());
+        requireMappingValue(mapping, "holdId", holdId.value());
+        requireMappingValue(mapping, "idempotencyKey", idempotencyKey);
+        AttributeValue bookingIdValue = mapping.get("bookingId");
+        if (bookingIdValue == null || bookingIdValue.s() == null || bookingIdValue.s().isBlank()) {
+            throw new IllegalStateException("checkout idempotency record is missing bookingId");
         }
-        return findById(new BookingId(mapping.get("bookingId").s()));
+
+        Booking booking = findById(new BookingId(bookingIdValue.s()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "checkout idempotency record references missing booking " + bookingIdValue.s()));
+        if (!booking.eventId().equals(eventId) || !booking.holdId().equals(holdId)
+                || !booking.checkoutIdempotencyKey().equals(idempotencyKey)) {
+            throw new IllegalStateException("checkout idempotency record resolved outside its event/hold/key scope");
+        }
+        return Optional.of(booking);
     }
 
     @Override
@@ -147,5 +158,12 @@ public final class DynamoBookingRepository implements BookingRepository {
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(bookingFromItem(item));
+    }
+
+    private static void requireMappingValue(Map<String, AttributeValue> mapping, String name, String expected) {
+        AttributeValue value = mapping.get(name);
+        if (value == null || value.s() == null || !expected.equals(value.s())) {
+            throw new IllegalStateException("checkout idempotency record has inconsistent " + name);
+        }
     }
 }

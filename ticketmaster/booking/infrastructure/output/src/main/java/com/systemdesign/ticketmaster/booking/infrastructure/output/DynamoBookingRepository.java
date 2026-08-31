@@ -61,12 +61,15 @@ public final class DynamoBookingRepository implements BookingRepository {
             throw new IllegalStateException("checkout idempotency record is missing bookingId");
         }
 
-        Booking booking = findById(new BookingId(bookingIdValue.s()))
+        BookingId mappedBookingId = new BookingId(bookingIdValue.s());
+        Booking booking = findById(mappedBookingId)
                 .orElseThrow(() -> new IllegalStateException(
                         "checkout idempotency record references missing booking " + bookingIdValue.s()));
-        if (!booking.eventId().equals(eventId) || !booking.holdId().equals(holdId)
+        if (!booking.id().equals(mappedBookingId)
+                || !booking.eventId().equals(eventId)
+                || !booking.holdId().equals(holdId)
                 || !booking.checkoutIdempotencyKey().equals(idempotencyKey)) {
-            throw new IllegalStateException("checkout idempotency record resolved outside its event/hold/key scope");
+            throw new IllegalStateException("checkout idempotency record resolved outside its booking/event/hold/key scope");
         }
         return Optional.of(booking);
     }

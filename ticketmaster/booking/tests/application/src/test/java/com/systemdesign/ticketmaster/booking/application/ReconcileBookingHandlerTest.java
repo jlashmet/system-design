@@ -112,6 +112,23 @@ class ReconcileBookingHandlerTest {
         assertThat(scenario.checkoutGateway.failedBooking).isNull();
     }
 
+    @Test
+    void rejectsHoldOutsideCheckoutStateBeforePaymentAccessOrReschedule() {
+        Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
+                PaymentIntentStatus.CANCELED);
+        scenario.holdRepository.hold = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID,
+                Set.of(new SeatId("A10")), PRICE, CREATED_AT, CREATED_AT.plusSeconds(300));
+
+        assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("booking hold is not in checkout for booking-123");
+        assertThat(scenario.paymentGateway.statusCalls).isZero();
+        assertThat(scenario.paymentGateway.cancelCalls).isZero();
+        assertThat(scenario.bookingRepository.rescheduled).isNull();
+        assertThat(scenario.checkoutGateway.confirmedBooking).isNull();
+        assertThat(scenario.checkoutGateway.failedBooking).isNull();
+    }
+
     private static Scenario scenario(EventWriteAuthority authority, Instant now,
                                      PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus) {
         Hold active = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,

@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
@@ -132,15 +133,41 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
     }
 
     private Update terminalHoldUpdate(ReservationCheckout reservation, String status) {
+        AttributeValue seatIds = AttributeValue.builder()
+                .ss(reservation.seatIds().stream().map(SeatId::value).sorted().toList())
+                .build();
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.holdPk(reservation.id()))))
                 .updateExpression("SET #status = :terminal")
-                .conditionExpression("#status = :checkout")
-                .expressionAttributeNames(Map.of("#status", "status"))
-                .expressionAttributeValues(Map.of(
-                        ":terminal", string(status),
-                        ":checkout", string("CHECKOUT_IN_PROGRESS")))
+                .conditionExpression("#entityType = :holdType AND #holdId = :holdId AND #eventId = :eventId "
+                        + "AND #userId = :userId AND #seatIds = :seatIds "
+                        + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
+                        + "AND #expiresAt = :expiresAt AND #checkoutExpiresAt = :checkoutExpiresAt "
+                        + "AND #status = :checkout")
+                .expressionAttributeNames(Map.of(
+                        "#entityType", "entityType",
+                        "#holdId", "holdId",
+                        "#eventId", "eventId",
+                        "#userId", "userId",
+                        "#seatIds", "seatIds",
+                        "#totalPriceAmount", "totalPriceAmount",
+                        "#totalPriceCurrency", "totalPriceCurrency",
+                        "#expiresAt", "expiresAt",
+                        "#checkoutExpiresAt", "checkoutExpiresAt",
+                        "#status", "status"))
+                .expressionAttributeValues(Map.ofEntries(
+                        Map.entry(":holdType", string("HOLD")),
+                        Map.entry(":holdId", string(reservation.id().value())),
+                        Map.entry(":eventId", string(reservation.eventId().value())),
+                        Map.entry(":userId", string(reservation.userId().value())),
+                        Map.entry(":seatIds", seatIds),
+                        Map.entry(":totalPriceAmount", string(reservation.totalPrice().amount().toPlainString())),
+                        Map.entry(":totalPriceCurrency", string(reservation.totalPrice().currency().getCurrencyCode())),
+                        Map.entry(":expiresAt", number(reservation.expiresAt().toEpochMilli())),
+                        Map.entry(":checkoutExpiresAt", number(reservation.checkoutExpiresAt().toEpochMilli())),
+                        Map.entry(":checkout", string("CHECKOUT_IN_PROGRESS")),
+                        Map.entry(":terminal", string(status))))
                 .build();
     }
 

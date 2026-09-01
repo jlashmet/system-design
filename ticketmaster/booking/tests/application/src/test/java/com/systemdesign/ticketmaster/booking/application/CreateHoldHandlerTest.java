@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.systemdesign.ticketmaster.booking.domain.AdmissionGrantService;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
@@ -223,7 +224,7 @@ class CreateHoldHandlerTest {
         return new CreateHoldHandler(
                 authority,
                 holdRepository,
-                waitingRoomRepository,
+                new AdmissionAccessService(waitingRoomRepository, AdmissionGrantService.disabled()),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofMinutes(5));
     }

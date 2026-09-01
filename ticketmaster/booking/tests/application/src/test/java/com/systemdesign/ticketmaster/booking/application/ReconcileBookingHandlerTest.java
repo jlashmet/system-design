@@ -17,6 +17,7 @@ import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
@@ -50,7 +51,7 @@ class ReconcileBookingHandlerTest {
         assertThat(result.status().name()).isEqualTo("FAILED");
         assertThat(scenario.paymentGateway.cancelCalls).isEqualTo(1);
         assertThat(scenario.checkoutGateway.failedBooking).isEqualTo(result);
-        assertThat(scenario.checkoutGateway.failedHold.status().name()).isEqualTo("FAILED");
+        assertThat(scenario.checkoutGateway.failedHold.status().name()).isEqualTo("CHECKOUT_IN_PROGRESS");
         assertThat(scenario.checkoutGateway.confirmedBooking).isNull();
     }
 
@@ -62,7 +63,7 @@ class ReconcileBookingHandlerTest {
         assertThat(result.status().name()).isEqualTo("CONFIRMED");
         assertThat(scenario.paymentGateway.cancelCalls).isEqualTo(1);
         assertThat(scenario.checkoutGateway.confirmedBooking).isEqualTo(result);
-        assertThat(scenario.checkoutGateway.confirmedHold.status().name()).isEqualTo("CONVERTED");
+        assertThat(scenario.checkoutGateway.confirmedHold.status().name()).isEqualTo("CHECKOUT_IN_PROGRESS");
         assertThat(scenario.checkoutGateway.failedBooking).isNull();
     }
 
@@ -157,15 +158,16 @@ class ReconcileBookingHandlerTest {
         Hold active = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,
                 CREATED_AT, CREATED_AT.plusSeconds(300));
         Hold checkout = active.startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
-        Booking booking = Booking.pending(BOOKING_ID, checkout, "checkout-idempotency", CHECKOUT_STARTED_AT,
-                CHECKOUT_STARTED_AT.plusSeconds(30), 0);
+        Booking booking = Booking.pending(BOOKING_ID, ReservationTestFixtures.from(checkout),
+                "checkout-idempotency", CHECKOUT_STARTED_AT, CHECKOUT_STARTED_AT.plusSeconds(30), 0);
         if (attachPaymentIntent) booking = booking.attachPaymentIntent("pi-123");
         FakeBookingRepository bookings = new FakeBookingRepository(booking);
         FakeHoldRepository holds = new FakeHoldRepository(checkout);
         FakeCheckoutGateway checkoutGateway = new FakeCheckoutGateway();
         FakePaymentGateway paymentGateway = new FakePaymentGateway(paymentStatus, cancelStatus);
-        ReconcileBookingHandler handler = new ReconcileBookingHandler(authority, bookings, holds, checkoutGateway,
-                paymentGateway, Clock.fixed(now, ZoneOffset.UTC), Duration.ofSeconds(30));
+        ReconcileBookingHandler handler = new ReconcileBookingHandler(authority, bookings,
+                ReservationTestFixtures.service(holds), checkoutGateway, paymentGateway,
+                Clock.fixed(now, ZoneOffset.UTC), Duration.ofSeconds(30));
         return new Scenario(handler, bookings, holds, checkoutGateway, paymentGateway);
     }
 
@@ -204,16 +206,16 @@ class ReconcileBookingHandlerTest {
     }
 
     private static final class FakeCheckoutGateway implements CheckoutGateway {
-        private Hold confirmedHold;
+        private ReservationCheckout confirmedHold;
         private Booking confirmedBooking;
-        private Hold failedHold;
+        private ReservationCheckout failedHold;
         private Booking failedBooking;
-        @Override public void startCheckout(Hold checkoutHold, Booking pendingBooking) { throw new UnsupportedOperationException(); }
-        @Override public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) {
-            this.confirmedHold = convertedHold; this.confirmedBooking = confirmedBooking;
+        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new UnsupportedOperationException(); }
+        @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) {
+            this.confirmedHold = reservation; this.confirmedBooking = confirmedBooking;
         }
-        @Override public void failBooking(Hold failedHold, Booking failedBooking) {
-            this.failedHold = failedHold; this.failedBooking = failedBooking;
+        @Override public void failBooking(ReservationCheckout reservation, Booking failedBooking) {
+            this.failedHold = reservation; this.failedBooking = failedBooking;
         }
     }
 

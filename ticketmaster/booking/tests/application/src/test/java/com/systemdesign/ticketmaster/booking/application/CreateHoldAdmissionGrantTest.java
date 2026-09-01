@@ -69,8 +69,7 @@ class CreateHoldAdmissionGrantTest {
         handler = new CreateHoldHandler(
                 ignored -> {},
                 new FixedHoldRepository(),
-                waitingRoom,
-                grants,
+                new AdmissionAccessService(waitingRoom, grants),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofMinutes(5));
         result = null;

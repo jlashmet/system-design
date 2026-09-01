@@ -19,6 +19,7 @@ import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
 import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
@@ -135,7 +136,7 @@ class StartCheckoutHandlerTest {
         Hold checkoutHold = activeHold(owner).startCheckout(NOW.minusSeconds(10), NOW.plusSeconds(300));
         Booking booking = Booking.pending(
                         new BookingId("booking-existing"),
-                        checkoutHold,
+                        ReservationTestFixtures.from(checkoutHold),
                         "idem-existing",
                         NOW.minusSeconds(10),
                         NOW.plusSeconds(20),
@@ -221,7 +222,7 @@ class StartCheckoutHandlerTest {
     private StartCheckoutHandler handler(EventWriteAuthority authority) {
         return new StartCheckoutHandler(
                 authority,
-                holdRepository,
+                ReservationTestFixtures.service(holdRepository),
                 bookingRepository,
                 checkoutGateway,
                 paymentGateway,
@@ -296,12 +297,12 @@ class StartCheckoutHandlerTest {
         private int startCalls;
 
         @Override
-        public void startCheckout(Hold checkoutHold, Booking pendingBooking) {
+        public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) {
             startCalls++;
         }
 
-        @Override public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) { throw new AssertionError("not expected"); }
-        @Override public void failBooking(Hold failedHold, Booking failedBooking) { throw new AssertionError("not expected"); }
+        @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) { throw new AssertionError("not expected"); }
+        @Override public void failBooking(ReservationCheckout reservation, Booking failedBooking) { throw new AssertionError("not expected"); }
     }
 
     private static final class TrackingPaymentGateway implements PaymentGateway {

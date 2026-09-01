@@ -16,6 +16,7 @@ import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
@@ -94,7 +95,7 @@ class ReconcileDueBookingsHandlerTest {
         ReconcileBookingHandler reconcile = new ReconcileBookingHandler(
                 ignored -> {},
                 repository,
-                new UnusedHoldRepository(),
+                ReservationTestFixtures.service(new UnusedHoldRepository()),
                 new UnusedCheckoutGateway(),
                 new UnusedPaymentGateway(),
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -170,9 +171,9 @@ class ReconcileDueBookingsHandlerTest {
     }
 
     private static final class UnusedCheckoutGateway implements CheckoutGateway {
-        @Override public void startCheckout(Hold checkoutHold, Booking pendingBooking) { throw new AssertionError("not expected"); }
-        @Override public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) { throw new AssertionError("not expected"); }
-        @Override public void failBooking(Hold failedHold, Booking failedBooking) { throw new AssertionError("not expected"); }
+        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new AssertionError("not expected"); }
+        @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) { throw new AssertionError("not expected"); }
+        @Override public void failBooking(ReservationCheckout reservation, Booking failedBooking) { throw new AssertionError("not expected"); }
     }
 
     private static final class UnusedPaymentGateway implements PaymentGateway {

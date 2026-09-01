@@ -17,6 +17,7 @@ import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
@@ -68,7 +69,7 @@ class ReconcileBookingConcurrentFinalizationTest {
         Hold hold = checkoutHold();
         Booking booking = Booking.pending(
                         BOOKING_ID,
-                        hold,
+                        ReservationTestFixtures.from(hold),
                         "checkout-key",
                         NOW.minusSeconds(30),
                         NOW.plusSeconds(30),
@@ -78,7 +79,7 @@ class ReconcileBookingConcurrentFinalizationTest {
         handler = new ReconcileBookingHandler(
                 ignored -> {},
                 repository,
-                new FixedHoldRepository(hold),
+                ReservationTestFixtures.service(new FixedHoldRepository(hold)),
                 new RacingCheckoutGateway(repository, winnerStatus),
                 new FixedPaymentGateway(providerStatus),
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -164,7 +165,7 @@ class ReconcileBookingConcurrentFinalizationTest {
         }
 
         @Override
-        public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) {
+        public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) {
             repository.booking = winnerStatus == BookingStatus.CONFIRMED
                     ? confirmedBooking
                     : repository.booking.fail();
@@ -172,14 +173,14 @@ class ReconcileBookingConcurrentFinalizationTest {
         }
 
         @Override
-        public void failBooking(Hold failedHold, Booking failedBooking) {
+        public void failBooking(ReservationCheckout reservation, Booking failedBooking) {
             repository.booking = winnerStatus == BookingStatus.FAILED
                     ? failedBooking
                     : repository.booking.confirm();
             throw new CheckoutConflictException(HOLD_ID, new RuntimeException("concurrent finalization"));
         }
 
-        @Override public void startCheckout(Hold checkoutHold, Booking pendingBooking) { throw new AssertionError("not expected"); }
+        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new AssertionError("not expected"); }
     }
 
     private static final class FixedPaymentGateway implements PaymentGateway {

@@ -83,7 +83,7 @@ public final class DynamoHoldRepository implements HoldRepository {
                 AttributeValue pkValue = item.get(PK);
                 SeatId seatId = pkValue == null ? null : seatByPk.get(pkValue.s());
                 if (seatId == null) throw new IllegalStateException("authoritative seat batch returned an unexpected item");
-                prices.put(seatId, priceFromSeatItem(seatId, item));
+                prices.put(seatId, priceFromSeatItem(eventId, seatId, item));
             }
 
             requestItems = response.unprocessedKeys();
@@ -234,7 +234,14 @@ public final class DynamoHoldRepository implements HoldRepository {
         }
     }
 
-    private Price priceFromSeatItem(SeatId seatId, Map<String, AttributeValue> item) {
+    private Price priceFromSeatItem(EventId eventId, SeatId seatId, Map<String, AttributeValue> item) {
+        if (!seatPk(eventId, seatId).equals(stringValue(item.get(PK)))
+                || !"SEAT".equals(stringValue(item.get("entityType")))
+                || !eventId.value().equals(stringValue(item.get("eventId")))
+                || !seatId.value().equals(stringValue(item.get("seatId")))) {
+            throw new IllegalStateException(
+                    "authoritative seat identity mismatch for " + eventId.value() + "/" + seatId.value());
+        }
         AttributeValue amount = item.get("priceAmount");
         AttributeValue currency = item.get("priceCurrency");
         if (amount == null || amount.s() == null || currency == null || currency.s() == null) {
@@ -248,15 +255,19 @@ public final class DynamoHoldRepository implements HoldRepository {
                 .tableName(tableName)
                 .key(Map.of(PK, string(seatPk(hold.eventId(), seatId))))
                 .updateExpression("SET #status = :held, #holdId = :holdId, #holdExpiresAt = :expires")
-                .conditionExpression("(#status = :available OR (#status = :held AND #holdExpiresAt <= :now)) "
+                .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
+                        + "AND (#status = :available OR (#status = :held AND #holdExpiresAt <= :now)) "
                         + "AND #priceAmount = :priceAmount AND #priceCurrency = :priceCurrency")
                 .expressionAttributeNames(Map.of(
+                        "#entityType", "entityType", "#eventId", "eventId", "#seatId", "seatId",
                         "#status", "status", "#holdId", "holdId", "#holdExpiresAt", "holdExpiresAt",
                         "#priceAmount", "priceAmount", "#priceCurrency", "priceCurrency"))
                 .expressionAttributeValues(Map.of(
-                        ":available", string("AVAILABLE"), ":held", string("HELD"),
-                        ":holdId", string(hold.id().value()), ":expires", number(hold.expiresAt().toEpochMilli()),
-                        ":now", number(now.toEpochMilli()), ":priceAmount", string(quotedPrice.amount().toPlainString()),
+                        ":seatType", string("SEAT"), ":eventId", string(hold.eventId().value()),
+                        ":seatId", string(seatId.value()), ":available", string("AVAILABLE"),
+                        ":held", string("HELD"), ":holdId", string(hold.id().value()),
+                        ":expires", number(hold.expiresAt().toEpochMilli()), ":now", number(now.toEpochMilli()),
+                        ":priceAmount", string(quotedPrice.amount().toPlainString()),
                         ":priceCurrency", string(quotedPrice.currency().getCurrencyCode())))
                 .build();
     }
@@ -292,6 +303,7 @@ public final class DynamoHoldRepository implements HoldRepository {
                 Instant.ofEpochMilli(Long.parseLong(item.get("createdAt").n())));
     }
 
+    private static String stringValue(AttributeValue value) { return value == null ? null : value.s(); }
     private static String seatPk(EventId eventId, SeatId seatId) { return DynamoKeys.seatPk(eventId, seatId); }
     private static String holdPk(HoldId holdId) { return DynamoKeys.holdPk(holdId); }
     private static AttributeValue string(String value) { return AttributeValue.builder().s(value).build(); }

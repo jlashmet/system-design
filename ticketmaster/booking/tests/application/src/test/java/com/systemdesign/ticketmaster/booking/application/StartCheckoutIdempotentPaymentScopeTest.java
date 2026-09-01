@@ -41,15 +41,58 @@ class StartCheckoutIdempotentPaymentScopeTest {
     @Test
     void validatesAuthoritativeReservationBeforeCreatingMissingPaymentIntentOnIdempotentRetry() {
         ReservationCheckout bookingReservation = reservation(OWNER);
-        Booking pending = Booking.pending(
+        Booking pending = pendingBooking(bookingReservation);
+        ExistingBookingRepository bookings = new ExistingBookingRepository(pending);
+        TrackingPaymentGateway payments = new TrackingPaymentGateway();
+        StartCheckoutHandler handler = handler(
+                bookings,
+                payments,
+                reservation(DRIFTED_OWNER));
+
+        assertThatThrownBy(() -> handler.handle(
+                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
+                .isInstanceOf(HoldOwnershipException.class);
+        assertThat(payments.createCalls).isZero();
+        assertThat(bookings.saveIntentCalls).isZero();
+    }
+
+    @Test
+    void rejectsExpiredCheckoutBeforeCreatingMissingPaymentIntentOnIdempotentRetry() {
+        ReservationCheckout expiredReservation = new ReservationCheckout(
+                HOLD_ID,
+                OWNER,
+                EVENT_ID,
+                Set.of(new SeatId("A10")),
+                PRICE,
+                ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
+                NOW.minusSeconds(30),
+                NOW.minusSeconds(1));
+        ExistingBookingRepository bookings = new ExistingBookingRepository(pendingBooking(expiredReservation));
+        TrackingPaymentGateway payments = new TrackingPaymentGateway();
+        StartCheckoutHandler handler = handler(bookings, payments, expiredReservation);
+
+        assertThatThrownBy(() -> handler.handle(
+                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("checkout expired for hold hold-1");
+        assertThat(payments.createCalls).isZero();
+        assertThat(bookings.saveIntentCalls).isZero();
+    }
+
+    private static Booking pendingBooking(ReservationCheckout bookingReservation) {
+        return Booking.pending(
                 new BookingId("booking-existing"),
                 bookingReservation,
                 "idem-existing",
                 NOW.minusSeconds(10),
                 NOW.plusSeconds(20),
                 0);
-        ExistingBookingRepository bookings = new ExistingBookingRepository(pending);
-        TrackingPaymentGateway payments = new TrackingPaymentGateway();
+    }
+
+    private static StartCheckoutHandler handler(
+            ExistingBookingRepository bookings,
+            TrackingPaymentGateway payments,
+            ReservationCheckout authoritativeReservation) {
         ReservationCheckoutService reservations = new ReservationCheckoutService() {
             @Override
             public ReservationCheckout prepareCheckout(
@@ -59,7 +102,7 @@ class StartCheckoutIdempotentPaymentScopeTest {
 
             @Override
             public Optional<ReservationCheckout> findById(HoldId holdId) {
-                return Optional.of(reservation(DRIFTED_OWNER));
+                return Optional.of(authoritativeReservation);
             }
         };
         CheckoutGateway checkout = new CheckoutGateway() {
@@ -73,7 +116,7 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 throw new AssertionError("not expected");
             }
         };
-        StartCheckoutHandler handler = new StartCheckoutHandler(
+        return new StartCheckoutHandler(
                 ignored -> {},
                 reservations,
                 bookings,
@@ -83,12 +126,6 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 Duration.ofMinutes(10),
                 Duration.ofSeconds(30),
                 16);
-
-        assertThatThrownBy(() -> handler.handle(
-                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
-                .isInstanceOf(HoldOwnershipException.class);
-        assertThat(payments.createCalls).isZero();
-        assertThat(bookings.saveIntentCalls).isZero();
     }
 
     private static ReservationCheckout reservation(UserId owner) {

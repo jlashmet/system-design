@@ -58,17 +58,43 @@ class StartCheckoutIdempotentPaymentScopeTest {
     }
 
     @Test
+    void validatesAuthoritativeReservationBeforeReturningExistingPaymentIntentOnIdempotentRetry() {
+        ReservationCheckout bookingReservation = reservation(OWNER);
+        Booking pending = pendingBooking(bookingReservation).attachPaymentIntent("pi-existing");
+        ExistingBookingRepository bookings = new ExistingBookingRepository(pending);
+        TrackingPaymentGateway payments = new TrackingPaymentGateway();
+        StartCheckoutHandler handler = handler(
+                bookings,
+                payments,
+                reservation(DRIFTED_OWNER));
+
+        assertThatThrownBy(() -> handler.handle(
+                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
+                .isInstanceOf(HoldOwnershipException.class);
+        assertThat(payments.createCalls).isZero();
+        assertThat(bookings.saveIntentCalls).isZero();
+    }
+
+    @Test
     void rejectsExpiredCheckoutBeforeCreatingMissingPaymentIntentOnIdempotentRetry() {
-        ReservationCheckout expiredReservation = new ReservationCheckout(
-                HOLD_ID,
-                OWNER,
-                EVENT_ID,
-                Set.of(new SeatId("A10")),
-                PRICE,
-                ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
-                NOW.minusSeconds(30),
-                NOW.minusSeconds(1));
+        ReservationCheckout expiredReservation = expiredReservation();
         ExistingBookingRepository bookings = new ExistingBookingRepository(pendingBooking(expiredReservation));
+        TrackingPaymentGateway payments = new TrackingPaymentGateway();
+        StartCheckoutHandler handler = handler(bookings, payments, expiredReservation);
+
+        assertThatThrownBy(() -> handler.handle(
+                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
+                .isInstanceOf(CheckoutExpiredException.class)
+                .hasMessage("checkout expired for hold hold-1");
+        assertThat(payments.createCalls).isZero();
+        assertThat(bookings.saveIntentCalls).isZero();
+    }
+
+    @Test
+    void rejectsExpiredCheckoutBeforeReturningExistingPaymentIntentOnIdempotentRetry() {
+        ReservationCheckout expiredReservation = expiredReservation();
+        Booking pending = pendingBooking(expiredReservation).attachPaymentIntent("pi-existing");
+        ExistingBookingRepository bookings = new ExistingBookingRepository(pending);
         TrackingPaymentGateway payments = new TrackingPaymentGateway();
         StartCheckoutHandler handler = handler(bookings, payments, expiredReservation);
 
@@ -139,6 +165,18 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
                 NOW.plusSeconds(270),
                 NOW.plusSeconds(300));
+    }
+
+    private static ReservationCheckout expiredReservation() {
+        return new ReservationCheckout(
+                HOLD_ID,
+                OWNER,
+                EVENT_ID,
+                Set.of(new SeatId("A10")),
+                PRICE,
+                ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
+                NOW.minusSeconds(30),
+                NOW.minusSeconds(1));
     }
 
     private static final class ExistingBookingRepository implements BookingRepository {

@@ -10,10 +10,11 @@
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-infrastructure</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-api</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-domain</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-application</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-infrastructure</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-api</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-api</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-application</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-application</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-input</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-output</artifactId><version>${project.version}</version></dependency>

@@ -1,20 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
     <modelVersion>4.0.0</modelVersion>
-    <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
-    <artifactId>booking-infrastructure-output</artifactId>
+    <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
+    <artifactId>booking-reservation-infrastructure</artifactId>
     <dependencies>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-api</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-api</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-domain</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-api</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-domain</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-api</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-common</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-application</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>software.amazon.awssdk</groupId><artifactId>dynamodb</artifactId></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-infrastructure</artifactId><version>${project.version}</version><scope>test</scope></dependency>
-        <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>io.floci</groupId><artifactId>testcontainers-floci</artifactId><version>${floci.testcontainers.version}</version><scope>test</scope></dependency>
         <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-junit-jupiter</artifactId><scope>test</scope></dependency>
         <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>

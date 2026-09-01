@@ -7,7 +7,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SeatStatus;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
-import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
+import com.systemdesign.ticketmaster.booking.reservation.infrastructure.ReservationStorageUnavailableException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Currency;
@@ -60,9 +60,6 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                 .item(seatItem)
                 .build();
 
-        // Materialize a tiny event-level section directory so section discovery never scans seat rows.
-        // A future static venue-geometry projection can own these markers if rewriting them on seat
-        // changes becomes material at scale.
         Put sectionDirectoryPut = Put.builder()
                 .tableName(tableName)
                 .item(Map.of(
@@ -72,25 +69,22 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                         "sectionId", string(seat.sectionId().value())))
                 .build();
 
-        // Keep the derived seat row and its discovery marker consistent for each projected stream image.
         try {
-            DynamoBookingCall.execute("seat-map projection transaction", () -> dynamoDb.transactWriteItems(
+            DynamoReservationCall.execute("seat-map projection transaction", () -> dynamoDb.transactWriteItems(
                     TransactWriteItemsRequest.builder()
                             .transactItems(
                                     TransactWriteItem.builder().put(seatPut).build(),
                                     TransactWriteItem.builder().put(sectionDirectoryPut).build())
                             .build()));
         } catch (TransactionCanceledException cancellation) {
-            // This transaction has no conditional business rule. Any cancellation is therefore
-            // infrastructure pressure/failure rather than a customer-visible booking conflict.
-            throw new BookingStorageUnavailableException("seat-map projection transaction", cancellation);
+            throw new ReservationStorageUnavailableException("seat-map projection transaction", cancellation);
         }
     }
 
     @Override
     public List<SectionId> findSections(EventId eventId) {
         Objects.requireNonNull(eventId, "eventId");
-        return DynamoBookingCall.execute(
+        return DynamoReservationCall.execute(
                         "seat-map section directory read",
                         () -> dynamoDb.query(QueryRequest.builder()
                                 .tableName(tableName)
@@ -111,7 +105,7 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     public List<SeatMapSeat> findSection(EventId eventId, SectionId sectionId) {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(sectionId, "sectionId");
-        return DynamoBookingCall.execute(
+        return DynamoReservationCall.execute(
                         "seat-map section read",
                         () -> dynamoDb.query(QueryRequest.builder()
                                 .tableName(tableName)

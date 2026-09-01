@@ -12,7 +12,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.SeatUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
-import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
+import com.systemdesign.ticketmaster.booking.reservation.infrastructure.ReservationStorageUnavailableException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -74,7 +74,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         while (!requestItems.isEmpty()) {
             attempt++;
             Map<String, KeysAndAttributes> currentRequestItems = requestItems;
-            BatchGetItemResponse response = DynamoBookingCall.execute(
+            BatchGetItemResponse response = DynamoReservationCall.execute(
                     "authoritative seat price quote",
                     () -> dynamoDb.batchGetItem(BatchGetItemRequest.builder()
                             .requestItems(currentRequestItems)
@@ -89,7 +89,7 @@ public final class DynamoHoldRepository implements HoldRepository {
             requestItems = response.unprocessedKeys();
             if (requestItems == null || requestItems.isEmpty()) break;
             if (attempt >= MAX_QUOTE_BATCH_ATTEMPTS) {
-                throw new BookingStorageUnavailableException(
+                throw new ReservationStorageUnavailableException(
                         "authoritative seat price quote",
                         new IllegalStateException(
                                 "DynamoDB still returned unprocessed seat keys after " + attempt + " attempts"));
@@ -133,7 +133,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         writes.add(TransactWriteItem.builder().put(Put.builder()
                 .tableName(tableName)
                 .item(Map.of(
-                        PK, string(DynamoKeys.holdIdempotencyPk(hold.eventId(), hold.userId(), idempotencyKey)),
+                        PK, string(DynamoReservationKeys.holdIdempotencyPk(hold.eventId(), hold.userId(), idempotencyKey)),
                         "entityType", string("HOLD_IDEMPOTENCY"),
                         "eventId", string(hold.eventId().value()),
                         "userId", string(hold.userId().value()),
@@ -146,20 +146,20 @@ public final class DynamoHoldRepository implements HoldRepository {
         try {
             dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
         } catch (TransactionCanceledException e) {
-            if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
-                throw new BookingStorageUnavailableException("seat claim transaction", e);
+            if (DynamoReservationTransactionCancellation.hasNonConditionalFailure(e)) {
+                throw new ReservationStorageUnavailableException("seat claim transaction", e);
             }
             throw new SeatClaimConflictException(hold.eventId(), hold.seatIds());
         } catch (software.amazon.awssdk.services.dynamodb.model.DynamoDbException
                  | software.amazon.awssdk.core.exception.SdkClientException unavailable) {
-            throw new BookingStorageUnavailableException("seat claim transaction", unavailable);
+            throw new ReservationStorageUnavailableException("seat claim transaction", unavailable);
         }
     }
 
     @Override
     public Optional<Hold> findById(HoldId holdId) {
         Objects.requireNonNull(holdId, "holdId");
-        Map<String, AttributeValue> item = DynamoBookingCall.execute(
+        Map<String, AttributeValue> item = DynamoReservationCall.execute(
                         "hold lookup",
                         () -> dynamoDb.getItem(GetItemRequest.builder()
                                 .tableName(tableName)
@@ -186,11 +186,11 @@ public final class DynamoHoldRepository implements HoldRepository {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
-        Map<String, AttributeValue> mapping = DynamoBookingCall.execute(
+        Map<String, AttributeValue> mapping = DynamoReservationCall.execute(
                         "hold idempotency lookup",
                         () -> dynamoDb.getItem(GetItemRequest.builder()
                                 .tableName(tableName)
-                                .key(Map.of(PK, string(DynamoKeys.holdIdempotencyPk(eventId, userId, idempotencyKey))))
+                                .key(Map.of(PK, string(DynamoReservationKeys.holdIdempotencyPk(eventId, userId, idempotencyKey))))
                                 .consistentRead(true)
                                 .build()))
                 .item();
@@ -230,7 +230,7 @@ public final class DynamoHoldRepository implements HoldRepository {
             Thread.sleep(delayMillis);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            throw new BookingStorageUnavailableException("authoritative seat price quote", interrupted);
+            throw new ReservationStorageUnavailableException("authoritative seat price quote", interrupted);
         }
     }
 
@@ -304,8 +304,8 @@ public final class DynamoHoldRepository implements HoldRepository {
     }
 
     private static String stringValue(AttributeValue value) { return value == null ? null : value.s(); }
-    private static String seatPk(EventId eventId, SeatId seatId) { return DynamoKeys.seatPk(eventId, seatId); }
-    private static String holdPk(HoldId holdId) { return DynamoKeys.holdPk(holdId); }
+    private static String seatPk(EventId eventId, SeatId seatId) { return DynamoReservationKeys.seatPk(eventId, seatId); }
+    private static String holdPk(HoldId holdId) { return DynamoReservationKeys.holdPk(holdId); }
     private static AttributeValue string(String value) { return AttributeValue.builder().s(value).build(); }
     private static AttributeValue number(long value) { return AttributeValue.builder().n(Long.toString(value)).build(); }
 }

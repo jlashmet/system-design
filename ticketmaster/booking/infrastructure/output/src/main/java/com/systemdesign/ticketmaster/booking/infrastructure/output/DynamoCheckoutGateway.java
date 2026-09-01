@@ -89,20 +89,41 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
     }
 
     private Update startHoldUpdate(ReservationCheckout reservation, Booking booking) {
+        AttributeValue seatIds = AttributeValue.builder()
+                .ss(reservation.seatIds().stream().map(SeatId::value).sorted().toList())
+                .build();
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.holdPk(reservation.id()))))
                 .updateExpression("SET #status = :checkout, #checkoutExpiresAt = :deadline")
-                .conditionExpression("#status = :active AND #expiresAt > :now")
+                .conditionExpression("#entityType = :holdType AND #holdId = :holdId AND #eventId = :eventId "
+                        + "AND #userId = :userId AND #seatIds = :seatIds "
+                        + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
+                        + "AND #expiresAt = :expiresAt AND #expiresAt > :now AND #status = :active")
                 .expressionAttributeNames(Map.of(
+                        "#entityType", "entityType",
+                        "#holdId", "holdId",
+                        "#eventId", "eventId",
+                        "#userId", "userId",
+                        "#seatIds", "seatIds",
+                        "#totalPriceAmount", "totalPriceAmount",
+                        "#totalPriceCurrency", "totalPriceCurrency",
+                        "#expiresAt", "expiresAt",
                         "#status", "status",
-                        "#checkoutExpiresAt", "checkoutExpiresAt",
-                        "#expiresAt", "expiresAt"))
-                .expressionAttributeValues(Map.of(
-                        ":checkout", string("CHECKOUT_IN_PROGRESS"),
-                        ":active", string("ACTIVE"),
-                        ":deadline", number(reservation.checkoutExpiresAt().toEpochMilli()),
-                        ":now", number(booking.createdAt().toEpochMilli())))
+                        "#checkoutExpiresAt", "checkoutExpiresAt"))
+                .expressionAttributeValues(Map.ofEntries(
+                        Map.entry(":holdType", string("HOLD")),
+                        Map.entry(":holdId", string(reservation.id().value())),
+                        Map.entry(":eventId", string(reservation.eventId().value())),
+                        Map.entry(":userId", string(reservation.userId().value())),
+                        Map.entry(":seatIds", seatIds),
+                        Map.entry(":totalPriceAmount", string(reservation.totalPrice().amount().toPlainString())),
+                        Map.entry(":totalPriceCurrency", string(reservation.totalPrice().currency().getCurrencyCode())),
+                        Map.entry(":expiresAt", number(reservation.expiresAt().toEpochMilli())),
+                        Map.entry(":active", string("ACTIVE")),
+                        Map.entry(":checkout", string("CHECKOUT_IN_PROGRESS")),
+                        Map.entry(":deadline", number(reservation.checkoutExpiresAt().toEpochMilli())),
+                        Map.entry(":now", number(booking.createdAt().toEpochMilli()))))
                 .build();
     }
 

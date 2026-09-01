@@ -7,7 +7,6 @@ import com.systemdesign.ticketmaster.booking.api.model.HoldResponse;
 import com.systemdesign.ticketmaster.booking.api.model.SectionResponse;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionsHandler;
-import com.systemdesign.ticketmaster.booking.domain.EventAdmission;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
@@ -20,8 +19,6 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
-import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntry;
-import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -75,7 +72,7 @@ class BookingApiControllerTest {
         CreateHoldHandler createHoldHandler = new CreateHoldHandler(
                 ignored -> {},
                 holdRepository,
-                new DisabledWaitingRoomRepository(),
+                (eventId, userId, admissionToken, now) -> {},
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofMinutes(5));
         controller = new BookingApiController(createHoldHandler, null, null, null);
@@ -146,12 +143,5 @@ class BookingApiControllerTest {
 
         @Override public Optional<Hold> findById(HoldId holdId) { return Optional.empty(); }
         @Override public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) { return Optional.empty(); }
-    }
-
-    private static final class DisabledWaitingRoomRepository implements WaitingRoomRepository {
-        @Override public WaitingRoomEntry join(WaitingRoomEntry entry) { return entry; }
-        @Override public Optional<WaitingRoomEntry> findEntry(EventId eventId, UserId userId) { return Optional.empty(); }
-        @Override public Optional<EventAdmission> findAdmission(EventId eventId) { return Optional.empty(); }
-        @Override public EventAdmission advanceAdmission(EventAdmission admission) { return admission; }
     }
 }

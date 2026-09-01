@@ -4,7 +4,6 @@
     <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-tests-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
     <artifactId>booking-application-tests</artifactId>
     <dependencies>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-shared-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-api</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-api</artifactId><version>${project.version}</version></dependency>

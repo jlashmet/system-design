@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class BookingModuleBoundaryTest {
@@ -26,15 +28,51 @@ class BookingModuleBoundaryTest {
         assertNoForeignDomains("../checkout/application/pom.xml",
                 "booking-admission-domain", "booking-reservation-domain", "booking-payment-domain");
 
+        assertContains("../reservation/api/pom.xml", "booking-admission-api");
         assertContains("../reservation/application/pom.xml", "booking-admission-api");
+        assertContains("../checkout/domain/pom.xml", "booking-admission-api");
         assertContains("../checkout/domain/pom.xml", "booking-reservation-api");
+        assertContains("../checkout/application/pom.xml", "booking-admission-api");
         assertContains("../checkout/application/pom.xml", "booking-reservation-api");
         assertContains("../checkout/application/pom.xml", "booking-payment-api");
+        assertContains("../payment/api/pom.xml", "booking-admission-api");
+        assertContains("../payment/api/pom.xml", "booking-reservation-api");
+        assertContains("../payment/api/pom.xml", "booking-checkout-api");
 
         String paymentAggregator = pom("../payment/pom.xml");
         assertTrue(paymentAggregator.contains("<module>api</module>"));
         assertFalse(paymentAggregator.contains("<module>domain</module>"));
         assertFalse(paymentAggregator.contains("<module>application</module>"));
+    }
+
+    @Test
+    void bookingHasNoSharedKernelArtifact() throws Exception {
+        Path bookingDirectory = moduleDirectory().getParent();
+        assertFalse(Files.exists(bookingDirectory.resolve("shared")),
+                "Booking must not reintroduce an ownerless shared module");
+        assertFalse(Files.readString(bookingDirectory.resolve("pom.xml")).contains("<module>shared</module>"),
+                "Booking aggregator must not include a shared module");
+
+        for (String relativePom : List.of(
+                "../admission/api/pom.xml",
+                "../admission/domain/pom.xml",
+                "../admission/application/pom.xml",
+                "../reservation/api/pom.xml",
+                "../reservation/domain/pom.xml",
+                "../reservation/application/pom.xml",
+                "../checkout/api/pom.xml",
+                "../checkout/domain/pom.xml",
+                "../checkout/application/pom.xml",
+                "../payment/api/pom.xml",
+                "../infrastructure/input/pom.xml",
+                "../infrastructure/output/pom.xml",
+                "../tests/domain/pom.xml",
+                "../tests/application/pom.xml",
+                "../bootstrap/pom.xml",
+                "pom.xml")) {
+            assertFalse(pom(relativePom).contains("booking-shared-domain"),
+                    relativePom + " must not depend on booking-shared-domain");
+        }
     }
 
     private static void assertNoForeignDomains(String relativePom, String... artifactIds) throws Exception {
@@ -51,7 +89,7 @@ class BookingModuleBoundaryTest {
     }
 
     private static String pom(String relativePom) throws Exception {
-        return java.nio.file.Files.readString(moduleDirectory().resolve(relativePom).normalize());
+        return Files.readString(moduleDirectory().resolve(relativePom).normalize());
     }
 
     private static Path moduleDirectory() throws URISyntaxException {

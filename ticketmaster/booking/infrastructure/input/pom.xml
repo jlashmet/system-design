@@ -5,7 +5,6 @@
     <artifactId>booking-infrastructure-input</artifactId>
     <dependencies>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-api</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-shared-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-api</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-api</artifactId><version>${project.version}</version></dependency>

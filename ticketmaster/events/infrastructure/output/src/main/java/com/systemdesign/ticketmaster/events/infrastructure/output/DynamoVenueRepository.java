@@ -38,8 +38,14 @@ public final class DynamoVenueRepository implements VenueRepository {
                                 .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
+        String expectedPk = venuePk(venueId);
+        String storedPk = item.get(PK) == null ? null : item.get(PK).s();
+        String storedVenueId = item.get("venueId") == null ? null : item.get("venueId").s();
+        if (!expectedPk.equals(storedPk) || !venueId.value().equals(storedVenueId)) {
+            throw new IllegalStateException("venue metadata identity mismatch for " + venueId.value());
+        }
         return Optional.of(new Venue(
-                new VenueId(item.get("venueId").s()),
+                venueId,
                 item.get("name").s(),
                 item.get("city").s()));
     }

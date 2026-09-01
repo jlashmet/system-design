@@ -41,8 +41,14 @@ public final class DynamoEventRepository implements EventRepository {
                                 .build()))
                 .item();
         if (item == null || item.isEmpty()) return Optional.empty();
+        String expectedPk = eventPk(eventId);
+        String storedPk = item.get(PK) == null ? null : item.get(PK).s();
+        String storedEventId = item.get("eventId") == null ? null : item.get("eventId").s();
+        if (!expectedPk.equals(storedPk) || !eventId.value().equals(storedEventId)) {
+            throw new IllegalStateException("event metadata identity mismatch for " + eventId.value());
+        }
         return Optional.of(new Event(
-                new EventId(item.get("eventId").s()),
+                eventId,
                 item.get("name").s(),
                 new VenueId(item.get("venueId").s()),
                 Instant.ofEpochMilli(Long.parseLong(item.get("startsAt").n())),

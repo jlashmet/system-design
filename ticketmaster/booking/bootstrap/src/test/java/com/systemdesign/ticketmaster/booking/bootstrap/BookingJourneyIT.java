@@ -2,18 +2,22 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.systemdesign.ticketmaster.booking.application.AdmissionAccessService;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldCommand;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
+import com.systemdesign.ticketmaster.booking.application.ReservationCheckoutServiceImpl;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutCommand;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutResult;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionGrantService;
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.infrastructure.output.DemoPaymentGateway;
@@ -100,14 +104,17 @@ class BookingJourneyIT {
         bookingRepository = new DynamoBookingRepository(dynamoDb, tableName);
         DynamoCheckoutGateway checkoutGateway = new DynamoCheckoutGateway(dynamoDb, tableName);
         DynamoWaitingRoomRepository waitingRoomRepository = new DynamoWaitingRoomRepository(dynamoDb, tableName);
+        AdmissionAccessService admissionAccess = new AdmissionAccessService(
+                waitingRoomRepository, AdmissionGrantService.disabled());
+        ReservationCheckoutService reservationCheckoutService = new ReservationCheckoutServiceImpl(holdRepository);
         paymentGateway = new DemoPaymentGateway();
         createHoldHandler = new CreateHoldHandler(
-                LOCAL_OWNER, holdRepository, waitingRoomRepository, clock, Duration.ofMinutes(5));
+                LOCAL_OWNER, holdRepository, admissionAccess, clock, Duration.ofMinutes(5));
         startCheckoutHandler = new StartCheckoutHandler(
-                LOCAL_OWNER, holdRepository, bookingRepository, checkoutGateway, paymentGateway, clock,
+                LOCAL_OWNER, reservationCheckoutService, bookingRepository, checkoutGateway, paymentGateway, clock,
                 Duration.ofMinutes(10), Duration.ofSeconds(30), 16);
         reconcileBookingHandler = new ReconcileBookingHandler(
-                LOCAL_OWNER, bookingRepository, holdRepository, checkoutGateway, paymentGateway, clock,
+                LOCAL_OWNER, bookingRepository, reservationCheckoutService, checkoutGateway, paymentGateway, clock,
                 Duration.ofSeconds(30));
     }
 

@@ -98,7 +98,7 @@ class DynamoBookingRepositoryIT {
                 Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
                 FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
         Booking booking = Booking.pending(requestedId,
-                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
                 "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
         Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
         corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
@@ -116,7 +116,7 @@ class DynamoBookingRepositoryIT {
                 Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
                 FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
         Booking booking = Booking.pending(new BookingId("booking-1"),
-                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
                 "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
         Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
         corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
@@ -174,7 +174,7 @@ class DynamoBookingRepositoryIT {
                 Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
                 FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
         Booking wrongKeyBooking = Booking.pending(new BookingId("booking-1"),
-                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
                 "different-checkout-key", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
         put(wrongKeyBooking);
         putRaw(Map.of(
@@ -200,7 +200,7 @@ class DynamoBookingRepositoryIT {
                 Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
                 FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
         Booking booking = Booking.pending(new BookingId("booking-1"),
-                hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
+                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
                 idempotencyKey, FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
         Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
         corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
@@ -217,8 +217,10 @@ class DynamoBookingRepositoryIT {
         Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
                 Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
                 FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
-        booking = Booking.pending(new BookingId("booking-1"), hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90)),
-                "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2).attachPaymentIntent("pi-1");
+        booking = Booking.pending(new BookingId("booking-1"),
+                        ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
+                        "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2)
+                .attachPaymentIntent("pi-1");
         put(booking);
         rescheduled = null;
         newest = null;

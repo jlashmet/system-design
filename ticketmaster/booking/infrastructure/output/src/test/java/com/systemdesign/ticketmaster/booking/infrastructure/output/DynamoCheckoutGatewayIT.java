@@ -10,6 +10,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatClaimConflictException;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
@@ -62,6 +63,7 @@ class DynamoCheckoutGatewayIT {
     private String tableName;
     private Hold activeHold;
     private Hold checkoutHold;
+    private ReservationCheckout checkoutReservation;
     private Booking pendingBooking;
     private Hold laterHold;
     private Throwable thrown;
@@ -117,14 +119,15 @@ class DynamoCheckoutGatewayIT {
                 NOW,
                 new HoldIdempotencyKey("hold-idempotency-1"));
         checkoutHold = activeHold.startCheckout(NOW.plusSeconds(10), NOW.plus(70, ChronoUnit.SECONDS));
-        pendingBooking = Booking.pending(new BookingId("booking-1"), checkoutHold, "idempotency-1",
+        checkoutReservation = ReservationTestFixtures.from(checkoutHold);
+        pendingBooking = Booking.pending(new BookingId("booking-1"), checkoutReservation, "idempotency-1",
                 NOW.plusSeconds(10), NOW.plusSeconds(40), 3);
         thrown = null;
     }
 
     private void givenStartedCheckout(String... seatIds) {
         givenActiveHold(seatIds);
-        checkoutGateway.startCheckout(checkoutHold, pendingBooking);
+        checkoutGateway.startCheckout(checkoutReservation, pendingBooking);
         Booking withIntent = pendingBooking.attachPaymentIntent("pi-123");
         bookingRepository.savePaymentIntent(withIntent);
         pendingBooking = withIntent;
@@ -132,7 +135,7 @@ class DynamoCheckoutGatewayIT {
 
     private void whenStartCheckout() {
         try {
-            checkoutGateway.startCheckout(checkoutHold, pendingBooking);
+            checkoutGateway.startCheckout(checkoutReservation, pendingBooking);
         } catch (Throwable error) {
             thrown = error;
         }
@@ -140,7 +143,7 @@ class DynamoCheckoutGatewayIT {
 
     private void whenFinalizeBooking() {
         try {
-            checkoutGateway.finalizeBooking(checkoutHold.convert(), pendingBooking.confirm());
+            checkoutGateway.finalizeBooking(checkoutReservation, pendingBooking.confirm());
         } catch (Throwable error) {
             thrown = error;
         }
@@ -148,7 +151,7 @@ class DynamoCheckoutGatewayIT {
 
     private void whenFailBooking() {
         try {
-            checkoutGateway.failBooking(checkoutHold.fail(), pendingBooking.fail());
+            checkoutGateway.failBooking(checkoutReservation, pendingBooking.fail());
         } catch (Throwable error) {
             thrown = error;
         }

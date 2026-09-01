@@ -10,6 +10,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import io.floci.testcontainers.FlociContainer;
@@ -58,6 +59,7 @@ class DynamoCheckoutSeatIdentityIT {
     private DynamoCheckoutGateway gateway;
     private Hold activeHold;
     private Hold checkoutHold;
+    private ReservationCheckout checkoutReservation;
     private Booking pendingBooking;
 
     @BeforeEach
@@ -80,8 +82,9 @@ class DynamoCheckoutSeatIdentityIT {
         gateway = new DynamoCheckoutGateway(dynamoDb, tableName);
         activeHold = Hold.active(HOLD_ID, USER_ID, EVENT_ID, Set.of(SEAT_ID), PRICE, NOW, NOW.plusSeconds(300));
         checkoutHold = activeHold.startCheckout(NOW.plusSeconds(10), NOW.plusSeconds(120));
+        checkoutReservation = ReservationTestFixtures.from(checkoutHold);
         pendingBooking = Booking.pending(
-                        new BookingId("booking-1"), checkoutHold, "checkout-key", NOW.plusSeconds(10),
+                        new BookingId("booking-1"), checkoutReservation, "checkout-key", NOW.plusSeconds(10),
                         NOW.plusSeconds(40), 1)
                 .attachPaymentIntent("pi-1");
     }
@@ -99,7 +102,7 @@ class DynamoCheckoutSeatIdentityIT {
         putHold(activeHold, "ACTIVE", null);
         putSeat("HELD", "other-event", HOLD_ID.value(), activeHold.expiresAt().toEpochMilli());
 
-        assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, pendingBooking))
+        assertThatThrownBy(() -> gateway.startCheckout(checkoutReservation, pendingBooking))
                 .isInstanceOf(CheckoutConflictException.class);
 
         assertThat(holdItem().get("status").s()).isEqualTo("ACTIVE");
@@ -112,7 +115,7 @@ class DynamoCheckoutSeatIdentityIT {
     void finalizeRejectsMismatchedSeatIdentityWithoutMutatingTransaction() {
         givenPendingCheckoutWithCorruptSeat();
 
-        assertThatThrownBy(() -> gateway.finalizeBooking(checkoutHold.convert(), pendingBooking.confirm()))
+        assertThatThrownBy(() -> gateway.finalizeBooking(checkoutReservation, pendingBooking.confirm()))
                 .isInstanceOf(CheckoutConflictException.class);
 
         assertPendingCheckoutUnchanged();
@@ -123,7 +126,7 @@ class DynamoCheckoutSeatIdentityIT {
     void failureRejectsMismatchedSeatIdentityWithoutMutatingTransaction() {
         givenPendingCheckoutWithCorruptSeat();
 
-        assertThatThrownBy(() -> gateway.failBooking(checkoutHold.fail(), pendingBooking.fail()))
+        assertThatThrownBy(() -> gateway.failBooking(checkoutReservation, pendingBooking.fail()))
                 .isInstanceOf(CheckoutConflictException.class);
 
         assertPendingCheckoutUnchanged();

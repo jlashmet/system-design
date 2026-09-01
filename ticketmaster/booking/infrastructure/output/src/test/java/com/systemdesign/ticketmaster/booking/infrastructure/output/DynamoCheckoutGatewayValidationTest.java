@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.Price;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.math.BigDecimal;
@@ -34,7 +35,7 @@ class DynamoCheckoutGatewayValidationTest {
 
     private DynamoDbClient dynamoDb;
     private DynamoCheckoutGateway gateway;
-    private Hold checkoutHold;
+    private ReservationCheckout checkoutReservation;
 
     @BeforeEach
     void setUp() {
@@ -44,7 +45,7 @@ class DynamoCheckoutGatewayValidationTest {
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
                 .build();
         gateway = new DynamoCheckoutGateway(dynamoDb, "unused-table");
-        checkoutHold = Hold.active(
+        Hold checkoutHold = Hold.active(
                         HOLD_ID,
                         USER_ID,
                         HOLD_EVENT,
@@ -53,6 +54,7 @@ class DynamoCheckoutGatewayValidationTest {
                         NOW,
                         NOW.plusSeconds(300))
                 .startCheckout(NOW.plusSeconds(10), NOW.plusSeconds(120));
+        checkoutReservation = ReservationTestFixtures.from(checkoutHold);
     }
 
     @AfterEach
@@ -64,7 +66,7 @@ class DynamoCheckoutGatewayValidationTest {
     void startCheckoutRejectsBookingFromDifferentEventBeforeStorageMutation() {
         Booking booking = bookingFor(OTHER_EVENT, USER_ID, PRICE, BookingStatus.PENDING_PAYMENT);
 
-        assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, booking))
+        assertThatThrownBy(() -> gateway.startCheckout(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("booking does not belong to hold event");
     }
@@ -73,7 +75,7 @@ class DynamoCheckoutGatewayValidationTest {
     void startCheckoutRejectsBookingFromDifferentUserBeforeStorageMutation() {
         Booking booking = bookingFor(HOLD_EVENT, new UserId("user-2"), PRICE, BookingStatus.PENDING_PAYMENT);
 
-        assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, booking))
+        assertThatThrownBy(() -> gateway.startCheckout(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("booking does not belong to hold user");
     }
@@ -83,7 +85,7 @@ class DynamoCheckoutGatewayValidationTest {
         Price differentPrice = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
         Booking booking = bookingFor(HOLD_EVENT, USER_ID, differentPrice, BookingStatus.PENDING_PAYMENT);
 
-        assertThatThrownBy(() -> gateway.startCheckout(checkoutHold, booking))
+        assertThatThrownBy(() -> gateway.startCheckout(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("booking price does not match hold price");
     }
@@ -92,7 +94,7 @@ class DynamoCheckoutGatewayValidationTest {
     void finalizeBookingRejectsBookingFromDifferentEventBeforeStorageMutation() {
         Booking booking = bookingFor(OTHER_EVENT, USER_ID, PRICE, BookingStatus.CONFIRMED);
 
-        assertThatThrownBy(() -> gateway.finalizeBooking(checkoutHold.convert(), booking))
+        assertThatThrownBy(() -> gateway.finalizeBooking(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("booking does not belong to hold event");
     }
@@ -101,7 +103,7 @@ class DynamoCheckoutGatewayValidationTest {
     void failBookingRejectsBookingFromDifferentEventBeforeStorageMutation() {
         Booking booking = bookingFor(OTHER_EVENT, USER_ID, PRICE, BookingStatus.FAILED);
 
-        assertThatThrownBy(() -> gateway.failBooking(checkoutHold.fail(), booking))
+        assertThatThrownBy(() -> gateway.failBooking(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("booking does not belong to hold event");
     }

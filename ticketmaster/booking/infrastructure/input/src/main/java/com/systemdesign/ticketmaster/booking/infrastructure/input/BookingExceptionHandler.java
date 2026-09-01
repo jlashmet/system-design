@@ -14,6 +14,7 @@ import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
+import com.systemdesign.ticketmaster.booking.infrastructure.output.AdmissionStorageUnavailableException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -94,8 +95,8 @@ public final class BookingExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(detail);
     }
 
-    @ExceptionHandler(BookingStorageUnavailableException.class)
-    ResponseEntity<ProblemDetail> bookingStorageUnavailable(BookingStorageUnavailableException exception) {
+    @ExceptionHandler({BookingStorageUnavailableException.class, AdmissionStorageUnavailableException.class})
+    ResponseEntity<ProblemDetail> bookingStorageUnavailable(RuntimeException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
         detail.setTitle("Booking storage unavailable");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)

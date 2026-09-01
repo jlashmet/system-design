@@ -37,7 +37,7 @@ public final class DynamoAdmissionRegulationLeaseGateway implements AdmissionReg
         if (!leaseExpiresAt.isAfter(now)) throw new IllegalArgumentException("lease expiry must be after now");
 
         try {
-            DynamoBookingCall.execute("admission regulator lease", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
+            DynamoAdmissionCall.execute("admission regulator lease", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                     .tableName(tableName)
                     .key(Map.of(PK, string(DynamoWaitingRoomRepository.admissionPk(eventId))))
                     .updateExpression("SET #regulatorId = :regulatorId, #leaseExpiresAt = :leaseExpiresAt")
@@ -59,9 +59,6 @@ public final class DynamoAdmissionRegulationLeaseGateway implements AdmissionReg
                     .build()));
             return true;
         } catch (ConditionalCheckFailedException notOwnerAbsentOrCorrupt) {
-            // The conditional update is atomic, so a failed identity predicate cannot mutate the
-            // admission row. A consistent validated read surfaces corruption while preserving the
-            // existing false result for normal contention or absent admission state.
             new DynamoWaitingRoomRepository(dynamoDb, tableName).findAdmission(eventId);
             return false;
         }

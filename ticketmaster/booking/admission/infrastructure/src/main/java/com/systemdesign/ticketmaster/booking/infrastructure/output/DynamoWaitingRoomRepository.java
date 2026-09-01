@@ -34,7 +34,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     public WaitingRoomEntry join(WaitingRoomEntry entry) {
         Objects.requireNonNull(entry, "entry");
         try {
-            DynamoBookingCall.execute("waiting-room join", () -> dynamoDb.putItem(PutItemRequest.builder()
+            DynamoAdmissionCall.execute("waiting-room join", () -> dynamoDb.putItem(PutItemRequest.builder()
                     .tableName(tableName)
                     .item(Map.of(
                             PK, string(entryPk(entry.eventId(), entry.userId())),
@@ -73,7 +73,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     public EventAdmission initializeAdmission(EventAdmission initial) {
         Objects.requireNonNull(initial, "initial");
         try {
-            DynamoBookingCall.execute("admission initialization", () -> dynamoDb.putItem(PutItemRequest.builder()
+            DynamoAdmissionCall.execute("admission initialization", () -> dynamoDb.putItem(PutItemRequest.builder()
                     .tableName(tableName)
                     .item(Map.of(
                             PK, string(admissionPk(initial.eventId())),
@@ -96,7 +96,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     public EventAdmission advanceAdmission(EventAdmission admission) {
         Objects.requireNonNull(admission, "admission");
         try {
-            Map<String, AttributeValue> updated = DynamoBookingCall.execute(
+            Map<String, AttributeValue> updated = DynamoAdmissionCall.execute(
                     "admission watermark advance",
                     () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                             .tableName(tableName)
@@ -119,8 +119,6 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
                     .attributes();
             return admissionFromItem(updated, admission.eventId());
         } catch (ConditionalCheckFailedException regressionDisabledOrCorrupt) {
-            // The conditional write failed atomically. A consistent read distinguishes a corrupt
-            // keyed record (which findAdmission rejects) from the existing disabled/backward case.
             findAdmission(admission.eventId());
             throw new AdmissionWatermarkRegressionException(admission.eventId());
         }
@@ -164,7 +162,7 @@ public final class DynamoWaitingRoomRepository implements WaitingRoomRepository 
     }
 
     private Map<String, AttributeValue> get(String pk) {
-        Map<String, AttributeValue> item = DynamoBookingCall.execute(
+        Map<String, AttributeValue> item = DynamoAdmissionCall.execute(
                         "waiting-room state read",
                         () -> dynamoDb.getItem(GetItemRequest.builder()
                                 .tableName(tableName)

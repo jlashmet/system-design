@@ -115,7 +115,7 @@ class DynamoHoldSeatIdentityIT {
 
     private void putSeat(String eventId, String seatId) {
         Map<String, AttributeValue> item = new LinkedHashMap<>();
-        item.put("pk", string(DynamoKeys.seatPk(EVENT_ID, SEAT_ID)));
+        item.put("pk", string(DynamoReservationKeys.seatPk(EVENT_ID, SEAT_ID)));
         item.put("entityType", string("SEAT"));
         item.put("eventId", string(eventId));
         item.put("seatId", string(seatId));
@@ -128,7 +128,7 @@ class DynamoHoldSeatIdentityIT {
     private Map<String, AttributeValue> seatItem() {
         return dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
-                        .key(Map.of("pk", string(DynamoKeys.seatPk(EVENT_ID, SEAT_ID))))
+                        .key(Map.of("pk", string(DynamoReservationKeys.seatPk(EVENT_ID, SEAT_ID))))
                         .consistentRead(true)
                         .build())
                 .item();

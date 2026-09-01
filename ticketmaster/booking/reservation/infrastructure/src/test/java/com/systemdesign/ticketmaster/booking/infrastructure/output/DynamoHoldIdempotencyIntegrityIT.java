@@ -119,7 +119,7 @@ class DynamoHoldIdempotencyIntegrityIT {
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
                 .item(Map.of(
-                        "pk", string(DynamoKeys.holdIdempotencyPk(EVENT_ID, USER_ID, key)),
+                        "pk", string(DynamoReservationKeys.holdIdempotencyPk(EVENT_ID, USER_ID, key)),
                         "entityType", string("HOLD_IDEMPOTENCY"),
                         "eventId", string(EVENT_ID.value()),
                         "userId", string(USER_ID.value()),
@@ -132,7 +132,7 @@ class DynamoHoldIdempotencyIntegrityIT {
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
                 .item(Map.ofEntries(
-                        Map.entry("pk", string(DynamoKeys.holdPk(new HoldId(keyHoldId)))),
+                        Map.entry("pk", string(DynamoReservationKeys.holdPk(new HoldId(keyHoldId)))),
                         Map.entry("entityType", string("HOLD")),
                         Map.entry("holdId", string(storedHoldId)),
                         Map.entry("userId", string(USER_ID.value())),

@@ -143,7 +143,7 @@ class StartCheckoutHandlerTest {
                         0)
                 .attachPaymentIntent("pi-existing");
         bookingRepository = new TrackingBookingRepository(booking);
-        holdRepository = new TrackingHoldRepository(null);
+        holdRepository = new TrackingHoldRepository(checkoutHold);
         checkoutGateway = new TrackingCheckoutGateway();
         paymentGateway = new TrackingPaymentGateway();
         handler = handler(ignored -> {});
@@ -198,7 +198,7 @@ class StartCheckoutHandlerTest {
         assertThat(result.booking().id()).isEqualTo(new BookingId("booking-existing"));
         assertThat(result.paymentIntentId()).isEqualTo("pi-existing");
         assertThat(bookingRepository.idempotencyReads).isOne();
-        assertThat(holdRepository.findByIdReads).isZero();
+        assertThat(holdRepository.findByIdReads).isOne();
         assertThat(checkoutGateway.startCalls).isZero();
         assertThat(paymentGateway.createCalls).isZero();
         assertThat(paymentGateway.statusCalls).isZero();

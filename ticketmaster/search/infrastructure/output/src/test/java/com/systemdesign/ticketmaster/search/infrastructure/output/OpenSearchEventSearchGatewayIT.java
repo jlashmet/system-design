@@ -35,8 +35,11 @@ class OpenSearchEventSearchGatewayIT {
     private static final String INDEX_NAME = "events";
     private static final Instant OCTOBER_1 = Instant.parse("2026-10-01T00:00:00Z");
 
+    // testcontainers-floci 2.15.0 was released against Floci 1.7.0 but its default
+    // constructor follows floci/floci:latest. Pin the emulator so a later breaking
+    // Floci release cannot silently change this integration fixture underneath us.
     @Container
-    static final FlociContainer FLOCI = new FlociContainer()
+    static final FlociContainer FLOCI = new FlociContainer("floci/floci:1.7.0")
             .withDedicatedNetwork()
             .withOpenSearchConfig(config -> config.enabled(true).mock(false));
 

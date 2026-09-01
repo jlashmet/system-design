@@ -145,20 +145,37 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
     }
 
     private Update terminalBookingUpdate(Booking booking, String status) {
+        String paymentIntentId = booking.paymentIntentIdOptional()
+                .orElseThrow(() -> new IllegalArgumentException("terminal booking has no payment intent"));
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
                 .updateExpression("SET #status = :terminal REMOVE #nextReconcileAt, #reconcileShard")
-                .conditionExpression("#status = :pending AND #holdId = :holdId")
+                .conditionExpression("#status = :pending AND #eventId = :eventId AND #holdId = :holdId "
+                        + "AND #userId = :userId AND #checkoutIdempotencyKey = :checkoutIdempotencyKey "
+                        + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
+                        + "AND #paymentIntentId = :paymentIntentId")
                 .expressionAttributeNames(Map.of(
                         "#status", "status",
+                        "#eventId", "eventId",
                         "#holdId", "holdId",
+                        "#userId", "userId",
+                        "#checkoutIdempotencyKey", "checkoutIdempotencyKey",
+                        "#totalPriceAmount", "totalPriceAmount",
+                        "#totalPriceCurrency", "totalPriceCurrency",
+                        "#paymentIntentId", "paymentIntentId",
                         "#nextReconcileAt", "nextReconcileAt",
                         "#reconcileShard", "reconcileShard"))
                 .expressionAttributeValues(Map.of(
                         ":terminal", string(status),
                         ":pending", string("PENDING_PAYMENT"),
-                        ":holdId", string(booking.holdId().value())))
+                        ":eventId", string(booking.eventId().value()),
+                        ":holdId", string(booking.holdId().value()),
+                        ":userId", string(booking.userId().value()),
+                        ":checkoutIdempotencyKey", string(booking.checkoutIdempotencyKey()),
+                        ":totalPriceAmount", string(booking.totalPrice().amount().toPlainString()),
+                        ":totalPriceCurrency", string(booking.totalPrice().currency().getCurrencyCode()),
+                        ":paymentIntentId", string(paymentIntentId)))
                 .build();
     }
 

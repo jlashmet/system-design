@@ -98,13 +98,13 @@ public final class StartCheckoutHandler {
     }
 
     private StartCheckoutResult ensurePaymentIntent(Booking booking) {
-        if (booking.paymentIntentIdOptional().isPresent()) {
-            return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
-        }
-
         ReservationCheckout reservation = reservationCheckoutService.findById(booking.holdId())
                 .orElseThrow(() -> new HoldNotFoundException(booking.holdId()));
         requirePaymentReservationScope(booking, reservation, clock.instant());
+
+        if (booking.paymentIntentIdOptional().isPresent()) {
+            return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
+        }
         return createAndPersistPaymentIntent(booking);
     }
 

@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.events.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.events.domain.Event;
 import com.systemdesign.ticketmaster.events.domain.EventId;
@@ -72,6 +73,21 @@ class DynamoEventRepositoryIT {
         given();
         whenFindById(new EventId("missing"));
         thenExpectMissing();
+    }
+
+    @Test
+    void rejectsEventRowWhosePayloadIdDoesNotMatchKey() {
+        given();
+        Map<String, AttributeValue> row = toItem(EXPECTED_EVENT);
+        row.put("eventId", string("event-other"));
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(row)
+                .build());
+
+        assertThatThrownBy(() -> repository.findById(EXPECTED_EVENT.id()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("event metadata identity mismatch for event-123");
     }
 
     private void given(Event... events) {

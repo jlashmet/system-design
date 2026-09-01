@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.events.infrastructure.output;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.events.domain.Venue;
 import com.systemdesign.ticketmaster.events.domain.VenueId;
@@ -64,6 +65,24 @@ class DynamoVenueRepositoryIT {
         given();
         whenFindById(new VenueId("missing"));
         thenExpectMissing();
+    }
+
+    @Test
+    void rejectsVenueRowWhosePayloadIdDoesNotMatchKey() {
+        given();
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(Map.of(
+                        "pk", string(DynamoVenueRepository.venuePk(EXPECTED_VENUE.id())),
+                        "entityType", string("VENUE"),
+                        "venueId", string("venue-other"),
+                        "name", string(EXPECTED_VENUE.name()),
+                        "city", string(EXPECTED_VENUE.city())))
+                .build());
+
+        assertThatThrownBy(() -> repository.findById(EXPECTED_VENUE.id()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("venue metadata identity mismatch for venue-456");
     }
 
     private void given(Venue... venues) {

@@ -33,10 +33,11 @@ public record Booking(
         if (reconcileShard != null && reconcileShard < 0) throw new IllegalArgumentException("reconcile shard must not be negative");
     }
 
-    public static Booking pending(BookingId id, Hold hold, String checkoutIdempotencyKey,
+    public static Booking pending(BookingId id, ReservationCheckout reservation, String checkoutIdempotencyKey,
                                   Instant createdAt, Instant nextReconcileAt, int reconcileShard) {
-        return new Booking(id, hold.userId(), hold.eventId(), hold.id(), BookingStatus.PENDING_PAYMENT,
-                hold.totalPrice(), checkoutIdempotencyKey, null, nextReconcileAt, reconcileShard, createdAt);
+        Objects.requireNonNull(reservation, "reservation");
+        return new Booking(id, reservation.userId(), reservation.eventId(), reservation.id(), BookingStatus.PENDING_PAYMENT,
+                reservation.totalPrice(), checkoutIdempotencyKey, null, nextReconcileAt, reconcileShard, createdAt);
     }
 
     public Optional<String> paymentIntentIdOptional() {

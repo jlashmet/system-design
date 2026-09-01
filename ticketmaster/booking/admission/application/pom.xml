@@ -5,6 +5,7 @@
     <artifactId>booking-admission-application</artifactId>
     <dependencies>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-shared-domain</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-api</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-admission-domain</artifactId><version>${project.version}</version></dependency>
     </dependencies>
 </project>

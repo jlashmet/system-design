@@ -5,6 +5,7 @@
     <artifactId>booking-checkout-domain</artifactId>
     <dependencies>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-shared-domain</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-domain</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-api</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-reservation-api</artifactId><version>${project.version}</version></dependency>
     </dependencies>
 </project>

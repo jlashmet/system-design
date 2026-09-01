@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.bootstrap;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.systemdesign.ticketmaster.booking.application.AdmissionAccessService;
 import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.EnableAdmissionHandler;
@@ -11,7 +12,9 @@ import com.systemdesign.ticketmaster.booking.application.ProjectSeatMapHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileDueBookingsHandler;
 import com.systemdesign.ticketmaster.booking.application.RegulateAdmissionHandler;
+import com.systemdesign.ticketmaster.booking.application.ReservationCheckoutServiceImpl;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
+import com.systemdesign.ticketmaster.booking.domain.AdmissionAccess;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionCapacity;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionGrantService;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionHealthGateway;
@@ -22,6 +25,7 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomRepository;
 import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
@@ -96,6 +100,11 @@ public class BookingServiceApplication {
             DynamoDbClient dynamoDbClient,
             @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
         return new DynamoHoldRepository(dynamoDbClient, tableName);
+    }
+
+    @Bean
+    ReservationCheckoutService reservationCheckoutService(HoldRepository holdRepository) {
+        return new ReservationCheckoutServiceImpl(holdRepository);
     }
 
     @Bean
@@ -206,18 +215,23 @@ public class BookingServiceApplication {
     }
 
     @Bean
+    AdmissionAccess admissionAccess(
+            WaitingRoomRepository waitingRoomRepository,
+            AdmissionGrantService admissionGrantService) {
+        return new AdmissionAccessService(waitingRoomRepository, admissionGrantService);
+    }
+
+    @Bean
     CreateHoldHandler createHoldHandler(
             EventWriteAuthority eventWriteAuthority,
             HoldRepository holdRepository,
-            WaitingRoomRepository waitingRoomRepository,
-            AdmissionGrantService admissionGrantService,
+            AdmissionAccess admissionAccess,
             Clock clock,
             @Value("${ticketmaster.booking.hold-duration:PT5M}") String holdDuration) {
         return new CreateHoldHandler(
                 eventWriteAuthority,
                 holdRepository,
-                waitingRoomRepository,
-                admissionGrantService,
+                admissionAccess,
                 clock,
                 Duration.parse(holdDuration));
     }
@@ -225,7 +239,7 @@ public class BookingServiceApplication {
     @Bean
     StartCheckoutHandler startCheckoutHandler(
             EventWriteAuthority eventWriteAuthority,
-            HoldRepository holdRepository,
+            ReservationCheckoutService reservationCheckoutService,
             BookingRepository bookingRepository,
             CheckoutGateway checkoutGateway,
             PaymentGateway paymentGateway,
@@ -235,7 +249,7 @@ public class BookingServiceApplication {
             @Value("${ticketmaster.booking.reconciliation-shards:16}") int reconciliationShards) {
         return new StartCheckoutHandler(
                 eventWriteAuthority,
-                holdRepository,
+                reservationCheckoutService,
                 bookingRepository,
                 checkoutGateway,
                 paymentGateway,
@@ -249,7 +263,7 @@ public class BookingServiceApplication {
     ReconcileBookingHandler reconcileBookingHandler(
             EventWriteAuthority eventWriteAuthority,
             BookingRepository bookingRepository,
-            HoldRepository holdRepository,
+            ReservationCheckoutService reservationCheckoutService,
             CheckoutGateway checkoutGateway,
             PaymentGateway paymentGateway,
             Clock clock,
@@ -257,7 +271,7 @@ public class BookingServiceApplication {
         return new ReconcileBookingHandler(
                 eventWriteAuthority,
                 bookingRepository,
-                holdRepository,
+                reservationCheckoutService,
                 checkoutGateway,
                 paymentGateway,
                 clock,

@@ -2,9 +2,9 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0">
     <modelVersion>4.0.0</modelVersion>
     <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
-    <artifactId>booking-payment-domain</artifactId>
+    <artifactId>booking-payment-api</artifactId>
     <dependencies>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-shared-domain</artifactId><version>${project.version}</version></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-domain</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-api</artifactId><version>${project.version}</version></dependency>
     </dependencies>
 </project>

@@ -6,12 +6,11 @@ import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
-import com.systemdesign.ticketmaster.booking.domain.Hold;
-import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
-import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -20,7 +19,7 @@ import java.util.UUID;
 
 public final class StartCheckoutHandler {
     private final EventWriteAuthority eventWriteAuthority;
-    private final HoldRepository holdRepository;
+    private final ReservationCheckoutService reservationCheckoutService;
     private final BookingRepository bookingRepository;
     private final CheckoutGateway checkoutGateway;
     private final PaymentGateway paymentGateway;
@@ -30,12 +29,13 @@ public final class StartCheckoutHandler {
     private final int reconciliationShards;
 
     public StartCheckoutHandler(EventWriteAuthority eventWriteAuthority,
-                                HoldRepository holdRepository, BookingRepository bookingRepository,
+                                ReservationCheckoutService reservationCheckoutService,
+                                BookingRepository bookingRepository,
                                 CheckoutGateway checkoutGateway, PaymentGateway paymentGateway,
                                 Clock clock, Duration checkoutDuration, Duration reconciliationDelay,
                                 int reconciliationShards) {
         this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
-        this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
+        this.reservationCheckoutService = Objects.requireNonNull(reservationCheckoutService, "reservationCheckoutService");
         this.bookingRepository = Objects.requireNonNull(bookingRepository, "bookingRepository");
         this.checkoutGateway = Objects.requireNonNull(checkoutGateway, "checkoutGateway");
         this.paymentGateway = Objects.requireNonNull(paymentGateway, "paymentGateway");
@@ -57,20 +57,15 @@ public final class StartCheckoutHandler {
 
     private StartCheckoutResult startNewCheckout(StartCheckoutCommand command) {
         Instant now = clock.instant();
-        Hold hold = holdRepository.findById(command.holdId())
-                .orElseThrow(() -> new HoldNotFoundException(command.holdId()));
-        if (!hold.eventId().equals(command.eventId())) {
-            throw new IllegalArgumentException("hold does not belong to event " + command.eventId().value());
-        }
-        requireOwner(command, hold.userId());
-        Hold checkoutHold = hold.startCheckout(now, now.plus(checkoutDuration));
+        ReservationCheckout reservation = reservationCheckoutService.prepareCheckout(
+                command.eventId(), command.holdId(), command.userId(), now, now.plus(checkoutDuration));
         BookingId bookingId = new BookingId(UUID.randomUUID().toString());
         int shard = Math.floorMod(bookingId.value().hashCode(), reconciliationShards);
-        Booking booking = Booking.pending(bookingId, checkoutHold, command.idempotencyKey(), now,
+        Booking booking = Booking.pending(bookingId, reservation, command.idempotencyKey(), now,
                 now.plus(reconciliationDelay), shard);
 
         try {
-            checkoutGateway.startCheckout(checkoutHold, booking);
+            checkoutGateway.startCheckout(reservation, booking);
             return ensurePaymentIntent(booking);
         } catch (CheckoutConflictException conflict) {
             return findIdempotentBooking(command)

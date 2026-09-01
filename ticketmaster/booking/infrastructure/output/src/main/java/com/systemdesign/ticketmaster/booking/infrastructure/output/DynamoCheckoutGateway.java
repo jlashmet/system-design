@@ -8,8 +8,8 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
-import com.systemdesign.ticketmaster.booking.domain.Hold;
-import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import java.util.ArrayList;
@@ -33,16 +33,16 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
     }
 
     @Override
-    public void startCheckout(Hold checkoutHold, Booking pendingBooking) {
-        requireStartState(checkoutHold, pendingBooking);
-        if (checkoutHold.seatIds().size() > 97) {
+    public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) {
+        requireStartState(reservation, pendingBooking);
+        if (reservation.seatIds().size() > 97) {
             throw new IllegalArgumentException("checkout cannot contain more than 97 seats");
         }
 
         List<TransactWriteItem> writes = new ArrayList<>();
-        writes.add(TransactWriteItem.builder().update(startHoldUpdate(checkoutHold, pendingBooking)).build());
-        for (SeatId seatId : checkoutHold.seatIds()) {
-            writes.add(TransactWriteItem.builder().update(startSeatUpdate(checkoutHold, pendingBooking, seatId)).build());
+        writes.add(TransactWriteItem.builder().update(startHoldUpdate(reservation, pendingBooking)).build());
+        for (SeatId seatId : reservation.seatIds()) {
+            writes.add(TransactWriteItem.builder().update(startSeatUpdate(reservation, pendingBooking, seatId)).build());
         }
         writes.add(TransactWriteItem.builder()
                 .put(Put.builder()
@@ -60,37 +60,37 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         .expressionAttributeNames(Map.of("#pk", PK))
                         .build())
                 .build());
-        transact(checkoutHold, writes);
+        transact(reservation, writes);
     }
 
     @Override
-    public void finalizeBooking(Hold convertedHold, Booking confirmedBooking) {
-        requireFinalState(convertedHold, confirmedBooking, HoldStatus.CONVERTED, BookingStatus.CONFIRMED);
+    public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) {
+        requireFinalState(reservation, confirmedBooking, BookingStatus.CONFIRMED);
         List<TransactWriteItem> writes = new ArrayList<>();
-        writes.add(TransactWriteItem.builder().update(terminalHoldUpdate(convertedHold, "CONVERTED")).build());
+        writes.add(TransactWriteItem.builder().update(terminalHoldUpdate(reservation, "CONVERTED")).build());
         writes.add(TransactWriteItem.builder().update(terminalBookingUpdate(confirmedBooking, "CONFIRMED")).build());
-        for (SeatId seatId : convertedHold.seatIds()) {
-            writes.add(TransactWriteItem.builder().update(bookSeatUpdate(convertedHold, confirmedBooking, seatId)).build());
+        for (SeatId seatId : reservation.seatIds()) {
+            writes.add(TransactWriteItem.builder().update(bookSeatUpdate(reservation, confirmedBooking, seatId)).build());
         }
-        transact(convertedHold, writes);
+        transact(reservation, writes);
     }
 
     @Override
-    public void failBooking(Hold failedHold, Booking failedBooking) {
-        requireFinalState(failedHold, failedBooking, HoldStatus.FAILED, BookingStatus.FAILED);
+    public void failBooking(ReservationCheckout reservation, Booking failedBooking) {
+        requireFinalState(reservation, failedBooking, BookingStatus.FAILED);
         List<TransactWriteItem> writes = new ArrayList<>();
-        writes.add(TransactWriteItem.builder().update(terminalHoldUpdate(failedHold, "FAILED")).build());
+        writes.add(TransactWriteItem.builder().update(terminalHoldUpdate(reservation, "FAILED")).build());
         writes.add(TransactWriteItem.builder().update(terminalBookingUpdate(failedBooking, "FAILED")).build());
-        for (SeatId seatId : failedHold.seatIds()) {
-            writes.add(TransactWriteItem.builder().update(releaseSeatUpdate(failedHold, seatId)).build());
+        for (SeatId seatId : reservation.seatIds()) {
+            writes.add(TransactWriteItem.builder().update(releaseSeatUpdate(reservation, seatId)).build());
         }
-        transact(failedHold, writes);
+        transact(reservation, writes);
     }
 
-    private Update startHoldUpdate(Hold hold, Booking booking) {
+    private Update startHoldUpdate(ReservationCheckout reservation, Booking booking) {
         return Update.builder()
                 .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.holdPk(hold.id()))))
+                .key(Map.of(PK, string(DynamoKeys.holdPk(reservation.id()))))
                 .updateExpression("SET #status = :checkout, #checkoutExpiresAt = :deadline")
                 .conditionExpression("#status = :active AND #expiresAt > :now")
                 .expressionAttributeNames(Map.of(
@@ -100,15 +100,15 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                 .expressionAttributeValues(Map.of(
                         ":checkout", string("CHECKOUT_IN_PROGRESS"),
                         ":active", string("ACTIVE"),
-                        ":deadline", number(hold.checkoutExpiresAt().toEpochMilli()),
+                        ":deadline", number(reservation.checkoutExpiresAt().toEpochMilli()),
                         ":now", number(booking.createdAt().toEpochMilli())))
                 .build();
     }
 
-    private Update startSeatUpdate(Hold hold, Booking booking, SeatId seatId) {
+    private Update startSeatUpdate(ReservationCheckout reservation, Booking booking, SeatId seatId) {
         return Update.builder()
                 .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.seatPk(hold.eventId(), seatId))))
+                .key(Map.of(PK, string(DynamoKeys.seatPk(reservation.eventId(), seatId))))
                 .updateExpression("SET #status = :checkout, #holdExpiresAt = :deadline")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
                         + "AND #status = :held AND #holdId = :holdId AND #holdExpiresAt > :now")
@@ -121,20 +121,20 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#holdExpiresAt", "holdExpiresAt"))
                 .expressionAttributeValues(Map.of(
                         ":seatType", string("SEAT"),
-                        ":eventId", string(hold.eventId().value()),
+                        ":eventId", string(reservation.eventId().value()),
                         ":seatId", string(seatId.value()),
                         ":checkout", string("CHECKOUT"),
                         ":held", string("HELD"),
-                        ":holdId", string(hold.id().value()),
-                        ":deadline", number(hold.checkoutExpiresAt().toEpochMilli()),
+                        ":holdId", string(reservation.id().value()),
+                        ":deadline", number(reservation.checkoutExpiresAt().toEpochMilli()),
                         ":now", number(booking.createdAt().toEpochMilli())))
                 .build();
     }
 
-    private Update terminalHoldUpdate(Hold hold, String status) {
+    private Update terminalHoldUpdate(ReservationCheckout reservation, String status) {
         return Update.builder()
                 .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.holdPk(hold.id()))))
+                .key(Map.of(PK, string(DynamoKeys.holdPk(reservation.id()))))
                 .updateExpression("SET #status = :terminal")
                 .conditionExpression("#status = :checkout")
                 .expressionAttributeNames(Map.of("#status", "status"))
@@ -162,10 +162,10 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                 .build();
     }
 
-    private Update bookSeatUpdate(Hold hold, Booking booking, SeatId seatId) {
+    private Update bookSeatUpdate(ReservationCheckout reservation, Booking booking, SeatId seatId) {
         return Update.builder()
                 .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.seatPk(hold.eventId(), seatId))))
+                .key(Map.of(PK, string(DynamoKeys.seatPk(reservation.eventId(), seatId))))
                 .updateExpression("SET #status = :booked, #bookingId = :bookingId REMOVE #holdExpiresAt")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
                         + "AND #status = :checkout AND #holdId = :holdId")
@@ -179,19 +179,19 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#holdId", "holdId"))
                 .expressionAttributeValues(Map.of(
                         ":seatType", string("SEAT"),
-                        ":eventId", string(hold.eventId().value()),
+                        ":eventId", string(reservation.eventId().value()),
                         ":seatId", string(seatId.value()),
                         ":booked", string("BOOKED"),
                         ":checkout", string("CHECKOUT"),
                         ":bookingId", string(booking.id().value()),
-                        ":holdId", string(hold.id().value())))
+                        ":holdId", string(reservation.id().value())))
                 .build();
     }
 
-    private Update releaseSeatUpdate(Hold hold, SeatId seatId) {
+    private Update releaseSeatUpdate(ReservationCheckout reservation, SeatId seatId) {
         return Update.builder()
                 .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.seatPk(hold.eventId(), seatId))))
+                .key(Map.of(PK, string(DynamoKeys.seatPk(reservation.eventId(), seatId))))
                 .updateExpression("SET #status = :available REMOVE #holdId, #holdExpiresAt, #bookingId")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
                         + "AND #status = :checkout AND #holdId = :holdId")
@@ -205,15 +205,15 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#bookingId", "bookingId"))
                 .expressionAttributeValues(Map.of(
                         ":seatType", string("SEAT"),
-                        ":eventId", string(hold.eventId().value()),
+                        ":eventId", string(reservation.eventId().value()),
                         ":seatId", string(seatId.value()),
                         ":available", string("AVAILABLE"),
                         ":checkout", string("CHECKOUT"),
-                        ":holdId", string(hold.id().value())))
+                        ":holdId", string(reservation.id().value())))
                 .build();
     }
 
-    private void transact(Hold hold, List<TransactWriteItem> writes) {
+    private void transact(ReservationCheckout reservation, List<TransactWriteItem> writes) {
         try {
             DynamoBookingCall.execute("checkout transaction", () -> dynamoDb.transactWriteItems(
                     TransactWriteItemsRequest.builder().transactItems(writes).build()));
@@ -221,39 +221,42 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
             if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
                 throw new BookingStorageUnavailableException("checkout transaction", e);
             }
-            throw new CheckoutConflictException(hold.id(), e);
+            throw new CheckoutConflictException(reservation.id(), e);
         }
     }
 
-    private static void requireStartState(Hold hold, Booking booking) {
-        Objects.requireNonNull(hold, "hold");
+    private static void requireStartState(ReservationCheckout reservation, Booking booking) {
+        Objects.requireNonNull(reservation, "reservation");
         Objects.requireNonNull(booking, "booking");
-        if (hold.status() != HoldStatus.CHECKOUT_IN_PROGRESS || booking.status() != BookingStatus.PENDING_PAYMENT) {
-            throw new IllegalArgumentException("checkout must start with checkout hold and pending booking");
+        if (reservation.status() != ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS
+                || booking.status() != BookingStatus.PENDING_PAYMENT) {
+            throw new IllegalArgumentException("checkout must start with checkout reservation and pending booking");
         }
-        requireSameCheckoutScope(hold, booking);
+        requireSameCheckoutScope(reservation, booking);
     }
 
-    private static void requireFinalState(Hold hold, Booking booking, HoldStatus holdStatus, BookingStatus bookingStatus) {
-        Objects.requireNonNull(hold, "hold");
+    private static void requireFinalState(
+            ReservationCheckout reservation, Booking booking, BookingStatus bookingStatus) {
+        Objects.requireNonNull(reservation, "reservation");
         Objects.requireNonNull(booking, "booking");
-        if (hold.status() != holdStatus || booking.status() != bookingStatus) {
+        if (reservation.status() != ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS
+                || booking.status() != bookingStatus) {
             throw new IllegalArgumentException("terminal checkout state does not match requested operation");
         }
-        requireSameCheckoutScope(hold, booking);
+        requireSameCheckoutScope(reservation, booking);
     }
 
-    private static void requireSameCheckoutScope(Hold hold, Booking booking) {
-        if (!hold.id().equals(booking.holdId())) {
+    private static void requireSameCheckoutScope(ReservationCheckout reservation, Booking booking) {
+        if (!reservation.id().equals(booking.holdId())) {
             throw new IllegalArgumentException("booking does not belong to hold");
         }
-        if (!hold.eventId().equals(booking.eventId())) {
+        if (!reservation.eventId().equals(booking.eventId())) {
             throw new IllegalArgumentException("booking does not belong to hold event");
         }
-        if (!hold.userId().equals(booking.userId())) {
+        if (!reservation.userId().equals(booking.userId())) {
             throw new IllegalArgumentException("booking does not belong to hold user");
         }
-        if (!hold.totalPrice().equals(booking.totalPrice())) {
+        if (!reservation.totalPrice().equals(booking.totalPrice())) {
             throw new IllegalArgumentException("booking price does not match hold price");
         }
     }

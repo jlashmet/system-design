@@ -8,12 +8,12 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
-import com.systemdesign.ticketmaster.booking.domain.Hold;
-import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
 import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -22,19 +22,20 @@ import java.util.Objects;
 public final class ReconcileBookingHandler {
     private final EventWriteAuthority eventWriteAuthority;
     private final BookingRepository bookingRepository;
-    private final HoldRepository holdRepository;
+    private final ReservationCheckoutService reservationCheckoutService;
     private final CheckoutGateway checkoutGateway;
     private final PaymentGateway paymentGateway;
     private final Clock clock;
     private final Duration pendingBackoff;
 
     public ReconcileBookingHandler(EventWriteAuthority eventWriteAuthority,
-                                   BookingRepository bookingRepository, HoldRepository holdRepository,
+                                   BookingRepository bookingRepository,
+                                   ReservationCheckoutService reservationCheckoutService,
                                    CheckoutGateway checkoutGateway, PaymentGateway paymentGateway,
                                    Clock clock, Duration pendingBackoff) {
         this.eventWriteAuthority = Objects.requireNonNull(eventWriteAuthority, "eventWriteAuthority");
         this.bookingRepository = Objects.requireNonNull(bookingRepository, "bookingRepository");
-        this.holdRepository = Objects.requireNonNull(holdRepository, "holdRepository");
+        this.reservationCheckoutService = Objects.requireNonNull(reservationCheckoutService, "reservationCheckoutService");
         this.checkoutGateway = Objects.requireNonNull(checkoutGateway, "checkoutGateway");
         this.paymentGateway = Objects.requireNonNull(paymentGateway, "paymentGateway");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -62,11 +63,6 @@ public final class ReconcileBookingHandler {
         return reconcileAuthorized(booking);
     }
 
-    /**
-     * Best-effort scheduler backoff after an unexpected per-booking failure. The due Booking is
-     * already known from the reconciliation index, but write ownership is rechecked before moving
-     * its retry time. Terminal/stale entries are ignored and storage failures still propagate.
-     */
     public void deferAfterFailure(Booking booking) {
         Objects.requireNonNull(booking, "booking");
         if (booking.status() != BookingStatus.PENDING_PAYMENT) return;
@@ -75,20 +71,20 @@ public final class ReconcileBookingHandler {
     }
 
     private Booking reconcileAuthorized(Booking booking) {
-        Hold hold = loadHold(booking);
+        ReservationCheckout reservation = loadReservation(booking);
         Booking withIntent = ensurePaymentIntent(booking);
         PaymentIntentStatus paymentStatus = getPaymentStatusOrReschedule(withIntent);
-        if (paymentStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, hold);
+        if (paymentStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, reservation);
         if (paymentStatus == PaymentIntentStatus.FAILED || paymentStatus == PaymentIntentStatus.CANCELED) {
-            return fail(withIntent, hold);
+            return fail(withIntent, reservation);
         }
         Instant checkoutDeadline = Objects.requireNonNull(
-                hold.checkoutExpiresAt(), "pending booking hold must have checkout expiration");
+                reservation.checkoutExpiresAt(), "pending booking hold must have checkout expiration");
         if (!clock.instant().isBefore(checkoutDeadline)) {
             PaymentIntentStatus cancelStatus = cancelPaymentOrReschedule(withIntent);
-            if (cancelStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, hold);
+            if (cancelStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, reservation);
             if (cancelStatus == PaymentIntentStatus.FAILED || cancelStatus == PaymentIntentStatus.CANCELED) {
-                return fail(withIntent, hold);
+                return fail(withIntent, reservation);
             }
         }
         return reschedule(withIntent);
@@ -117,22 +113,20 @@ public final class ReconcileBookingHandler {
         }
     }
 
-    private Booking confirm(Booking booking, Hold hold) {
-        Hold converted = hold.convert();
+    private Booking confirm(Booking booking, ReservationCheckout reservation) {
         Booking confirmed = booking.confirm();
         try {
-            checkoutGateway.finalizeBooking(converted, confirmed);
+            checkoutGateway.finalizeBooking(reservation, confirmed);
             return confirmed;
         } catch (CheckoutConflictException conflict) {
             return terminalAfterConcurrentFinalization(booking.id(), BookingStatus.CONFIRMED, conflict);
         }
     }
 
-    private Booking fail(Booking booking, Hold hold) {
-        Hold failedHold = hold.fail();
+    private Booking fail(Booking booking, ReservationCheckout reservation) {
         Booking failedBooking = booking.fail();
         try {
-            checkoutGateway.failBooking(failedHold, failedBooking);
+            checkoutGateway.failBooking(reservation, failedBooking);
             return failedBooking;
         } catch (CheckoutConflictException conflict) {
             return terminalAfterConcurrentFinalization(booking.id(), BookingStatus.FAILED, conflict);
@@ -171,9 +165,9 @@ public final class ReconcileBookingHandler {
         return rescheduled;
     }
 
-    private Hold loadHold(Booking booking) {
-        Hold hold = holdRepository.findById(booking.holdId())
+    private ReservationCheckout loadReservation(Booking booking) {
+        ReservationCheckout reservation = reservationCheckoutService.findById(booking.holdId())
                 .orElseThrow(() -> new IllegalStateException("hold not found for booking: " + booking.id().value()));
-        return ReconciliationScopeGuard.requireMatchingHold(booking, hold);
+        return ReconciliationScopeGuard.requireMatchingReservation(booking, reservation);
     }
 }

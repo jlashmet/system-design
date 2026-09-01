@@ -1,7 +1,7 @@
 package com.systemdesign.ticketmaster.booking.domain;
 
 public interface CheckoutGateway {
-    void startCheckout(Hold checkoutHold, Booking pendingBooking);
-    void finalizeBooking(Hold convertedHold, Booking confirmedBooking);
-    void failBooking(Hold failedHold, Booking failedBooking);
+    void startCheckout(ReservationCheckout reservation, Booking pendingBooking);
+    void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking);
+    void failBooking(ReservationCheckout reservation, Booking failedBooking);
 }

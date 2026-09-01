@@ -68,7 +68,7 @@ public final class StartCheckoutHandler {
 
         try {
             checkoutGateway.startCheckout(reservation, booking);
-            return ensurePaymentIntent(booking);
+            return createAndPersistPaymentIntent(booking);
         } catch (CheckoutConflictException conflict) {
             return findIdempotentBooking(command)
                     .map(bookingAfterConflict -> ensureSameScope(command, bookingAfterConflict))
@@ -104,7 +104,10 @@ public final class StartCheckoutHandler {
         ReservationCheckout reservation = reservationCheckoutService.findById(booking.holdId())
                 .orElseThrow(() -> new HoldNotFoundException(booking.holdId()));
         requirePaymentReservationScope(booking, reservation);
+        return createAndPersistPaymentIntent(booking);
+    }
 
+    private StartCheckoutResult createAndPersistPaymentIntent(Booking booking) {
         PaymentIntent intent = paymentGateway.createPaymentIntent(
                 booking.eventId(), booking.id(), booking.totalPrice(), booking.id().value());
         Booking withIntent = booking.attachPaymentIntent(intent.id());

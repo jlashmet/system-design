@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
@@ -58,6 +59,13 @@ class BookingExceptionHandlerTest {
         givenHoldNotFound();
         whenExceptionIsHandled();
         thenExpectNotFound("Hold not found");
+    }
+
+    @Test
+    void expiredCheckoutIsConflict() {
+        givenCheckoutExpired();
+        whenExceptionIsHandled();
+        thenExpectConflict("Checkout expired");
     }
 
     @Test
@@ -122,6 +130,11 @@ class BookingExceptionHandlerTest {
         response = null;
     }
 
+    private void givenCheckoutExpired() {
+        exception = new CheckoutExpiredException(new HoldId("hold-expired"));
+        response = null;
+    }
+
     private void givenWaitingRoomEntryNotFound() {
         exception = new WaitingRoomEntryNotFoundException(
                 new EventId("event-123"), new UserId("user-missing"));
@@ -160,6 +173,8 @@ class BookingExceptionHandlerTest {
             response = handler.holdOwnership(ownership);
         } else if (exception instanceof HoldNotFoundException notFound) {
             response = handler.holdNotFound(notFound);
+        } else if (exception instanceof CheckoutExpiredException expired) {
+            response = handler.checkoutExpired(expired);
         } else if (exception instanceof WaitingRoomEntryNotFoundException notFound) {
             response = handler.waitingRoomEntryNotFound(notFound);
         } else if (exception instanceof WaitingRoomDisabledException disabled) {

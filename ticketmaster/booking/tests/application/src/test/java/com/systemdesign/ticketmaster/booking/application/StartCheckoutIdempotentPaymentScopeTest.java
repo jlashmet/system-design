@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
@@ -73,7 +74,7 @@ class StartCheckoutIdempotentPaymentScopeTest {
 
         assertThatThrownBy(() -> handler.handle(
                         new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
-                .isInstanceOf(RuntimeException.class)
+                .isInstanceOf(CheckoutExpiredException.class)
                 .hasMessage("checkout expired for hold hold-1");
         assertThat(payments.createCalls).isZero();
         assertThat(bookings.saveIntentCalls).isZero();

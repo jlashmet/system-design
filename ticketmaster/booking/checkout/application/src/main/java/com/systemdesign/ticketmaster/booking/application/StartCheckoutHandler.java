@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
@@ -103,7 +104,7 @@ public final class StartCheckoutHandler {
 
         ReservationCheckout reservation = reservationCheckoutService.findById(booking.holdId())
                 .orElseThrow(() -> new HoldNotFoundException(booking.holdId()));
-        requirePaymentReservationScope(booking, reservation);
+        requirePaymentReservationScope(booking, reservation, clock.instant());
         return createAndPersistPaymentIntent(booking);
     }
 
@@ -115,7 +116,8 @@ public final class StartCheckoutHandler {
         return new StartCheckoutResult(withIntent, intent.id());
     }
 
-    private static void requirePaymentReservationScope(Booking booking, ReservationCheckout reservation) {
+    private static void requirePaymentReservationScope(
+            Booking booking, ReservationCheckout reservation, Instant now) {
         if (!reservation.id().equals(booking.holdId()) || !reservation.eventId().equals(booking.eventId())) {
             throw new IllegalStateException("checkout reservation scope mismatch for " + booking.id().value());
         }
@@ -127,6 +129,9 @@ public final class StartCheckoutHandler {
         }
         if (reservation.status() != ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS) {
             throw new IllegalStateException("checkout reservation is not in checkout for " + booking.id().value());
+        }
+        if (!reservation.checkoutExpiresAt().isAfter(now)) {
+            throw new CheckoutExpiredException(reservation.id());
         }
     }
 

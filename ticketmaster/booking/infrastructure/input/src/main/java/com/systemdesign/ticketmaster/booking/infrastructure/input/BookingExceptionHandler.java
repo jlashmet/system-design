@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
@@ -51,6 +52,13 @@ public final class BookingExceptionHandler {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
         detail.setTitle("Hold not found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
+    }
+
+    @ExceptionHandler(CheckoutExpiredException.class)
+    ResponseEntity<ProblemDetail> checkoutExpired(CheckoutExpiredException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
+        detail.setTitle("Checkout expired");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(detail);
     }
 
     @ExceptionHandler(WaitingRoomEntryNotFoundException.class)

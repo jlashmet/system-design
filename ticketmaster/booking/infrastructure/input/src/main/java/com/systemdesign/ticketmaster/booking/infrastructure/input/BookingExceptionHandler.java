@@ -1,5 +1,6 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
+import com.systemdesign.ticketmaster.booking.admission.infrastructure.AdmissionStorageUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
@@ -14,7 +15,6 @@ import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
 import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
-import com.systemdesign.ticketmaster.booking.infrastructure.output.AdmissionStorageUnavailableException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;

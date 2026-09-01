@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.controlplane.domain.OwnershipConflictExcept
 import com.systemdesign.ticketmaster.controlplane.domain.RegionId;
 import io.floci.testcontainers.FlociContainer;
 import java.net.URI;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -19,11 +20,14 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
+import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 @Testcontainers
@@ -82,6 +86,31 @@ class DynamoEventOwnershipRepositoryIT {
                 .contains(new EventOwnership(EVENT_ID, EAST, 2));
     }
 
+    @Test
+    void rejectsOwnershipRowWhosePayloadEventDoesNotMatchKey() {
+        givenRepository();
+        putOwnershipRow("event-other", WEST, 1);
+
+        assertThatThrownBy(() -> repository.findByEventId(EVENT_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("event ownership identity mismatch for event-123");
+    }
+
+    @Test
+    void rejectsTransferWithoutMutatingOwnershipRowWhosePayloadEventDoesNotMatchKey() {
+        givenRepository();
+        putOwnershipRow("event-other", WEST, 1);
+
+        assertThatThrownBy(() -> repository.transfer(EVENT_ID, WEST, 1, EAST))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("event ownership identity mismatch for event-123");
+
+        Map<String, AttributeValue> row = rawOwnershipRow();
+        assertThat(row.get("eventId").s()).isEqualTo("event-other");
+        assertThat(row.get("ownerRegion").s()).isEqualTo(WEST.value());
+        assertThat(row.get("epoch").n()).isEqualTo("1");
+    }
+
     private void givenRepository() {
         dynamoDb = DynamoDbClient.builder()
                 .endpointOverride(URI.create(FLOCI.getEndpoint()))
@@ -103,5 +132,33 @@ class DynamoEventOwnershipRepositoryIT {
                         .build())
                 .build());
         repository = new DynamoEventOwnershipRepository(dynamoDb, tableName);
+    }
+
+    private void putOwnershipRow(String payloadEventId, RegionId owner, long epoch) {
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(Map.of(
+                        "pk", string(DynamoEventOwnershipRepository.pk(EVENT_ID)),
+                        "eventId", string(payloadEventId),
+                        "ownerRegion", string(owner.value()),
+                        "epoch", number(epoch)))
+                .build());
+    }
+
+    private Map<String, AttributeValue> rawOwnershipRow() {
+        return dynamoDb.getItem(GetItemRequest.builder()
+                        .tableName(tableName)
+                        .key(Map.of("pk", string(DynamoEventOwnershipRepository.pk(EVENT_ID))))
+                        .consistentRead(true)
+                        .build())
+                .item();
+    }
+
+    private static AttributeValue string(String value) {
+        return AttributeValue.builder().s(value).build();
+    }
+
+    private static AttributeValue number(long value) {
+        return AttributeValue.builder().n(Long.toString(value)).build();
     }
 }

@@ -73,6 +73,21 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
 
     @Test
     void finalizationRejectsStoredBookingScopeDrift() {
+        Scenario scenario = startedCheckout();
+        overwriteStoredUser(DynamoKeys.bookingPk(scenario.pending().id()), new UserId("user-corrupt"));
+
+        assertTerminalConflictLeavesCheckoutUntouched(scenario);
+    }
+
+    @Test
+    void finalizationRejectsStoredHoldScopeDrift() {
+        Scenario scenario = startedCheckout();
+        overwriteStoredUser(DynamoKeys.holdPk(scenario.active().id()), new UserId("user-corrupt"));
+
+        assertTerminalConflictLeavesCheckoutUntouched(scenario);
+    }
+
+    private Scenario startedCheckout() {
         initializeDynamo();
         DynamoHoldRepository holdRepository = new DynamoHoldRepository(dynamoDb, tableName);
         DynamoBookingRepository bookingRepository = new DynamoBookingRepository(dynamoDb, tableName);
@@ -95,14 +110,16 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
                 pending.id(), reservation, pending.checkoutIdempotencyKey(),
                 pending.createdAt(), pending.nextReconcileAt(), pending.reconcileShard()));
         bookingRepository.savePaymentIntent(pending);
-        overwriteStoredBookingUser(pending.id(), new UserId("user-corrupt"));
+        return new Scenario(holdRepository, gateway, active, reservation, pending);
+    }
 
-        assertThatThrownBy(() -> gateway.finalizeBooking(reservation, pending.confirm()))
+    private void assertTerminalConflictLeavesCheckoutUntouched(Scenario scenario) {
+        assertThatThrownBy(() -> scenario.gateway().finalizeBooking(
+                scenario.reservation(), scenario.pending().confirm()))
                 .isInstanceOf(CheckoutConflictException.class);
 
-        assertThat(holdRepository.findById(active.id()).orElseThrow().status())
-                .isEqualTo(HoldStatus.CHECKOUT_IN_PROGRESS);
-        assertThat(rawBooking(pending.id()).get("status").s()).isEqualTo("PENDING_PAYMENT");
+        assertThat(rawHold(scenario.active().id()).get("status").s()).isEqualTo("CHECKOUT_IN_PROGRESS");
+        assertThat(rawBooking(scenario.pending().id()).get("status").s()).isEqualTo("PENDING_PAYMENT");
         assertThat(rawSeat().get("status").s()).isEqualTo("CHECKOUT");
     }
 
@@ -146,29 +163,32 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
                 .build());
     }
 
-    private void overwriteStoredBookingUser(BookingId bookingId, UserId userId) {
+    private void overwriteStoredUser(String pk, UserId userId) {
         dynamoDb.updateItem(UpdateItemRequest.builder()
                 .tableName(tableName)
-                .key(Map.of("pk", string(DynamoKeys.bookingPk(bookingId))))
+                .key(Map.of("pk", string(pk)))
                 .updateExpression("SET #userId = :userId")
                 .expressionAttributeNames(Map.of("#userId", "userId"))
                 .expressionAttributeValues(Map.of(":userId", string(userId.value())))
                 .build());
     }
 
+    private Map<String, AttributeValue> rawHold(HoldId holdId) {
+        return rawItem(DynamoKeys.holdPk(holdId));
+    }
+
     private Map<String, AttributeValue> rawBooking(BookingId bookingId) {
-        return dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of("pk", string(DynamoKeys.bookingPk(bookingId))))
-                        .consistentRead(true)
-                        .build())
-                .item();
+        return rawItem(DynamoKeys.bookingPk(bookingId));
     }
 
     private Map<String, AttributeValue> rawSeat() {
+        return rawItem(DynamoKeys.seatPk(EVENT_ID, SEAT_ID));
+    }
+
+    private Map<String, AttributeValue> rawItem(String pk) {
         return dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
-                        .key(Map.of("pk", string(DynamoKeys.seatPk(EVENT_ID, SEAT_ID))))
+                        .key(Map.of("pk", string(pk)))
                         .consistentRead(true)
                         .build())
                 .item();
@@ -177,4 +197,11 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
     private static AttributeValue string(String value) {
         return AttributeValue.builder().s(value).build();
     }
+
+    private record Scenario(
+            DynamoHoldRepository holdRepository,
+            DynamoCheckoutGateway gateway,
+            Hold active,
+            ReservationCheckout reservation,
+            Booking pending) {}
 }

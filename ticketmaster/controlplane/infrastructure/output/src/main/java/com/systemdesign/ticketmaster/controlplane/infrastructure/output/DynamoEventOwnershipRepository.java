@@ -34,14 +34,9 @@ public final class DynamoEventOwnershipRepository implements EventOwnershipRepos
     @Override
     public Optional<EventOwnership> findByEventId(EventId eventId) {
         Objects.requireNonNull(eventId, "eventId");
-        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
-                        .tableName(tableName)
-                        .key(Map.of(PK, string(pk(eventId))))
-                        .consistentRead(true)
-                        .build())
-                .item();
+        Map<String, AttributeValue> item = readItem(eventId);
         if (item == null || item.isEmpty()) return Optional.empty();
-        return Optional.of(toDomain(item));
+        return Optional.of(toDomain(eventId, item));
     }
 
     @Override
@@ -72,11 +67,14 @@ public final class DynamoEventOwnershipRepository implements EventOwnershipRepos
                             .tableName(tableName)
                             .key(Map.of(PK, string(pk(eventId))))
                             .updateExpression("SET #owner = :newOwner, #epoch = :nextEpoch")
-                            .conditionExpression("#owner = :expectedOwner AND #epoch = :expectedEpoch")
+                            .conditionExpression(
+                                    "#eventId = :eventId AND #owner = :expectedOwner AND #epoch = :expectedEpoch")
                             .expressionAttributeNames(Map.of(
+                                    "#eventId", EVENT_ID,
                                     "#owner", OWNER_REGION,
                                     "#epoch", EPOCH))
                             .expressionAttributeValues(Map.of(
+                                    ":eventId", string(eventId.value()),
                                     ":newOwner", string(newOwner.value()),
                                     ":nextEpoch", number(nextEpoch),
                                     ":expectedOwner", string(expectedOwner.value()),
@@ -84,8 +82,12 @@ public final class DynamoEventOwnershipRepository implements EventOwnershipRepos
                             .returnValues(ReturnValue.ALL_NEW)
                             .build())
                     .attributes();
-            return toDomain(updated);
+            return toDomain(eventId, updated);
         } catch (ConditionalCheckFailedException e) {
+            Map<String, AttributeValue> current = readItem(eventId);
+            if (current != null && !current.isEmpty()) {
+                requireMatchingIdentity(eventId, current);
+            }
             throw new OwnershipConflictException(
                     "event " + eventId.value() + " ownership changed before transfer");
         }
@@ -93,6 +95,15 @@ public final class DynamoEventOwnershipRepository implements EventOwnershipRepos
 
     static String pk(EventId eventId) {
         return "EVENT#" + eventId.value();
+    }
+
+    private Map<String, AttributeValue> readItem(EventId eventId) {
+        return dynamoDb.getItem(GetItemRequest.builder()
+                        .tableName(tableName)
+                        .key(Map.of(PK, string(pk(eventId))))
+                        .consistentRead(true)
+                        .build())
+                .item();
     }
 
     private static Map<String, AttributeValue> toItem(EventOwnership ownership) {
@@ -103,11 +114,26 @@ public final class DynamoEventOwnershipRepository implements EventOwnershipRepos
                 EPOCH, number(ownership.epoch()));
     }
 
-    private static EventOwnership toDomain(Map<String, AttributeValue> item) {
+    private static EventOwnership toDomain(EventId expectedEventId, Map<String, AttributeValue> item) {
+        requireMatchingIdentity(expectedEventId, item);
         return new EventOwnership(
-                new EventId(item.get(EVENT_ID).s()),
+                expectedEventId,
                 new RegionId(item.get(OWNER_REGION).s()),
                 Long.parseLong(item.get(EPOCH).n()));
+    }
+
+    private static void requireMatchingIdentity(EventId expectedEventId, Map<String, AttributeValue> item) {
+        AttributeValue storedPk = item.get(PK);
+        AttributeValue storedEventId = item.get(EVENT_ID);
+        if (storedPk == null
+                || storedPk.s() == null
+                || !pk(expectedEventId).equals(storedPk.s())
+                || storedEventId == null
+                || storedEventId.s() == null
+                || !expectedEventId.value().equals(storedEventId.s())) {
+            throw new IllegalStateException(
+                    "event ownership identity mismatch for " + expectedEventId.value());
+        }
     }
 
     private static AttributeValue string(String value) {

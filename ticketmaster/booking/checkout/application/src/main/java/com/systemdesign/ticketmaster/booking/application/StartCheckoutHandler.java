@@ -6,11 +6,13 @@ import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
+import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -99,11 +101,30 @@ public final class StartCheckoutHandler {
             return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
         }
 
+        ReservationCheckout reservation = reservationCheckoutService.findById(booking.holdId())
+                .orElseThrow(() -> new HoldNotFoundException(booking.holdId()));
+        requirePaymentReservationScope(booking, reservation);
+
         PaymentIntent intent = paymentGateway.createPaymentIntent(
                 booking.eventId(), booking.id(), booking.totalPrice(), booking.id().value());
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
         return new StartCheckoutResult(withIntent, intent.id());
+    }
+
+    private static void requirePaymentReservationScope(Booking booking, ReservationCheckout reservation) {
+        if (!reservation.id().equals(booking.holdId()) || !reservation.eventId().equals(booking.eventId())) {
+            throw new IllegalStateException("checkout reservation scope mismatch for " + booking.id().value());
+        }
+        if (!reservation.userId().equals(booking.userId())) {
+            throw new HoldOwnershipException(booking.holdId(), booking.userId());
+        }
+        if (!reservation.totalPrice().equals(booking.totalPrice())) {
+            throw new IllegalStateException("checkout reservation price mismatch for " + booking.id().value());
+        }
+        if (reservation.status() != ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS) {
+            throw new IllegalStateException("checkout reservation is not in checkout for " + booking.id().value());
+        }
     }
 
     private static Duration requirePositive(Duration duration, String name) {

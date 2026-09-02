@@ -3,6 +3,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 import com.systemdesign.ticketmaster.booking.admission.infrastructure.AdmissionStorageUnavailableException;
 import com.systemdesign.ticketmaster.booking.checkout.infrastructure.BookingStorageUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
+import com.systemdesign.ticketmaster.booking.domain.BookingNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
@@ -49,10 +50,10 @@ public final class BookingExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
     }
 
-    @ExceptionHandler(HoldNotFoundException.class)
-    ResponseEntity<ProblemDetail> holdNotFound(HoldNotFoundException exception) {
+    @ExceptionHandler({HoldNotFoundException.class, BookingNotFoundException.class})
+    ResponseEntity<ProblemDetail> notFound(RuntimeException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
-        detail.setTitle("Hold not found");
+        detail.setTitle(exception instanceof BookingNotFoundException ? "Booking not found" : "Hold not found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
     }
 

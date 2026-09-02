@@ -9,12 +9,9 @@ public record Booking(
         UserId userId,
         EventId eventId,
         HoldId holdId,
-        BookingStatus status,
+        State state,
         Price totalPrice,
         String checkoutIdempotencyKey,
-        String paymentIntentId,
-        Instant nextReconcileAt,
-        Integer reconcileShard,
         Instant createdAt) {
 
     public Booking {
@@ -22,54 +19,151 @@ public record Booking(
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(holdId, "holdId");
-        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(state, "state");
         Objects.requireNonNull(totalPrice, "totalPrice");
         Objects.requireNonNull(checkoutIdempotencyKey, "checkoutIdempotencyKey");
         Objects.requireNonNull(createdAt, "createdAt");
         if (checkoutIdempotencyKey.isBlank()) throw new IllegalArgumentException("idempotency key must not be blank");
-        if (status == BookingStatus.PENDING_PAYMENT && (nextReconcileAt == null || reconcileShard == null)) {
-            throw new IllegalArgumentException("pending booking must be scheduled for reconciliation");
-        }
-        if (reconcileShard != null && reconcileShard < 0) throw new IllegalArgumentException("reconcile shard must not be negative");
     }
 
     public static Booking pending(BookingId id, ReservationCheckout reservation, String checkoutIdempotencyKey,
                                   Instant createdAt, Instant nextReconcileAt, int reconcileShard) {
         Objects.requireNonNull(reservation, "reservation");
-        return new Booking(id, reservation.userId(), reservation.eventId(), reservation.id(), BookingStatus.PENDING_PAYMENT,
-                reservation.totalPrice(), checkoutIdempotencyKey, null, nextReconcileAt, reconcileShard, createdAt);
+        return new Booking(id, reservation.userId(), reservation.eventId(), reservation.id(),
+                new PaymentIntentPending(nextReconcileAt, reconcileShard), reservation.totalPrice(),
+                checkoutIdempotencyKey, createdAt);
+    }
+
+    public BookingStatus status() {
+        return switch (state) {
+            case PaymentIntentPending ignored, PaymentPending ignored -> BookingStatus.PENDING_PAYMENT;
+            case Confirmed ignored -> BookingStatus.CONFIRMED;
+            case FailedBeforePaymentIntent ignored, FailedAfterPaymentIntent ignored -> BookingStatus.FAILED;
+        };
+    }
+
+    public String paymentIntentId() {
+        return switch (state) {
+            case PaymentPending pending -> pending.paymentIntentId();
+            case Confirmed confirmed -> confirmed.paymentIntentId();
+            case FailedAfterPaymentIntent failed -> failed.paymentIntentId();
+            case PaymentIntentPending ignored, FailedBeforePaymentIntent ignored -> null;
+        };
     }
 
     public Optional<String> paymentIntentIdOptional() {
-        return Optional.ofNullable(paymentIntentId);
+        return Optional.ofNullable(paymentIntentId());
+    }
+
+    public Instant nextReconcileAt() {
+        return switch (state) {
+            case PaymentIntentPending pending -> pending.nextReconcileAt();
+            case PaymentPending pending -> pending.nextReconcileAt();
+            case Confirmed ignored, FailedBeforePaymentIntent ignored, FailedAfterPaymentIntent ignored -> null;
+        };
+    }
+
+    public Integer reconcileShard() {
+        return switch (state) {
+            case PaymentIntentPending pending -> pending.reconcileShard();
+            case PaymentPending pending -> pending.reconcileShard();
+            case Confirmed ignored, FailedBeforePaymentIntent ignored, FailedAfterPaymentIntent ignored -> null;
+        };
+    }
+
+    public Optional<Instant> nextReconcileAtOptional() {
+        return Optional.ofNullable(nextReconcileAt());
+    }
+
+    public Optional<Integer> reconcileShardOptional() {
+        return Optional.ofNullable(reconcileShard());
     }
 
     public Booking attachPaymentIntent(String intentId) {
         Objects.requireNonNull(intentId, "intentId");
-        if (status != BookingStatus.PENDING_PAYMENT) throw new IllegalStateException("booking is not pending payment");
-        return new Booking(id, userId, eventId, holdId, status, totalPrice, checkoutIdempotencyKey,
-                intentId, nextReconcileAt, reconcileShard, createdAt);
+        if (!(state instanceof PaymentIntentPending pending)) {
+            throw new IllegalStateException("booking is not awaiting a payment intent");
+        }
+        return new Booking(id, userId, eventId, holdId,
+                new PaymentPending(intentId, pending.nextReconcileAt(), pending.reconcileShard()),
+                totalPrice, checkoutIdempotencyKey, createdAt);
     }
 
     public Booking rescheduleReconciliation(Instant nextAttemptAt) {
         Objects.requireNonNull(nextAttemptAt, "nextAttemptAt");
-        if (status != BookingStatus.PENDING_PAYMENT) throw new IllegalStateException("booking is not pending payment");
-        if (!nextAttemptAt.isAfter(nextReconcileAt)) {
-            throw new IllegalArgumentException("next reconciliation attempt must move forward");
+        if (state instanceof PaymentIntentPending pending) {
+            requireLater(nextAttemptAt, pending.nextReconcileAt());
+            return new Booking(id, userId, eventId, holdId,
+                    new PaymentIntentPending(nextAttemptAt, pending.reconcileShard()),
+                    totalPrice, checkoutIdempotencyKey, createdAt);
         }
-        return new Booking(id, userId, eventId, holdId, status, totalPrice, checkoutIdempotencyKey,
-                paymentIntentId, nextAttemptAt, reconcileShard, createdAt);
+        if (state instanceof PaymentPending pending) {
+            requireLater(nextAttemptAt, pending.nextReconcileAt());
+            return new Booking(id, userId, eventId, holdId,
+                    new PaymentPending(pending.paymentIntentId(), nextAttemptAt, pending.reconcileShard()),
+                    totalPrice, checkoutIdempotencyKey, createdAt);
+        }
+        throw new IllegalStateException("booking is not pending payment");
     }
 
     public Booking confirm() {
-        if (status != BookingStatus.PENDING_PAYMENT) throw new IllegalStateException("booking is not pending payment");
-        return new Booking(id, userId, eventId, holdId, BookingStatus.CONFIRMED, totalPrice,
-                checkoutIdempotencyKey, paymentIntentId, null, null, createdAt);
+        if (!(state instanceof PaymentPending pending)) {
+            throw new IllegalStateException("booking has no confirmed payment intent");
+        }
+        return new Booking(id, userId, eventId, holdId, new Confirmed(pending.paymentIntentId()),
+                totalPrice, checkoutIdempotencyKey, createdAt);
     }
 
     public Booking fail() {
-        if (status != BookingStatus.PENDING_PAYMENT) throw new IllegalStateException("booking is not pending payment");
-        return new Booking(id, userId, eventId, holdId, BookingStatus.FAILED, totalPrice,
-                checkoutIdempotencyKey, paymentIntentId, null, null, createdAt);
+        State failed = switch (state) {
+            case PaymentIntentPending ignored -> new FailedBeforePaymentIntent();
+            case PaymentPending pending -> new FailedAfterPaymentIntent(pending.paymentIntentId());
+            case Confirmed ignored, FailedBeforePaymentIntent ignored, FailedAfterPaymentIntent ignored ->
+                    throw new IllegalStateException("booking is not pending payment");
+        };
+        return new Booking(id, userId, eventId, holdId, failed, totalPrice, checkoutIdempotencyKey, createdAt);
+    }
+
+    private static void requireLater(Instant nextAttemptAt, Instant currentAttemptAt) {
+        if (!nextAttemptAt.isAfter(currentAttemptAt)) {
+            throw new IllegalArgumentException("next reconciliation attempt must move forward");
+        }
+    }
+
+    public sealed interface State permits PaymentIntentPending, PaymentPending, Confirmed,
+            FailedBeforePaymentIntent, FailedAfterPaymentIntent {
+    }
+
+    public record PaymentIntentPending(Instant nextReconcileAt, int reconcileShard) implements State {
+        public PaymentIntentPending {
+            Objects.requireNonNull(nextReconcileAt, "nextReconcileAt");
+            if (reconcileShard < 0) throw new IllegalArgumentException("reconcile shard must not be negative");
+        }
+    }
+
+    public record PaymentPending(String paymentIntentId, Instant nextReconcileAt, int reconcileShard) implements State {
+        public PaymentPending {
+            Objects.requireNonNull(paymentIntentId, "paymentIntentId");
+            if (paymentIntentId.isBlank()) throw new IllegalArgumentException("payment intent id must not be blank");
+            Objects.requireNonNull(nextReconcileAt, "nextReconcileAt");
+            if (reconcileShard < 0) throw new IllegalArgumentException("reconcile shard must not be negative");
+        }
+    }
+
+    public record Confirmed(String paymentIntentId) implements State {
+        public Confirmed {
+            Objects.requireNonNull(paymentIntentId, "paymentIntentId");
+            if (paymentIntentId.isBlank()) throw new IllegalArgumentException("payment intent id must not be blank");
+        }
+    }
+
+    public record FailedBeforePaymentIntent() implements State {
+    }
+
+    public record FailedAfterPaymentIntent(String paymentIntentId) implements State {
+        public FailedAfterPaymentIntent {
+            Objects.requireNonNull(paymentIntentId, "paymentIntentId");
+            if (paymentIntentId.isBlank()) throw new IllegalArgumentException("payment intent id must not be blank");
+        }
     }
 }

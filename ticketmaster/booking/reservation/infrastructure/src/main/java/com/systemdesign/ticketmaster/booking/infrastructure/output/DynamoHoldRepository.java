@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import com.systemdesign.ticketmaster.booking.domain.EventId;
+import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
 import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
@@ -44,10 +45,18 @@ public final class DynamoHoldRepository implements HoldRepository {
 
     private final DynamoDbClient dynamoDb;
     private final String tableName;
+    private final String localRegion;
 
-    public DynamoHoldRepository(DynamoDbClient dynamoDb, String tableName) {
+    public DynamoHoldRepository(DynamoDbClient dynamoDb, String tableName, String localRegion) {
         this.dynamoDb = Objects.requireNonNull(dynamoDb, "dynamoDb");
         this.tableName = Objects.requireNonNull(tableName, "tableName");
+        this.localRegion = requireText(localRegion, "localRegion");
+    }
+
+    DynamoHoldRepository(DynamoDbClient dynamoDb, String tableName) {
+        this.dynamoDb = Objects.requireNonNull(dynamoDb, "dynamoDb");
+        this.tableName = Objects.requireNonNull(tableName, "tableName");
+        this.localRegion = null;
     }
 
     @Override
@@ -118,7 +127,13 @@ public final class DynamoHoldRepository implements HoldRepository {
         }
         if (hold.seatIds().size() > 97) throw new IllegalArgumentException("a hold cannot contain more than 97 seats");
 
+        DynamoReservationEventFence.Fence fence = localRegion == null
+                ? null
+                : DynamoReservationEventFence.resolve(dynamoDb, tableName, hold.eventId(), localRegion);
         List<TransactWriteItem> writes = new ArrayList<>();
+        if (fence != null) {
+            writes.add(DynamoReservationEventFence.condition(tableName, hold.eventId(), fence));
+        }
         for (SeatId seatId : hold.seatIds()) {
             writes.add(TransactWriteItem.builder()
                     .update(seatClaimUpdate(hold, seatId, quote.prices().get(seatId), now))
@@ -146,6 +161,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         try {
             dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
         } catch (TransactionCanceledException e) {
+            if (fence != null) assertFenceUnchanged(hold.eventId(), fence);
             if (DynamoReservationTransactionCancellation.hasNonConditionalFailure(e)) {
                 throw new ReservationStorageUnavailableException("seat claim transaction", e);
             }
@@ -217,11 +233,25 @@ public final class DynamoHoldRepository implements HoldRepository {
         throw new UnsupportedOperationException("hold idempotency lookup requires event and user scope");
     }
 
+    private void assertFenceUnchanged(EventId eventId, DynamoReservationEventFence.Fence expected) {
+        DynamoReservationEventFence.Fence current =
+                DynamoReservationEventFence.resolve(dynamoDb, tableName, eventId, localRegion);
+        if (current.epoch() != expected.epoch()) {
+            throw new EventOwnershipUnavailableException(eventId, "event write epoch changed during seat claim");
+        }
+    }
+
     private static void requireMappingValue(Map<String, AttributeValue> mapping, String name, String expected) {
         AttributeValue value = mapping.get(name);
         if (value == null || value.s() == null || !expected.equals(value.s())) {
             throw new IllegalStateException("hold idempotency record has inconsistent " + name);
         }
+    }
+
+    private static String requireText(String value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.isBlank()) throw new IllegalArgumentException(name + " must not be blank");
+        return value;
     }
 
     private static void backoffBeforeQuoteRetry(int completedAttempt) {

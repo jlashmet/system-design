@@ -18,7 +18,6 @@
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-infrastructure</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-api</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-infrastructure</artifactId><version>${project.version}</version><scope>test</scope></dependency>
-        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-common</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-input</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-bootstrap</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>

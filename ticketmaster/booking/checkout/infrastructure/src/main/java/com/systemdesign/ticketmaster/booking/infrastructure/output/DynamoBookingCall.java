@@ -1,6 +1,6 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
-import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
+import com.systemdesign.ticketmaster.booking.checkout.infrastructure.BookingStorageUnavailableException;
 import java.util.Objects;
 import java.util.function.Supplier;
 import software.amazon.awssdk.core.exception.SdkClientException;

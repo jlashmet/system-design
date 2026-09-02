@@ -51,6 +51,7 @@ class BookingModuleBoundaryTest {
         assertFalse(paymentAggregator.contains("<module>application</module>"));
 
         String infrastructureAggregator = pom("../infrastructure/pom.xml");
+        assertFalse(infrastructureAggregator.contains("<module>common</module>"));
         assertFalse(infrastructureAggregator.contains("<module>output</module>"));
     }
 
@@ -59,6 +60,8 @@ class BookingModuleBoundaryTest {
         Path bookingDirectory = moduleDirectory().getParent();
         assertFalse(Files.exists(bookingDirectory.resolve("shared")),
                 "Booking must not reintroduce an ownerless shared module");
+        assertFalse(Files.exists(bookingDirectory.resolve("infrastructure/common")),
+                "Booking must not reintroduce an ownerless infrastructure/common module");
         assertFalse(Files.readString(bookingDirectory.resolve("pom.xml")).contains("<module>shared</module>"),
                 "Booking aggregator must not include a shared module");
 
@@ -82,6 +85,8 @@ class BookingModuleBoundaryTest {
                 "pom.xml")) {
             assertFalse(pom(relativePom).contains("booking-shared-domain"),
                     relativePom + " must not depend on booking-shared-domain");
+            assertFalse(pom(relativePom).contains("booking-infrastructure-common"),
+                    relativePom + " must not depend on booking-infrastructure-common");
         }
     }
 

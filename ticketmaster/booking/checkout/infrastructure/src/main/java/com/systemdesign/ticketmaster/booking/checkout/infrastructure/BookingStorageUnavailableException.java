@@ -1,4 +1,4 @@
-package com.systemdesign.ticketmaster.booking.infrastructure.common;
+package com.systemdesign.ticketmaster.booking.checkout.infrastructure;
 
 import java.util.Objects;
 

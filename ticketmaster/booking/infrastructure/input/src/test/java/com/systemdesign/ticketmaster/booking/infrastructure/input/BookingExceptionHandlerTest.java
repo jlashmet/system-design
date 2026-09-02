@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.systemdesign.ticketmaster.booking.checkout.infrastructure.BookingStorageUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
@@ -15,7 +16,6 @@ import com.systemdesign.ticketmaster.booking.domain.UserId;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomDisabledException;
 import com.systemdesign.ticketmaster.booking.domain.WaitingRoomEntryNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.WrongBookingRegionException;
-import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ProblemDetail;

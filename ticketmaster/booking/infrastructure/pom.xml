@@ -4,5 +4,5 @@
     <parent><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-aggregator</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
     <artifactId>booking-infrastructure-aggregator</artifactId>
     <packaging>pom</packaging>
-    <modules><module>common</module><module>input</module></modules>
+    <modules><module>input</module></modules>
 </project>

@@ -273,7 +273,7 @@ public final class DynamoHoldRepository implements HoldRepository {
                     "authoritative seat identity mismatch for " + eventId.value() + "/" + seatId.value());
         }
         AttributeValue amount = item.get("priceAmount");
-        AttributeValue currency = item.get("priceCurrency"));
+        AttributeValue currency = item.get("priceCurrency");
         if (amount == null || amount.s() == null || currency == null || currency.s() == null) {
             throw new IllegalStateException("authoritative seat is missing price: " + seatId.value());
         }

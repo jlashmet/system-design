@@ -131,6 +131,32 @@ paths:
         '409': { description: Hold is expired or not active }
         '421': { description: Request reached the wrong booking region; X-Booking-Region identifies the current owner }
         '503': { description: Booking ownership or authoritative storage is temporarily unavailable; retry may succeed }
+  /bookings/{bookingId}:
+    get:
+      tags: [Booking]
+      operationId: getBooking
+      summary: Get one booking owned by the authenticated user
+      parameters:
+        - in: path
+          name: bookingId
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-User-Id
+          required: true
+          description: Authenticated user identity supplied by the trusted request/authentication boundary
+          schema: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Current booking state
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingResponse' }
+        '404': { description: Booking does not exist or is not owned by the authenticated user }
+        '503': { description: Booking storage is temporarily unavailable; retry may succeed }
   /events/{eventId}/waiting-room:
     post:
       tags: [WaitingRoom]
@@ -234,6 +260,17 @@ components:
         bookingId: { type: string }
         status: { type: string }
         paymentIntentId: { type: string }
+    BookingResponse:
+      type: object
+      required: [bookingId, eventId, holdId, status, totalPrice, createdAt]
+      properties:
+        bookingId: { type: string }
+        eventId: { type: string }
+        holdId: { type: string }
+        status: { type: string }
+        totalPrice: { $ref: '#/components/schemas/Money' }
+        paymentIntentId: { type: string }
+        createdAt: { type: string, format: date-time }
     WaitingRoomEntryResponse:
       type: object
       required: [eventId, userId, joinedAt]

@@ -2,14 +2,19 @@ package com.systemdesign.ticketmaster.events.infrastructure.input;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.systemdesign.ticketmaster.events.api.model.CreateEventRequest;
 import com.systemdesign.ticketmaster.events.api.model.EventResponse;
+import com.systemdesign.ticketmaster.events.application.CreateEventHandler;
 import com.systemdesign.ticketmaster.events.application.GetEventHandler;
 import com.systemdesign.ticketmaster.events.domain.Event;
 import com.systemdesign.ticketmaster.events.domain.EventRepository;
 import com.systemdesign.ticketmaster.events.domain.EventStatus;
 import com.systemdesign.ticketmaster.events.domain.VenueId;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +37,33 @@ class EventsApiControllerTest {
         thenExpectUncachedNotFound();
     }
 
+    @Test
+    void createsScheduledEventAndReturnsCanonicalLocation() {
+        AtomicReference<Event> created = new AtomicReference<>();
+        controller = new EventsApiController(
+                new CreateEventHandler(created::set),
+                new GetEventHandler(eventId -> Optional.empty()));
+        CreateEventRequest request = new CreateEventRequest();
+        request.setEventId("event-new");
+        request.setName("Opening Night");
+        request.setVenueId("venue-9");
+        request.setStartsAt(OffsetDateTime.ofInstant(Instant.parse("2026-11-01T03:30:00Z"), ZoneOffset.UTC));
+        request.setCategory("CONCERT");
+        request.setDescription("Tour opener");
+
+        response = controller.createEvent(request);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(201);
+        assertThat(response.getHeaders().getLocation()).hasToString("/events/event-new");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo("SCHEDULED");
+        assertThat(created.get()).isNotNull();
+        assertThat(created.get().id().value()).isEqualTo("event-new");
+        assertThat(created.get().venueId().value()).isEqualTo("venue-9");
+        assertThat(created.get().startsAt()).isEqualTo(Instant.parse("2026-11-01T03:30:00Z"));
+        assertThat(created.get().status()).isEqualTo(EventStatus.SCHEDULED);
+    }
+
     private void givenExistingEvent() {
         EventRepository repository = eventId -> Optional.of(new Event(
                 eventId,
@@ -41,12 +73,14 @@ class EventsApiControllerTest {
                 "CONCERT",
                 EventStatus.SCHEDULED,
                 "Opening night"));
-        controller = new EventsApiController(new GetEventHandler(repository));
+        controller = new EventsApiController(new CreateEventHandler(event -> {}), new GetEventHandler(repository));
         response = null;
     }
 
     private void givenMissingEvent() {
-        controller = new EventsApiController(new GetEventHandler(eventId -> Optional.empty()));
+        controller = new EventsApiController(
+                new CreateEventHandler(event -> {}),
+                new GetEventHandler(eventId -> Optional.empty()));
         response = null;
     }
 

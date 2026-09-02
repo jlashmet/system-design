@@ -3,27 +3,6 @@ info:
   title: Ticketmaster Events API
   version: 0.0.1
 paths:
-  /admin/events:
-    post:
-      tags: [Events]
-      operationId: createEvent
-      summary: Create an event
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CreateEventRequest' }
-      responses:
-        '201':
-          description: Event created
-          headers:
-            Location:
-              schema: { type: string }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/EventResponse' }
-        '409': { description: Event ID already exists }
-        '503': { description: Event metadata storage is temporarily unavailable; retry may succeed }
   /events/{eventId}:
     get:
       tags: [Events]
@@ -50,16 +29,6 @@ paths:
         '503': { description: Event metadata storage is temporarily unavailable; retry may succeed }
 components:
   schemas:
-    CreateEventRequest:
-      type: object
-      required: [eventId, name, venueId, startsAt, category]
-      properties:
-        eventId: { type: string, minLength: 1 }
-        name: { type: string, minLength: 1 }
-        venueId: { type: string, minLength: 1 }
-        startsAt: { type: string, format: date-time }
-        category: { type: string, minLength: 1 }
-        description: { type: string }
     EventResponse:
       type: object
       required: [eventId, name, venueId, startsAt, category, status]

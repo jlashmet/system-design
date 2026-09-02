@@ -1,15 +1,15 @@
 package com.systemdesign.ticketmaster.events.application;
 
 import com.systemdesign.ticketmaster.events.domain.Event;
-import com.systemdesign.ticketmaster.events.domain.EventRepository;
 import com.systemdesign.ticketmaster.events.domain.EventStatus;
+import com.systemdesign.ticketmaster.events.domain.EventWriter;
 import java.util.Objects;
 
 public final class CreateEventHandler {
-    private final EventRepository eventRepository;
+    private final EventWriter eventWriter;
 
-    public CreateEventHandler(EventRepository eventRepository) {
-        this.eventRepository = Objects.requireNonNull(eventRepository, "eventRepository");
+    public CreateEventHandler(EventWriter eventWriter) {
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
     }
 
     public Event handle(CreateEventCommand command) {
@@ -22,7 +22,7 @@ public final class CreateEventHandler {
                 command.category(),
                 EventStatus.SCHEDULED,
                 command.description());
-        eventRepository.create(event);
+        eventWriter.create(event);
         return event;
     }
 }

@@ -1,6 +1,7 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import com.systemdesign.ticketmaster.booking.api.BookingApi;
+import com.systemdesign.ticketmaster.booking.api.model.BookingResponse;
 import com.systemdesign.ticketmaster.booking.api.model.CheckoutResponse;
 import com.systemdesign.ticketmaster.booking.api.model.CreateHoldRequest;
 import com.systemdesign.ticketmaster.booking.api.model.HoldResponse;
@@ -9,6 +10,7 @@ import com.systemdesign.ticketmaster.booking.api.model.SeatMapSeatResponse;
 import com.systemdesign.ticketmaster.booking.api.model.SectionResponse;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldCommand;
 import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
+import com.systemdesign.ticketmaster.booking.application.GetBookingHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsQuery;
 import com.systemdesign.ticketmaster.booking.application.GetSectionsHandler;
@@ -16,6 +18,8 @@ import com.systemdesign.ticketmaster.booking.application.GetSectionsQuery;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutCommand;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutHandler;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutResult;
+import com.systemdesign.ticketmaster.booking.domain.Booking;
+import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
@@ -39,13 +43,16 @@ public final class BookingApiController implements BookingApi {
 
     private final CreateHoldHandler createHoldHandler;
     private final StartCheckoutHandler startCheckoutHandler;
+    private final GetBookingHandler getBookingHandler;
     private final GetSectionsHandler getSectionsHandler;
     private final GetSectionSeatsHandler getSectionSeatsHandler;
 
     public BookingApiController(CreateHoldHandler createHoldHandler, StartCheckoutHandler startCheckoutHandler,
-                                GetSectionsHandler getSectionsHandler, GetSectionSeatsHandler getSectionSeatsHandler) {
+                                GetBookingHandler getBookingHandler, GetSectionsHandler getSectionsHandler,
+                                GetSectionSeatsHandler getSectionSeatsHandler) {
         this.createHoldHandler = createHoldHandler;
         this.startCheckoutHandler = startCheckoutHandler;
+        this.getBookingHandler = getBookingHandler;
         this.getSectionsHandler = getSectionsHandler;
         this.getSectionSeatsHandler = getSectionSeatsHandler;
     }
@@ -98,6 +105,24 @@ public final class BookingApiController implements BookingApi {
         response.setStatus(result.booking().status().name());
         response.setPaymentIntentId(result.paymentIntentId());
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, NO_STORE).body(response);
+    }
+
+    @Override
+    public ResponseEntity<BookingResponse> getBooking(String bookingId, String userId) {
+        Booking booking = getBookingHandler.handle(new BookingId(bookingId), new UserId(userId));
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, NO_STORE).body(toBookingResponse(booking));
+    }
+
+    private static BookingResponse toBookingResponse(Booking booking) {
+        BookingResponse response = new BookingResponse();
+        response.setBookingId(booking.id().value());
+        response.setEventId(booking.eventId().value());
+        response.setHoldId(booking.holdId().value());
+        response.setStatus(booking.status().name());
+        response.setTotalPrice(toMoney(booking.totalPrice()));
+        booking.paymentIntentIdOptional().ifPresent(response::setPaymentIntentId);
+        response.setCreatedAt(booking.createdAt().atOffset(ZoneOffset.UTC));
+        return response;
     }
 
     private static HoldResponse toHoldResponse(Hold hold) {

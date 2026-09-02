@@ -50,10 +50,17 @@ public final class BookingExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
     }
 
-    @ExceptionHandler({HoldNotFoundException.class, BookingNotFoundException.class})
-    ResponseEntity<ProblemDetail> notFound(RuntimeException exception) {
+    @ExceptionHandler(HoldNotFoundException.class)
+    ResponseEntity<ProblemDetail> holdNotFound(HoldNotFoundException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
-        detail.setTitle(exception instanceof BookingNotFoundException ? "Booking not found" : "Hold not found");
+        detail.setTitle("Hold not found");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
+    }
+
+    @ExceptionHandler(BookingNotFoundException.class)
+    ResponseEntity<ProblemDetail> bookingNotFound(BookingNotFoundException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
+        detail.setTitle("Booking not found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
     }
 

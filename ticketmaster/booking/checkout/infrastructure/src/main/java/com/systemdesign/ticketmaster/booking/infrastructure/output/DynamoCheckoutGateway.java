@@ -4,6 +4,7 @@ import static com.systemdesign.ticketmaster.booking.infrastructure.output.Dynamo
 import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.number;
 import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.string;
 
+import com.systemdesign.ticketmaster.booking.checkout.infrastructure.BookingStorageUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
@@ -11,7 +12,6 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
-import com.systemdesign.ticketmaster.booking.infrastructure.common.BookingStorageUnavailableException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;

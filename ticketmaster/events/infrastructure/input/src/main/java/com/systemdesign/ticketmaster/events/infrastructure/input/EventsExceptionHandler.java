@@ -1,5 +1,6 @@
 package com.systemdesign.ticketmaster.events.infrastructure.input;
 
+import com.systemdesign.ticketmaster.events.domain.EventAlreadyExistsException;
 import com.systemdesign.ticketmaster.events.infrastructure.common.EventsStorageUnavailableException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -10,6 +11,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice(basePackages = "com.systemdesign.ticketmaster.events.infrastructure.input")
 public final class EventsExceptionHandler {
+    @ExceptionHandler(EventAlreadyExistsException.class)
+    ResponseEntity<ProblemDetail> eventAlreadyExists(EventAlreadyExistsException exception) {
+        ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
+        detail.setTitle("Event already exists");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(detail);
+    }
+
     @ExceptionHandler(EventsStorageUnavailableException.class)
     ResponseEntity<ProblemDetail> storageUnavailable(EventsStorageUnavailableException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());

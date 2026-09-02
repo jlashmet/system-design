@@ -27,6 +27,8 @@ class BookingModuleBoundaryTest {
                 "booking-admission-domain", "booking-reservation-domain", "booking-payment-domain");
         assertNoForeignDomains("../checkout/application/pom.xml",
                 "booking-admission-domain", "booking-reservation-domain", "booking-payment-domain");
+        assertNoForeignDomains("../payment/infrastructure/pom.xml",
+                "booking-checkout-domain", "booking-checkout-application", "booking-checkout-infrastructure");
 
         assertContains("../reservation/api/pom.xml", "booking-admission-api");
         assertContains("../reservation/application/pom.xml", "booking-admission-api");
@@ -53,6 +55,22 @@ class BookingModuleBoundaryTest {
         String infrastructureAggregator = pom("../infrastructure/pom.xml");
         assertFalse(infrastructureAggregator.contains("<module>common</module>"));
         assertFalse(infrastructureAggregator.contains("<module>output</module>"));
+    }
+
+    @Test
+    void paymentWebhookAdaptersLiveWithTheirOwners() throws Exception {
+        Path bookingDirectory = moduleDirectory().getParent();
+        String packagePath = "src/main/java/com/systemdesign/ticketmaster/booking/infrastructure/input/";
+
+        assertFalse(Files.exists(bookingDirectory.resolve("infrastructure/input/" + packagePath + "HmacPaymentWebhookVerifier.java")));
+        assertFalse(Files.exists(bookingDirectory.resolve("infrastructure/input/" + packagePath + "PaymentProviderWebhookController.java")));
+        assertFalse(Files.exists(bookingDirectory.resolve("infrastructure/input/" + packagePath + "VerifiedPaymentStatusChangedConsumer.java")));
+        assertFalse(Files.exists(bookingDirectory.resolve("infrastructure/input/" + packagePath + "VerifiedPaymentStatusChangedHandler.java")));
+
+        assertTrue(Files.exists(bookingDirectory.resolve("payment/infrastructure/" + packagePath + "HmacPaymentWebhookVerifier.java")));
+        assertTrue(Files.exists(bookingDirectory.resolve("payment/infrastructure/" + packagePath + "PaymentProviderWebhookController.java")));
+        assertTrue(Files.exists(bookingDirectory.resolve("payment/api/" + packagePath + "VerifiedPaymentStatusChangedHandler.java")));
+        assertTrue(Files.exists(bookingDirectory.resolve("checkout/infrastructure/" + packagePath + "VerifiedPaymentStatusChangedConsumer.java")));
     }
 
     @Test

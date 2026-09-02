@@ -1,7 +1,6 @@
 package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
-import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import java.util.Objects;
@@ -21,7 +20,7 @@ public final class VerifiedPaymentStatusChangedConsumer implements VerifiedPayme
     }
 
     @Override
-    public Booking accept(String eventId, String bookingId) {
-        return reconcileBookingHandler.handle(new EventId(eventId), new BookingId(bookingId));
+    public void accept(String eventId, String bookingId) {
+        reconcileBookingHandler.handle(new EventId(eventId), new BookingId(bookingId));
     }
 }

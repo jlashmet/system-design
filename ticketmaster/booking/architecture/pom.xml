@@ -15,6 +15,7 @@
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-api</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-domain</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-api</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-payment-infrastructure</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-checkout-application</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-common</artifactId><version>${project.version}</version><scope>test</scope></dependency>
         <dependency><groupId>com.systemdesign.ticketmaster</groupId><artifactId>booking-infrastructure-input</artifactId><version>${project.version}</version><scope>test</scope></dependency>

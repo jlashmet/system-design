@@ -31,6 +31,7 @@ import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.time.ZoneOffset;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -47,6 +48,12 @@ public final class BookingApiController implements BookingApi {
     private final GetSectionsHandler getSectionsHandler;
     private final GetSectionSeatsHandler getSectionSeatsHandler;
 
+    public BookingApiController(CreateHoldHandler createHoldHandler, StartCheckoutHandler startCheckoutHandler,
+                                GetSectionsHandler getSectionsHandler, GetSectionSeatsHandler getSectionSeatsHandler) {
+        this(createHoldHandler, startCheckoutHandler, null, getSectionsHandler, getSectionSeatsHandler);
+    }
+
+    @Autowired
     public BookingApiController(CreateHoldHandler createHoldHandler, StartCheckoutHandler startCheckoutHandler,
                                 GetBookingHandler getBookingHandler, GetSectionsHandler getSectionsHandler,
                                 GetSectionSeatsHandler getSectionSeatsHandler) {

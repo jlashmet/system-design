@@ -35,16 +35,23 @@ class BookingModuleBoundaryTest {
         assertContains("../checkout/application/pom.xml", "booking-admission-api");
         assertContains("../checkout/application/pom.xml", "booking-reservation-api");
         assertContains("../checkout/application/pom.xml", "booking-payment-api");
+        assertContains("../checkout/infrastructure/pom.xml", "booking-checkout-domain");
         assertContains("../payment/api/pom.xml", "booking-admission-api");
         assertContains("../payment/api/pom.xml", "booking-reservation-api");
         assertContains("../payment/api/pom.xml", "booking-checkout-api");
         assertContains("../payment/infrastructure/pom.xml", "booking-payment-api");
+
+        String checkoutAggregator = pom("../checkout/pom.xml");
+        assertTrue(checkoutAggregator.contains("<module>infrastructure</module>"));
 
         String paymentAggregator = pom("../payment/pom.xml");
         assertTrue(paymentAggregator.contains("<module>api</module>"));
         assertTrue(paymentAggregator.contains("<module>infrastructure</module>"));
         assertFalse(paymentAggregator.contains("<module>domain</module>"));
         assertFalse(paymentAggregator.contains("<module>application</module>"));
+
+        String infrastructureAggregator = pom("../infrastructure/pom.xml");
+        assertFalse(infrastructureAggregator.contains("<module>output</module>"));
     }
 
     @Test
@@ -65,10 +72,10 @@ class BookingModuleBoundaryTest {
                 "../checkout/api/pom.xml",
                 "../checkout/domain/pom.xml",
                 "../checkout/application/pom.xml",
+                "../checkout/infrastructure/pom.xml",
                 "../payment/api/pom.xml",
                 "../payment/infrastructure/pom.xml",
                 "../infrastructure/input/pom.xml",
-                "../infrastructure/output/pom.xml",
                 "../tests/domain/pom.xml",
                 "../tests/application/pom.xml",
                 "../bootstrap/pom.xml",

@@ -2,7 +2,6 @@ package com.systemdesign.ticketmaster.booking.infrastructure.input;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.systemdesign.ticketmaster.booking.domain.Booking;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Clock;
@@ -134,11 +133,10 @@ class PaymentProviderWebhookControllerTest {
         private String bookingId;
 
         @Override
-        public Booking accept(String eventId, String bookingId) {
+        public void accept(String eventId, String bookingId) {
             calls++;
             this.eventId = eventId;
             this.bookingId = bookingId;
-            return null;
         }
     }
 }

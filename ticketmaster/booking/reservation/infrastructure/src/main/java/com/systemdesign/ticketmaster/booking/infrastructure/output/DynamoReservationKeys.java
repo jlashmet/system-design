@@ -14,6 +14,10 @@ final class DynamoReservationKeys {
     private DynamoReservationKeys() {
     }
 
+    static String eventOwnershipPk(EventId eventId) {
+        return "EVENT#" + eventId.value() + "#OWNERSHIP";
+    }
+
     static String seatPk(EventId eventId, SeatId seatId) {
         return "EVENT#" + eventId.value() + "#SEAT#" + seatId.value();
     }

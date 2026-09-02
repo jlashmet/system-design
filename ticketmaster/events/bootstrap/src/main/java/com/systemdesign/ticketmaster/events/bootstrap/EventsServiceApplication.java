@@ -4,6 +4,7 @@ import com.systemdesign.ticketmaster.events.application.BuildEventSearchProjecti
 import com.systemdesign.ticketmaster.events.application.CreateEventHandler;
 import com.systemdesign.ticketmaster.events.application.GetEventHandler;
 import com.systemdesign.ticketmaster.events.domain.EventRepository;
+import com.systemdesign.ticketmaster.events.domain.EventWriter;
 import com.systemdesign.ticketmaster.events.domain.VenueRepository;
 import com.systemdesign.ticketmaster.events.infrastructure.output.DynamoEventRepository;
 import com.systemdesign.ticketmaster.events.infrastructure.output.DynamoVenueRepository;
@@ -26,7 +27,7 @@ public class EventsServiceApplication {
     }
 
     @Bean
-    EventRepository eventRepository(
+    DynamoEventRepository eventStore(
             DynamoDbClient dynamoDbClient,
             @Value("${ticketmaster.events.table-name:ticketmaster-events}") String tableName) {
         return new DynamoEventRepository(dynamoDbClient, tableName);
@@ -40,8 +41,8 @@ public class EventsServiceApplication {
     }
 
     @Bean
-    CreateEventHandler createEventHandler(EventRepository eventRepository) {
-        return new CreateEventHandler(eventRepository);
+    CreateEventHandler createEventHandler(EventWriter eventWriter) {
+        return new CreateEventHandler(eventWriter);
     }
 
     @Bean

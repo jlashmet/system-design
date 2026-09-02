@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.systemdesign.ticketmaster.events.domain.Event;
+import com.systemdesign.ticketmaster.events.domain.EventAlreadyExistsException;
 import com.systemdesign.ticketmaster.events.domain.EventId;
 import com.systemdesign.ticketmaster.events.domain.EventStatus;
 import com.systemdesign.ticketmaster.events.domain.VenueId;
@@ -65,6 +66,37 @@ class DynamoEventRepositoryIT {
     void readsCanonicalEventById() {
         given(EXPECTED_EVENT);
         whenFindById(EXPECTED_EVENT.id());
+        thenExpect(EXPECTED_EVENT);
+    }
+
+    @Test
+    void createsEventAndReadsItBack() {
+        given();
+
+        repository.create(EXPECTED_EVENT);
+        whenFindById(EXPECTED_EVENT.id());
+
+        thenExpect(EXPECTED_EVENT);
+    }
+
+    @Test
+    void duplicateCreateDoesNotOverwriteExistingEvent() {
+        given();
+        repository.create(EXPECTED_EVENT);
+        Event replacement = new Event(
+                EXPECTED_EVENT.id(),
+                "Replacement Name",
+                new VenueId("venue-other"),
+                Instant.parse("2027-01-01T00:00:00Z"),
+                "SPORTS",
+                EventStatus.CANCELLED,
+                "must not overwrite");
+
+        assertThatThrownBy(() -> repository.create(replacement))
+                .isInstanceOf(EventAlreadyExistsException.class)
+                .hasMessageContaining(EXPECTED_EVENT.id().value());
+        whenFindById(EXPECTED_EVENT.id());
+
         thenExpect(EXPECTED_EVENT);
     }
 

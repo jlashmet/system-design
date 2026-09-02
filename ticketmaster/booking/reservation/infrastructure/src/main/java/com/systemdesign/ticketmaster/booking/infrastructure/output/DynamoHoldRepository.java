@@ -64,7 +64,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(seatIds, "seatIds");
         if (seatIds.isEmpty()) throw new IllegalArgumentException("at least one seat is required");
-        if (seatIds.size() > 97) throw new IllegalArgumentException("a hold cannot contain more than 97 seats");
+        if (seatIds.size() > 96) throw new IllegalArgumentException("a hold cannot contain more than 96 seats");
 
         Map<String, SeatId> seatByPk = new LinkedHashMap<>();
         List<Map<String, AttributeValue>> keys = new ArrayList<>(seatIds.size());
@@ -125,7 +125,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         if (!quote.totalPrice().equals(hold.totalPrice())) {
             throw new IllegalArgumentException("hold total must match authoritative seat price quote");
         }
-        if (hold.seatIds().size() > 97) throw new IllegalArgumentException("a hold cannot contain more than 97 seats");
+        if (hold.seatIds().size() > 96) throw new IllegalArgumentException("a hold cannot contain more than 96 seats");
 
         DynamoReservationEventFence.Fence fence = localRegion == null
                 ? null
@@ -273,7 +273,7 @@ public final class DynamoHoldRepository implements HoldRepository {
                     "authoritative seat identity mismatch for " + eventId.value() + "/" + seatId.value());
         }
         AttributeValue amount = item.get("priceAmount");
-        AttributeValue currency = item.get("priceCurrency");
+        AttributeValue currency = item.get("priceCurrency"));
         if (amount == null || amount.s() == null || currency == null || currency.s() == null) {
             throw new IllegalStateException("authoritative seat is missing price: " + seatId.value());
         }

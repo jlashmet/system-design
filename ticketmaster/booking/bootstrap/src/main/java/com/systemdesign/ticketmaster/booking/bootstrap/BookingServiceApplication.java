@@ -98,8 +98,9 @@ public class BookingServiceApplication {
     @Bean
     HoldRepository holdRepository(
             DynamoDbClient dynamoDbClient,
-            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
-        return new DynamoHoldRepository(dynamoDbClient, tableName);
+            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName,
+            @Value("${ticketmaster.aws.region:us-west-2}") String localRegion) {
+        return new DynamoHoldRepository(dynamoDbClient, tableName, localRegion);
     }
 
     @Bean
@@ -117,8 +118,9 @@ public class BookingServiceApplication {
     @Bean
     CheckoutGateway checkoutGateway(
             DynamoDbClient dynamoDbClient,
-            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
-        return new DynamoCheckoutGateway(dynamoDbClient, tableName);
+            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName,
+            @Value("${ticketmaster.aws.region:us-west-2}") String localRegion) {
+        return new DynamoCheckoutGateway(dynamoDbClient, tableName, localRegion);
     }
 
     @Bean

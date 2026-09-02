@@ -98,11 +98,13 @@ class BookingJourneyIT {
 
     private void givenAvailableSeatAndBookingWorkflow() {
         initializeDynamo();
+        String localRegion = FLOCI.getRegion();
+        seedEventFence(localRegion);
         seedAvailableSeat();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        holdRepository = new DynamoHoldRepository(dynamoDb, tableName);
+        holdRepository = new DynamoHoldRepository(dynamoDb, tableName, localRegion);
         bookingRepository = new DynamoBookingRepository(dynamoDb, tableName);
-        DynamoCheckoutGateway checkoutGateway = new DynamoCheckoutGateway(dynamoDb, tableName);
+        DynamoCheckoutGateway checkoutGateway = new DynamoCheckoutGateway(dynamoDb, tableName, localRegion);
         DynamoWaitingRoomRepository waitingRoomRepository = new DynamoWaitingRoomRepository(dynamoDb, tableName);
         AdmissionAccessService admissionAccess = new AdmissionAccessService(
                 waitingRoomRepository, AdmissionGrantService.disabled());
@@ -171,6 +173,18 @@ class BookingJourneyIT {
                 .build());
     }
 
+    private void seedEventFence(String localRegion) {
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(Map.of(
+                        "pk", string("EVENT#" + EVENT_ID.value() + "#OWNERSHIP"),
+                        "entityType", string("EVENT_OWNERSHIP"),
+                        "eventId", string(EVENT_ID.value()),
+                        "ownerRegion", string(localRegion),
+                        "epoch", number(1)))
+                .build());
+    }
+
     private void seedAvailableSeat() {
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
@@ -203,5 +217,9 @@ class BookingJourneyIT {
 
     private static AttributeValue string(String value) {
         return AttributeValue.builder().s(value).build();
+    }
+
+    private static AttributeValue number(long value) {
+        return AttributeValue.builder().n(Long.toString(value)).build();
     }
 }

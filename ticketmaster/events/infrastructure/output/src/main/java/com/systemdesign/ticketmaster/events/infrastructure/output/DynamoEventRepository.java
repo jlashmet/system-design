@@ -5,6 +5,7 @@ import com.systemdesign.ticketmaster.events.domain.EventAlreadyExistsException;
 import com.systemdesign.ticketmaster.events.domain.EventId;
 import com.systemdesign.ticketmaster.events.domain.EventRepository;
 import com.systemdesign.ticketmaster.events.domain.EventStatus;
+import com.systemdesign.ticketmaster.events.domain.EventWriter;
 import com.systemdesign.ticketmaster.events.domain.VenueId;
 import com.systemdesign.ticketmaster.events.infrastructure.common.EventsStorageUnavailableException;
 import java.time.Instant;
@@ -20,7 +21,7 @@ import software.amazon.awssdk.services.dynamodb.model.DynamoDbException;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 
-public final class DynamoEventRepository implements EventRepository {
+public final class DynamoEventRepository implements EventRepository, EventWriter {
     private static final String PK = "pk";
     private final DynamoDbClient dynamoDb;
     private final String tableName;

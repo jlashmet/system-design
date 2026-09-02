@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
+import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -27,17 +28,25 @@ import software.amazon.awssdk.services.dynamodb.model.Update;
 public final class DynamoCheckoutGateway implements CheckoutGateway {
     private final DynamoDbClient dynamoDb;
     private final String tableName;
+    private final String localRegion;
 
-    public DynamoCheckoutGateway(DynamoDbClient dynamoDb, String tableName) {
+    public DynamoCheckoutGateway(DynamoDbClient dynamoDb, String tableName, String localRegion) {
         this.dynamoDb = Objects.requireNonNull(dynamoDb, "dynamoDb");
         this.tableName = Objects.requireNonNull(tableName, "tableName");
+        this.localRegion = requireText(localRegion, "localRegion");
+    }
+
+    DynamoCheckoutGateway(DynamoDbClient dynamoDb, String tableName) {
+        this.dynamoDb = Objects.requireNonNull(dynamoDb, "dynamoDb");
+        this.tableName = Objects.requireNonNull(tableName, "tableName");
+        this.localRegion = null;
     }
 
     @Override
     public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) {
         requireStartState(reservation, pendingBooking);
-        if (reservation.seatIds().size() > 97) {
-            throw new IllegalArgumentException("checkout cannot contain more than 97 seats");
+        if (reservation.seatIds().size() > 96) {
+            throw new IllegalArgumentException("checkout cannot contain more than 96 seats");
         }
 
         List<TransactWriteItem> writes = new ArrayList<>();
@@ -279,15 +288,37 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
     }
 
     private void transact(ReservationCheckout reservation, List<TransactWriteItem> writes) {
+        DynamoCheckoutEventFence.Fence fence = localRegion == null
+                ? null
+                : DynamoCheckoutEventFence.resolve(dynamoDb, tableName, reservation.eventId(), localRegion);
+        if (fence != null) {
+            writes.add(0, DynamoCheckoutEventFence.condition(tableName, reservation.eventId(), fence));
+        }
         try {
             DynamoBookingCall.execute("checkout transaction", () -> dynamoDb.transactWriteItems(
                     TransactWriteItemsRequest.builder().transactItems(writes).build()));
         } catch (TransactionCanceledException e) {
+            if (fence != null) assertFenceUnchanged(reservation, fence);
             if (DynamoTransactionCancellation.hasNonConditionalFailure(e)) {
                 throw new BookingStorageUnavailableException("checkout transaction", e);
             }
             throw new CheckoutConflictException(reservation.id(), e);
         }
+    }
+
+    private void assertFenceUnchanged(ReservationCheckout reservation, DynamoCheckoutEventFence.Fence expected) {
+        DynamoCheckoutEventFence.Fence current = DynamoCheckoutEventFence.resolve(
+                dynamoDb, tableName, reservation.eventId(), localRegion);
+        if (current.epoch() != expected.epoch()) {
+            throw new EventOwnershipUnavailableException(
+                    reservation.eventId(), "event write epoch changed during checkout transaction");
+        }
+    }
+
+    private static String requireText(String value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.isBlank()) throw new IllegalArgumentException(name + " must not be blank");
+        return value;
     }
 
     private static void requireStartState(ReservationCheckout reservation, Booking booking) {

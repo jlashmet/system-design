@@ -10,9 +10,8 @@ public record Hold(
         EventId eventId,
         Set<SeatId> seatIds,
         Price totalPrice,
-        HoldStatus status,
+        State state,
         Instant expiresAt,
-        Instant checkoutExpiresAt,
         Instant createdAt) {
 
     public Hold {
@@ -22,22 +21,32 @@ public record Hold(
         seatIds = Set.copyOf(seatIds);
         if (seatIds.isEmpty()) throw new IllegalArgumentException("hold must contain at least one seat");
         Objects.requireNonNull(totalPrice, "totalPrice");
-        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(state, "state");
         Objects.requireNonNull(expiresAt, "expiresAt");
         Objects.requireNonNull(createdAt, "createdAt");
-        if (status == HoldStatus.CHECKOUT_IN_PROGRESS && checkoutExpiresAt == null) {
-            throw new IllegalArgumentException("checkout in progress requires a checkout expiration");
-        }
     }
 
     public static Hold active(HoldId id, UserId userId, EventId eventId, Set<SeatId> seatIds,
                               Price totalPrice, Instant createdAt, Instant expiresAt) {
         if (!expiresAt.isAfter(createdAt)) throw new IllegalArgumentException("hold expiration must be after creation");
-        return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.ACTIVE, expiresAt, null, createdAt);
+        return new Hold(id, userId, eventId, seatIds, totalPrice, new Active(), expiresAt, createdAt);
+    }
+
+    public HoldStatus status() {
+        return switch (state) {
+            case Active ignored -> HoldStatus.ACTIVE;
+            case CheckoutInProgress ignored -> HoldStatus.CHECKOUT_IN_PROGRESS;
+            case Converted ignored -> HoldStatus.CONVERTED;
+            case Failed ignored -> HoldStatus.FAILED;
+        };
+    }
+
+    public Instant checkoutExpiresAt() {
+        return state instanceof CheckoutInProgress checkout ? checkout.expiresAt() : null;
     }
 
     public boolean isActiveAt(Instant now) {
-        return status == HoldStatus.ACTIVE && expiresAt.isAfter(now);
+        return state instanceof Active && expiresAt.isAfter(now);
     }
 
     public Hold startCheckout(Instant now, Instant checkoutDeadline) {
@@ -45,19 +54,35 @@ public record Hold(
         Objects.requireNonNull(checkoutDeadline, "checkoutDeadline");
         if (!isActiveAt(now)) throw new IllegalStateException("hold is not active");
         if (!checkoutDeadline.isAfter(now)) throw new IllegalArgumentException("checkout deadline must be in the future");
-        return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.CHECKOUT_IN_PROGRESS,
-                expiresAt, checkoutDeadline, createdAt);
+        return new Hold(id, userId, eventId, seatIds, totalPrice,
+                new CheckoutInProgress(checkoutDeadline), expiresAt, createdAt);
     }
 
     public Hold convert() {
-        if (status != HoldStatus.CHECKOUT_IN_PROGRESS) throw new IllegalStateException("hold is not in checkout");
-        return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.CONVERTED,
-                expiresAt, checkoutExpiresAt, createdAt);
+        if (!(state instanceof CheckoutInProgress)) throw new IllegalStateException("hold is not in checkout");
+        return new Hold(id, userId, eventId, seatIds, totalPrice, new Converted(), expiresAt, createdAt);
     }
 
     public Hold fail() {
-        if (status != HoldStatus.CHECKOUT_IN_PROGRESS) throw new IllegalStateException("hold is not in checkout");
-        return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.FAILED,
-                expiresAt, checkoutExpiresAt, createdAt);
+        if (!(state instanceof CheckoutInProgress)) throw new IllegalStateException("hold is not in checkout");
+        return new Hold(id, userId, eventId, seatIds, totalPrice, new Failed(), expiresAt, createdAt);
+    }
+
+    public sealed interface State permits Active, CheckoutInProgress, Converted, Failed {
+    }
+
+    public record Active() implements State {
+    }
+
+    public record CheckoutInProgress(Instant expiresAt) implements State {
+        public CheckoutInProgress {
+            Objects.requireNonNull(expiresAt, "expiresAt");
+        }
+    }
+
+    public record Converted() implements State {
+    }
+
+    public record Failed() implements State {
     }
 }

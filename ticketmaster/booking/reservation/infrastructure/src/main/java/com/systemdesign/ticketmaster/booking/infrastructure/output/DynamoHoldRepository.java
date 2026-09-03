@@ -40,6 +40,7 @@ import software.amazon.awssdk.services.dynamodb.model.Update;
 
 public final class DynamoHoldRepository implements HoldRepository {
     private static final String PK = "pk";
+    private static final String STATE = "state";
     private static final int MAX_QUOTE_BATCH_ATTEMPTS = 5;
     private static final long INITIAL_QUOTE_BACKOFF_MILLIS = 10L;
 
@@ -119,6 +120,7 @@ public final class DynamoHoldRepository implements HoldRepository {
         Objects.requireNonNull(quote, "quote");
         Objects.requireNonNull(now, "now");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
+        if (!(hold.state() instanceof Hold.Active)) throw new IllegalArgumentException("new hold must be active");
         if (!quote.eventId().equals(hold.eventId()) || !quote.seatIds().equals(hold.seatIds())) {
             throw new IllegalArgumentException("seat price quote must match hold event and seats");
         }
@@ -284,21 +286,25 @@ public final class DynamoHoldRepository implements HoldRepository {
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(seatPk(hold.eventId(), seatId))))
-                .updateExpression("SET #status = :held, #holdId = :holdId, #holdExpiresAt = :expires")
+                .updateExpression("SET #state = :heldState REMOVE #status, #legacyHoldId, #holdExpiresAt, #bookingId")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
-                        + "AND (#status = :available OR (#status = :held AND #holdExpiresAt <= :now)) "
+                        + "AND ((attribute_exists(#state) AND "
+                        + "(#state.#stateType = :available OR "
+                        + "(#state.#stateType = :held AND #state.#stateExpiresAt <= :now))) OR "
+                        + "(attribute_not_exists(#state) AND "
+                        + "(#status = :available OR (#status = :held AND #holdExpiresAt <= :now)))) "
                         + "AND #priceAmount = :priceAmount AND #priceCurrency = :priceCurrency")
-                .expressionAttributeNames(Map.of(
-                        "#entityType", "entityType", "#eventId", "eventId", "#seatId", "seatId",
-                        "#status", "status", "#holdId", "holdId", "#holdExpiresAt", "holdExpiresAt",
-                        "#priceAmount", "priceAmount", "#priceCurrency", "priceCurrency"))
-                .expressionAttributeValues(Map.of(
-                        ":seatType", string("SEAT"), ":eventId", string(hold.eventId().value()),
-                        ":seatId", string(seatId.value()), ":available", string("AVAILABLE"),
-                        ":held", string("HELD"), ":holdId", string(hold.id().value()),
-                        ":expires", number(hold.expiresAt().toEpochMilli()), ":now", number(now.toEpochMilli()),
-                        ":priceAmount", string(quotedPrice.amount().toPlainString()),
-                        ":priceCurrency", string(quotedPrice.currency().getCurrencyCode())))
+                .expressionAttributeNames(Map.ofEntries(
+                        Map.entry("#entityType", "entityType"), Map.entry("#eventId", "eventId"), Map.entry("#seatId", "seatId"),
+                        Map.entry("#state", STATE), Map.entry("#stateType", "type"), Map.entry("#stateExpiresAt", "expiresAt"),
+                        Map.entry("#status", "status"), Map.entry("#legacyHoldId", "holdId"), Map.entry("#holdExpiresAt", "holdExpiresAt"),
+                        Map.entry("#bookingId", "bookingId"), Map.entry("#priceAmount", "priceAmount"), Map.entry("#priceCurrency", "priceCurrency")))
+                .expressionAttributeValues(Map.ofEntries(
+                        Map.entry(":seatType", string("SEAT")), Map.entry(":eventId", string(hold.eventId().value())),
+                        Map.entry(":seatId", string(seatId.value())), Map.entry(":available", string("AVAILABLE")),
+                        Map.entry(":held", string("HELD")), Map.entry(":heldState", seatHeldState(hold.id().value(), hold.expiresAt())),
+                        Map.entry(":now", number(now.toEpochMilli())), Map.entry(":priceAmount", string(quotedPrice.amount().toPlainString())),
+                        Map.entry(":priceCurrency", string(quotedPrice.currency().getCurrencyCode()))))
                 .build();
     }
 
@@ -312,25 +318,79 @@ public final class DynamoHoldRepository implements HoldRepository {
         item.put("seatIds", AttributeValue.builder().ss(hold.seatIds().stream().map(SeatId::value).sorted().toList()).build());
         item.put("totalPriceAmount", string(hold.totalPrice().amount().toPlainString()));
         item.put("totalPriceCurrency", string(hold.totalPrice().currency().getCurrencyCode()));
-        item.put("status", string(hold.status().name()));
+        item.put(STATE, holdState(hold.state()));
         item.put("expiresAt", number(hold.expiresAt().toEpochMilli()));
         item.put("createdAt", number(hold.createdAt().toEpochMilli()));
-        if (hold.checkoutExpiresAt() != null) item.put("checkoutExpiresAt", number(hold.checkoutExpiresAt().toEpochMilli()));
         return item;
     }
 
     private Hold fromItem(Map<String, AttributeValue> item) {
         Set<SeatId> seatIds = item.get("seatIds").ss().stream().map(SeatId::new).collect(Collectors.toUnmodifiableSet());
-        Instant checkoutExpiresAt = item.containsKey("checkoutExpiresAt")
-                ? Instant.ofEpochMilli(Long.parseLong(item.get("checkoutExpiresAt").n())) : null;
         return new Hold(
                 new HoldId(item.get("holdId").s()), new UserId(item.get("userId").s()),
                 new EventId(item.get("eventId").s()), seatIds,
                 new Price(new BigDecimal(item.get("totalPriceAmount").s()),
                         Currency.getInstance(item.get("totalPriceCurrency").s())),
-                HoldStatus.valueOf(item.get("status").s()),
-                Instant.ofEpochMilli(Long.parseLong(item.get("expiresAt").n())), checkoutExpiresAt,
+                holdStateFromItem(item),
+                Instant.ofEpochMilli(Long.parseLong(item.get("expiresAt").n())),
                 Instant.ofEpochMilli(Long.parseLong(item.get("createdAt").n())));
+    }
+
+    private static Hold.State holdStateFromItem(Map<String, AttributeValue> item) {
+        AttributeValue encoded = item.get(STATE);
+        if (encoded != null && encoded.m() != null && !encoded.m().isEmpty()) {
+            Map<String, AttributeValue> state = encoded.m();
+            String type = requiredString(state, "type");
+            return switch (type) {
+                case "ACTIVE" -> new Hold.Active();
+                case "CHECKOUT_IN_PROGRESS" -> new Hold.CheckoutInProgress(requiredInstant(state, "expiresAt"));
+                case "CONVERTED" -> new Hold.Converted();
+                case "FAILED" -> new Hold.Failed();
+                default -> throw new IllegalStateException("unsupported hold state: " + type);
+            };
+        }
+        HoldStatus status = HoldStatus.valueOf(requiredString(item, "status"));
+        return switch (status) {
+            case ACTIVE -> new Hold.Active();
+            case CHECKOUT_IN_PROGRESS -> new Hold.CheckoutInProgress(requiredInstant(item, "checkoutExpiresAt"));
+            case CONVERTED -> new Hold.Converted();
+            case FAILED -> new Hold.Failed();
+        };
+    }
+
+    private static AttributeValue holdState(Hold.State state) {
+        Map<String, AttributeValue> value = new HashMap<>();
+        switch (state) {
+            case Hold.Active ignored -> value.put("type", string("ACTIVE"));
+            case Hold.CheckoutInProgress checkout -> {
+                value.put("type", string("CHECKOUT_IN_PROGRESS"));
+                value.put("expiresAt", number(checkout.expiresAt().toEpochMilli()));
+            }
+            case Hold.Converted ignored -> value.put("type", string("CONVERTED"));
+            case Hold.Failed ignored -> value.put("type", string("FAILED"));
+        }
+        return AttributeValue.builder().m(value).build();
+    }
+
+    private static AttributeValue seatHeldState(String holdId, Instant expiresAt) {
+        return AttributeValue.builder().m(Map.of(
+                "type", string("HELD"),
+                "holdId", string(holdId),
+                "expiresAt", number(expiresAt.toEpochMilli()))).build();
+    }
+
+    private static String requiredString(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        if (value == null || value.s() == null || value.s().isBlank()) {
+            throw new IllegalStateException("missing string attribute: " + name);
+        }
+        return value.s();
+    }
+
+    private static Instant requiredInstant(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        if (value == null || value.n() == null) throw new IllegalStateException("missing number attribute: " + name);
+        return Instant.ofEpochMilli(Long.parseLong(value.n()));
     }
 
     private static String stringValue(AttributeValue value) { return value == null ? null : value.s(); }

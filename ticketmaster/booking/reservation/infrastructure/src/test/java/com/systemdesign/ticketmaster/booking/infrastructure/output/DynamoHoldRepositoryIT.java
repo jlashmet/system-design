@@ -124,7 +124,7 @@ class DynamoHoldRepositoryIT {
         List<RaceResult> winners = results.stream().filter(RaceResult::won).toList();
         assertThat(winners).hasSize(1);
         assertThat(results.stream().filter(result -> result.error() instanceof SeatClaimConflictException).count()).isEqualTo(15);
-        assertThat(seatItem("A10").get("holdId").s()).isEqualTo(winners.getFirst().holdId());
+        assertHeldBy("A10", winners.getFirst().holdId());
     }
 
     @Test
@@ -282,9 +282,11 @@ class DynamoHoldRepositoryIT {
         assertThat(repository.findById(new HoldId(holdId))).contains(requestedHold);
         for (String seatId : seatIds) {
             Map<String, AttributeValue> item = seatItem(seatId);
-            assertThat(item.get("status").s()).isEqualTo("HELD");
-            assertThat(item.get("holdId").s()).isEqualTo(holdId);
-            assertThat(Long.parseLong(item.get("holdExpiresAt").n())).isEqualTo(requestedHold.expiresAt().toEpochMilli());
+            Map<String, AttributeValue> state = typedState(item);
+            assertThat(state.get("type").s()).isEqualTo("HELD");
+            assertThat(state.get("holdId").s()).isEqualTo(holdId);
+            assertThat(Long.parseLong(state.get("expiresAt").n())).isEqualTo(requestedHold.expiresAt().toEpochMilli());
+            assertThat(item).doesNotContainKeys("status", "holdId", "holdExpiresAt", "bookingId");
         }
     }
 
@@ -296,14 +298,29 @@ class DynamoHoldRepositoryIT {
 
     private void assertHeldBy(String seatId, String holdId) {
         Map<String, AttributeValue> item = seatItem(seatId);
-        assertThat(item.get("status").s()).isEqualTo("HELD");
-        assertThat(item.get("holdId").s()).isEqualTo(holdId);
+        Map<String, AttributeValue> state = typedState(item);
+        assertThat(state.get("type").s()).isEqualTo("HELD");
+        assertThat(state.get("holdId").s()).isEqualTo(holdId);
+        assertThat(item).doesNotContainKeys("status", "holdId", "holdExpiresAt", "bookingId");
     }
 
     private void assertAvailable(String seatId) {
         Map<String, AttributeValue> item = seatItem(seatId);
-        assertThat(item.get("status").s()).isEqualTo("AVAILABLE");
-        assertThat(item).doesNotContainKeys("holdId", "holdExpiresAt");
+        AttributeValue state = item.get("state");
+        if (state != null) {
+            assertThat(state.m().get("type").s()).isEqualTo("AVAILABLE");
+            assertThat(item).doesNotContainKeys("status", "holdId", "holdExpiresAt", "bookingId");
+        } else {
+            assertThat(item.get("status").s()).isEqualTo("AVAILABLE");
+            assertThat(item).doesNotContainKeys("holdId", "holdExpiresAt", "bookingId");
+        }
+    }
+
+    private static Map<String, AttributeValue> typedState(Map<String, AttributeValue> item) {
+        AttributeValue state = item.get("state");
+        assertThat(state).isNotNull();
+        assertThat(state.m()).isNotNull().isNotEmpty();
+        return state.m();
     }
 
     private Map<String, AttributeValue> seatItem(String seatId) {

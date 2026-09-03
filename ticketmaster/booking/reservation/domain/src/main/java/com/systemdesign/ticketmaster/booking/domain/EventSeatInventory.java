@@ -33,7 +33,8 @@ public record EventSeatInventory(
         return switch (state) {
             case Held held -> held.holdId();
             case Checkout checkout -> checkout.holdId();
-            case Available ignored, Booked ignored -> null;
+            case Available ignored -> null;
+            case Booked ignored -> null;
         };
     }
 
@@ -41,7 +42,8 @@ public record EventSeatInventory(
         return switch (state) {
             case Held held -> held.expiresAt();
             case Checkout checkout -> checkout.expiresAt();
-            case Available ignored, Booked ignored -> null;
+            case Available ignored -> null;
+            case Booked ignored -> null;
         };
     }
 
@@ -54,7 +56,8 @@ public record EventSeatInventory(
         return switch (state) {
             case Available ignored -> true;
             case Held held -> !held.expiresAt().isAfter(now);
-            case Checkout ignored, Booked ignored -> false;
+            case Checkout ignored -> false;
+            case Booked ignored -> false;
         };
     }
 

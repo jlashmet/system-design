@@ -24,9 +24,16 @@ class DynamoSeatInventoryStreamProjectorTest {
     private DynamoSeatInventoryStreamProjector projector;
 
     @Test
-    void projectsAuthoritativeSeatImageIntoSectionReadModel() {
+    void projectsTypedAuthoritativeSeatImageIntoSectionReadModel() {
         givenSeatProjector();
-        whenHeldSeatImageIsProjected();
+        whenTypedHeldSeatImageIsProjected();
+        thenExpectSeatAndHoldExpiryProjected();
+    }
+
+    @Test
+    void projectsLegacyAuthoritativeSeatImageDuringMigration() {
+        givenSeatProjector();
+        whenLegacyHeldSeatImageIsProjected();
         thenExpectSeatAndHoldExpiryProjected();
     }
 
@@ -42,8 +49,22 @@ class DynamoSeatInventoryStreamProjectorTest {
         projector = new DynamoSeatInventoryStreamProjector(new ProjectSeatMapHandler(repository));
     }
 
-    private void whenHeldSeatImageIsProjected() {
-        projector.project(StreamRecord.builder().newImage(Map.of(
+    private void whenTypedHeldSeatImageIsProjected() {
+        projector.project(StreamRecord.builder().newImage(baseSeatImage(Map.of(
+                "state", AttributeValue.builder().m(Map.of(
+                        "type", string("HELD"),
+                        "holdId", string("hold-1"),
+                        "expiresAt", number(HOLD_EXPIRES_AT.toEpochMilli()))).build()))).build());
+    }
+
+    private void whenLegacyHeldSeatImageIsProjected() {
+        projector.project(StreamRecord.builder().newImage(baseSeatImage(Map.of(
+                "status", string("HELD"),
+                "holdExpiresAt", number(HOLD_EXPIRES_AT.toEpochMilli())))).build());
+    }
+
+    private static Map<String, AttributeValue> baseSeatImage(Map<String, AttributeValue> stateAttributes) {
+        java.util.HashMap<String, AttributeValue> image = new java.util.HashMap<>(Map.of(
                 "entityType", string("SEAT"),
                 "eventId", string("event-1"),
                 "sectionId", string("section-101"),
@@ -51,9 +72,9 @@ class DynamoSeatInventoryStreamProjectorTest {
                 "row", string("A"),
                 "number", string("10"),
                 "priceAmount", string("125.50"),
-                "priceCurrency", string("USD"),
-                "status", string("HELD"),
-                "holdExpiresAt", number(HOLD_EXPIRES_AT.toEpochMilli()))).build());
+                "priceCurrency", string("USD")));
+        image.putAll(stateAttributes);
+        return image;
     }
 
     private void whenNonSeatAndRemoveImagesAreProjected() {

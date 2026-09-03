@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.infrastructure.output;
 
 import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.PK;
 import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.RECONCILIATION_INDEX;
+import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.STATE;
 import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.bookingFromItem;
 import static com.systemdesign.ticketmaster.booking.infrastructure.output.DynamoItemCodec.string;
 
@@ -86,36 +87,52 @@ public final class DynamoBookingRepository implements BookingRepository {
     @Override
     public void savePaymentIntent(Booking booking) {
         Objects.requireNonNull(booking, "booking");
-        String intentId = booking.paymentIntentIdOptional()
-                .orElseThrow(() -> new IllegalArgumentException("booking has no payment intent"));
+        if (!(booking.state() instanceof Booking.PaymentPending pending)) {
+            throw new IllegalArgumentException("booking is not payment-pending");
+        }
+        String intentId = pending.paymentIntentId();
         try {
             DynamoBookingCall.execute("save payment intent", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                     .tableName(tableName)
                     .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
-                    .updateExpression("SET #paymentIntentId = :intent")
+                    .updateExpression("SET #state = :state, #reconcileShard = :gsiShard, #nextReconcileAt = :next "
+                            + "REMOVE #status, #paymentIntentId")
                     .conditionExpression("#eventId = :eventId AND #holdId = :holdId AND #userId = :userId "
                             + "AND #checkoutIdempotencyKey = :checkoutIdempotencyKey "
                             + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
-                            + "AND ((#status = :pending AND attribute_not_exists(#paymentIntentId)) "
-                            + "OR #paymentIntentId = :intent)")
-                    .expressionAttributeNames(Map.of(
-                            "#status", "status",
-                            "#paymentIntentId", "paymentIntentId",
-                            "#eventId", "eventId",
-                            "#holdId", "holdId",
-                            "#userId", "userId",
-                            "#checkoutIdempotencyKey", "checkoutIdempotencyKey",
-                            "#totalPriceAmount", "totalPriceAmount",
-                            "#totalPriceCurrency", "totalPriceCurrency"))
-                    .expressionAttributeValues(Map.of(
-                            ":pending", string("PENDING_PAYMENT"),
-                            ":intent", string(intentId),
-                            ":eventId", string(booking.eventId().value()),
-                            ":holdId", string(booking.holdId().value()),
-                            ":userId", string(booking.userId().value()),
-                            ":checkoutIdempotencyKey", string(booking.checkoutIdempotencyKey()),
-                            ":totalPriceAmount", string(booking.totalPrice().amount().toPlainString()),
-                            ":totalPriceCurrency", string(booking.totalPrice().currency().getCurrencyCode())))
+                            + "AND ((attribute_exists(#state) AND "
+                            + "((#state.#stateType = :intentPending) OR "
+                            + "(#state.#stateType = :paymentPending AND #state.#stateIntent = :intent))) "
+                            + "OR (attribute_not_exists(#state) AND #status = :legacyPending "
+                            + "AND (attribute_not_exists(#paymentIntentId) OR #paymentIntentId = :intent)))")
+                    .expressionAttributeNames(Map.ofEntries(
+                            Map.entry("#state", STATE),
+                            Map.entry("#stateType", "type"),
+                            Map.entry("#stateIntent", "paymentIntentId"),
+                            Map.entry("#status", "status"),
+                            Map.entry("#paymentIntentId", "paymentIntentId"),
+                            Map.entry("#reconcileShard", "reconcileShard"),
+                            Map.entry("#nextReconcileAt", "nextReconcileAt"),
+                            Map.entry("#eventId", "eventId"),
+                            Map.entry("#holdId", "holdId"),
+                            Map.entry("#userId", "userId"),
+                            Map.entry("#checkoutIdempotencyKey", "checkoutIdempotencyKey"),
+                            Map.entry("#totalPriceAmount", "totalPriceAmount"),
+                            Map.entry("#totalPriceCurrency", "totalPriceCurrency")))
+                    .expressionAttributeValues(Map.ofEntries(
+                            Map.entry(":state", DynamoItemCodec.bookingState(booking.state())),
+                            Map.entry(":intentPending", string("PAYMENT_INTENT_PENDING")),
+                            Map.entry(":paymentPending", string("PAYMENT_PENDING")),
+                            Map.entry(":legacyPending", string("PENDING_PAYMENT")),
+                            Map.entry(":intent", string(intentId)),
+                            Map.entry(":gsiShard", string(DynamoKeys.reconciliationShard(pending.reconcileShard()))),
+                            Map.entry(":next", DynamoItemCodec.number(pending.nextReconcileAt().toEpochMilli())),
+                            Map.entry(":eventId", string(booking.eventId().value())),
+                            Map.entry(":holdId", string(booking.holdId().value())),
+                            Map.entry(":userId", string(booking.userId().value())),
+                            Map.entry(":checkoutIdempotencyKey", string(booking.checkoutIdempotencyKey())),
+                            Map.entry(":totalPriceAmount", string(booking.totalPrice().amount().toPlainString())),
+                            Map.entry(":totalPriceCurrency", string(booking.totalPrice().currency().getCurrencyCode()))))
                     .build()));
         } catch (ConditionalCheckFailedException conflictingIntent) {
             throw new IllegalStateException(
@@ -130,20 +147,52 @@ public final class DynamoBookingRepository implements BookingRepository {
         if (booking.nextReconcileAt() == null || booking.reconcileShard() == null) {
             throw new IllegalArgumentException("booking is not scheduled for reconciliation");
         }
+        String expectedStateType;
+        Map<String, AttributeValue> values = new java.util.HashMap<>();
+        if (booking.state() instanceof Booking.PaymentIntentPending) {
+            expectedStateType = "PAYMENT_INTENT_PENDING";
+        } else if (booking.state() instanceof Booking.PaymentPending pending) {
+            expectedStateType = "PAYMENT_PENDING";
+            values.put(":intent", string(pending.paymentIntentId()));
+        } else {
+            throw new IllegalArgumentException("booking is not pending payment");
+        }
+        values.put(":state", DynamoItemCodec.bookingState(booking.state()));
+        values.put(":stateType", string(expectedStateType));
+        values.put(":legacyPending", string("PENDING_PAYMENT"));
+        values.put(":shard", string(DynamoKeys.reconciliationShard(booking.reconcileShard())));
+        values.put(":stateShard", DynamoItemCodec.number(booking.reconcileShard()));
+        values.put(":next", DynamoItemCodec.number(booking.nextReconcileAt().toEpochMilli()));
+
+        String typedIntentCondition = booking.state() instanceof Booking.PaymentPending
+                ? " AND #state.#stateIntent = :intent"
+                : " AND attribute_not_exists(#state.#stateIntent)";
+        String legacyIntentCondition = booking.state() instanceof Booking.PaymentPending
+                ? " AND #paymentIntentId = :intent"
+                : " AND attribute_not_exists(#paymentIntentId)";
         try {
             DynamoBookingCall.execute("reschedule payment reconciliation", () -> dynamoDb.updateItem(UpdateItemRequest.builder()
                     .tableName(tableName)
                     .key(Map.of(PK, string(DynamoKeys.bookingPk(booking.id()))))
-                    .updateExpression("SET #nextReconcileAt = :next")
-                    .conditionExpression("#status = :pending AND #reconcileShard = :shard AND #nextReconcileAt < :next")
+                    .updateExpression("SET #state = :state, #reconcileShard = :shard, #nextReconcileAt = :next "
+                            + "REMOVE #status, #paymentIntentId")
+                    .conditionExpression("((attribute_exists(#state) AND #state.#stateType = :stateType "
+                            + "AND #state.#stateShard = :stateShard AND #state.#stateNext < :next"
+                            + typedIntentCondition + ") OR "
+                            + "(attribute_not_exists(#state) AND #status = :legacyPending "
+                            + "AND #reconcileShard = :shard AND #nextReconcileAt < :next"
+                            + legacyIntentCondition + "))")
                     .expressionAttributeNames(Map.of(
+                            "#state", STATE,
+                            "#stateType", "type",
+                            "#stateIntent", "paymentIntentId",
+                            "#stateShard", "reconcileShard",
+                            "#stateNext", "nextReconcileAt",
                             "#status", "status",
+                            "#paymentIntentId", "paymentIntentId",
                             "#reconcileShard", "reconcileShard",
                             "#nextReconcileAt", "nextReconcileAt"))
-                    .expressionAttributeValues(Map.of(
-                            ":pending", string("PENDING_PAYMENT"),
-                            ":shard", string(DynamoKeys.reconciliationShard(booking.reconcileShard())),
-                            ":next", DynamoItemCodec.number(booking.nextReconcileAt().toEpochMilli())))
+                    .expressionAttributeValues(values)
                     .build()));
         } catch (ConditionalCheckFailedException alreadyAdvanced) {
             // Another reconciler may have scheduled a later attempt or finalized the Booking.

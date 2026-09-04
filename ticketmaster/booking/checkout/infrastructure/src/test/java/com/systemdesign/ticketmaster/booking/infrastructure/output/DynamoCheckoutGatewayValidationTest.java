@@ -72,7 +72,7 @@ class DynamoCheckoutGatewayValidationTest {
 
         assertThatThrownBy(() -> gateway.startCheckout(preparedCheckout, booking))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("booking does not belong to hold event");
+                .hasMessage("booking does not belong to reservation event");
     }
 
     @Test
@@ -81,7 +81,7 @@ class DynamoCheckoutGatewayValidationTest {
 
         assertThatThrownBy(() -> gateway.startCheckout(preparedCheckout, booking))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("booking does not belong to hold user");
+                .hasMessage("booking does not belong to reservation user");
     }
 
     @Test
@@ -91,7 +91,7 @@ class DynamoCheckoutGatewayValidationTest {
 
         assertThatThrownBy(() -> gateway.startCheckout(preparedCheckout, booking))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("booking price does not match hold price");
+                .hasMessage("booking price does not match reservation price");
     }
 
     @Test
@@ -100,7 +100,7 @@ class DynamoCheckoutGatewayValidationTest {
 
         assertThatThrownBy(() -> gateway.finalizeBooking(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("booking does not belong to hold event");
+                .hasMessage("booking does not belong to reservation event");
     }
 
     @Test
@@ -109,7 +109,7 @@ class DynamoCheckoutGatewayValidationTest {
 
         assertThatThrownBy(() -> gateway.failBooking(checkoutReservation, booking))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("booking does not belong to hold event");
+                .hasMessage("booking does not belong to reservation event");
     }
 
     private Booking bookingFor(EventId eventId, UserId userId, Price price, BookingStatus status) {

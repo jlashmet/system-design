@@ -7,14 +7,12 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
-import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
-import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
-import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import io.floci.testcontainers.FlociContainer;
 import java.math.BigDecimal;
@@ -80,37 +78,36 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
     }
 
     @Test
-    void finalizationRejectsStoredHoldScopeDrift() {
+    void finalizationRejectsStoredReservationScopeDrift() {
         Scenario scenario = startedCheckout();
-        overwriteStoredUser(DynamoKeys.holdPk(scenario.active().id()), new UserId("user-corrupt"));
+        overwriteStoredUser(DynamoKeys.holdPk(scenario.reservation().id()), new UserId("user-corrupt"));
 
         assertTerminalConflictLeavesCheckoutUntouched(scenario);
     }
 
     private Scenario startedCheckout() {
         initializeDynamo();
-        DynamoHoldRepository holdRepository = new DynamoHoldRepository(dynamoDb, tableName);
         DynamoBookingRepository bookingRepository = new DynamoBookingRepository(dynamoDb, tableName);
         DynamoCheckoutGateway gateway = new DynamoCheckoutGateway(dynamoDb, tableName);
 
         putAvailableSeat();
-        SeatPriceQuote quote = holdRepository.quoteSeatPrices(EVENT_ID, Set.of(SEAT_ID));
-        Hold active = Hold.active(
-                new HoldId("hold-1"), USER_ID, EVENT_ID, Set.of(SEAT_ID), quote.totalPrice(),
-                NOW, NOW.plusSeconds(300));
-        holdRepository.createWithSeatClaims(
-                active, quote, NOW, new HoldIdempotencyKey("hold-key"));
-        Hold checkout = active.startCheckout(NOW.plusSeconds(10), NOW.plusSeconds(120));
-        ReservationCheckout reservation = ReservationTestFixtures.from(checkout);
-        Booking pending = Booking.pending(
+        ReservationCheckout reservation = new ReservationCheckout(
+                new HoldId("hold-1"),
+                USER_ID,
+                EVENT_ID,
+                Set.of(SEAT_ID),
+                PRICE,
+                ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
+                NOW.plusSeconds(120));
+        PreparedCheckout preparedCheckout = new PreparedCheckout(reservation, Map.of(SEAT_ID, PRICE));
+        Booking pendingWithoutIntent = Booking.pending(
                 new BookingId("booking-1"), reservation, "checkout-key",
-                NOW.plusSeconds(10), NOW.plusSeconds(40), 1).attachPaymentIntent("pi-123");
+                NOW.plusSeconds(10), NOW.plusSeconds(40), 1);
 
-        gateway.startCheckout(reservation, Booking.pending(
-                pending.id(), reservation, pending.checkoutIdempotencyKey(),
-                pending.createdAt(), pending.nextReconcileAt(), pending.reconcileShard()));
+        gateway.startCheckout(preparedCheckout, pendingWithoutIntent);
+        Booking pending = pendingWithoutIntent.attachPaymentIntent("pi-123");
         bookingRepository.savePaymentIntent(pending);
-        return new Scenario(holdRepository, gateway, active, reservation, pending);
+        return new Scenario(gateway, reservation, pending);
     }
 
     private void assertTerminalConflictLeavesCheckoutUntouched(Scenario scenario) {
@@ -118,7 +115,7 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
                 scenario.reservation(), scenario.pending().confirm()))
                 .isInstanceOf(CheckoutConflictException.class);
 
-        assertThat(rawHold(scenario.active().id()).get("status").s()).isEqualTo("CHECKOUT_IN_PROGRESS");
+        assertThat(rawHold(scenario.reservation().id()).get("status").s()).isEqualTo("CHECKOUT_IN_PROGRESS");
         assertThat(rawBooking(scenario.pending().id()).get("status").s()).isEqualTo("PENDING_PAYMENT");
         assertThat(rawSeat().get("status").s()).isEqualTo("CHECKOUT");
     }
@@ -186,12 +183,13 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
     }
 
     private Map<String, AttributeValue> rawItem(String pk) {
-        return dynamoDb.getItem(GetItemRequest.builder()
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
                         .key(Map.of("pk", string(pk)))
                         .consistentRead(true)
                         .build())
                 .item();
+        return item == null ? Map.of() : item;
     }
 
     private static AttributeValue string(String value) {
@@ -199,9 +197,7 @@ class DynamoCheckoutTerminalScopeIntegrityIT {
     }
 
     private record Scenario(
-            DynamoHoldRepository holdRepository,
             DynamoCheckoutGateway gateway,
-            Hold active,
             ReservationCheckout reservation,
             Booking pending) {}
 }

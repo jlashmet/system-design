@@ -7,13 +7,12 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
-import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
+import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
-import com.systemdesign.ticketmaster.booking.domain.SeatPriceQuote;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import io.floci.testcontainers.FlociContainer;
 import java.math.BigDecimal;
@@ -44,7 +43,6 @@ import software.amazon.awssdk.services.dynamodb.model.Projection;
 import software.amazon.awssdk.services.dynamodb.model.ProjectionType;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
-import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
 @Testcontainers
 class DynamoCheckoutStartScopeIntegrityIT {
@@ -71,31 +69,34 @@ class DynamoCheckoutStartScopeIntegrityIT {
     }
 
     @Test
-    void checkoutStartRejectsStoredHoldScopeDrift() {
+    void checkoutStartRejectsExistingReservationScopeCollision() {
         initializeDynamo();
-        DynamoHoldRepository holdRepository = new DynamoHoldRepository(dynamoDb, tableName);
         DynamoCheckoutGateway gateway = new DynamoCheckoutGateway(dynamoDb, tableName);
 
         putAvailableSeat();
-        SeatPriceQuote quote = holdRepository.quoteSeatPrices(EVENT_ID, Set.of(SEAT_ID));
-        Hold active = Hold.active(
-                new HoldId("hold-1"), USER_ID, EVENT_ID, Set.of(SEAT_ID), quote.totalPrice(),
-                NOW, NOW.plusSeconds(300));
-        holdRepository.createWithSeatClaims(active, quote, NOW, new HoldIdempotencyKey("hold-key"));
-
-        Hold checkout = active.startCheckout(NOW.plusSeconds(10), NOW.plusSeconds(120));
-        ReservationCheckout reservation = ReservationTestFixtures.from(checkout);
+        HoldId reservationId = new HoldId("hold-1");
+        ReservationCheckout reservation = new ReservationCheckout(
+                reservationId,
+                USER_ID,
+                EVENT_ID,
+                Set.of(SEAT_ID),
+                PRICE,
+                ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
+                NOW.plusSeconds(120));
+        PreparedCheckout preparedCheckout = new PreparedCheckout(reservation, Map.of(SEAT_ID, PRICE));
         Booking pending = Booking.pending(
                 new BookingId("booking-1"), reservation, "checkout-key",
                 NOW.plusSeconds(10), NOW.plusSeconds(40), 1);
-        overwriteStoredHoldUser(active.id(), new UserId("user-corrupt"));
+        UserId corruptUser = new UserId("user-corrupt");
+        putStoredReservation(reservation, corruptUser, pending.createdAt());
 
-        assertThatThrownBy(() -> gateway.startCheckout(reservation, pending))
+        assertThatThrownBy(() -> gateway.startCheckout(preparedCheckout, pending))
                 .isInstanceOf(CheckoutConflictException.class);
 
-        assertThat(rawHold(active.id()).get("status").s()).isEqualTo("ACTIVE");
+        assertThat(rawHold(reservationId).get("userId").s()).isEqualTo(corruptUser.value());
+        assertThat(rawHold(reservationId).get("status").s()).isEqualTo("CHECKOUT_IN_PROGRESS");
         assertThat(rawBooking(pending.id())).isEmpty();
-        assertThat(rawSeat().get("status").s()).isEqualTo("HELD");
+        assertThat(rawSeat().get("status").s()).isEqualTo("AVAILABLE");
     }
 
     private void initializeDynamo() {
@@ -138,13 +139,21 @@ class DynamoCheckoutStartScopeIntegrityIT {
                 .build());
     }
 
-    private void overwriteStoredHoldUser(HoldId holdId, UserId userId) {
-        dynamoDb.updateItem(UpdateItemRequest.builder()
+    private void putStoredReservation(ReservationCheckout reservation, UserId storedUser, Instant createdAt) {
+        dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
-                .key(Map.of("pk", string(DynamoKeys.holdPk(holdId))))
-                .updateExpression("SET #userId = :userId")
-                .expressionAttributeNames(Map.of("#userId", "userId"))
-                .expressionAttributeValues(Map.of(":userId", string(userId.value())))
+                .item(Map.ofEntries(
+                        Map.entry("pk", string(DynamoKeys.holdPk(reservation.id()))),
+                        Map.entry("entityType", string("HOLD")),
+                        Map.entry("holdId", string(reservation.id().value())),
+                        Map.entry("userId", string(storedUser.value())),
+                        Map.entry("eventId", string(reservation.eventId().value())),
+                        Map.entry("seatIds", AttributeValue.builder().ss(SEAT_ID.value()).build()),
+                        Map.entry("totalPriceAmount", string(PRICE.amount().toPlainString())),
+                        Map.entry("totalPriceCurrency", string(PRICE.currency().getCurrencyCode())),
+                        Map.entry("status", string("CHECKOUT_IN_PROGRESS")),
+                        Map.entry("checkoutExpiresAt", number(reservation.checkoutExpiresAt().toEpochMilli())),
+                        Map.entry("createdAt", number(createdAt.toEpochMilli()))))
                 .build());
     }
 
@@ -161,15 +170,20 @@ class DynamoCheckoutStartScopeIntegrityIT {
     }
 
     private Map<String, AttributeValue> rawItem(String pk) {
-        return dynamoDb.getItem(GetItemRequest.builder()
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
                         .tableName(tableName)
                         .key(Map.of("pk", string(pk)))
                         .consistentRead(true)
                         .build())
                 .item();
+        return item == null ? Map.of() : item;
     }
 
     private static AttributeValue string(String value) {
         return AttributeValue.builder().s(value).build();
+    }
+
+    private static AttributeValue number(long value) {
+        return AttributeValue.builder().n(Long.toString(value)).build();
     }
 }

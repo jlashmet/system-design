@@ -9,11 +9,11 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -58,15 +58,14 @@ class ReconcileBookingEarlyCallbackTest {
     }
 
     private void givenPendingBookingScheduledAt(Instant nextReconcileAt) {
-        Hold hold = Hold.active(
-                        HOLD_ID,
-                        new UserId("user-123"),
-                        EVENT_ID,
-                        Set.of(new SeatId("A10")),
-                        PRICE,
-                        NOW.minusSeconds(60),
-                        NOW.plusSeconds(240))
-                .startCheckout(NOW.minusSeconds(30), NOW.plusSeconds(300));
+        Hold hold = Hold.checkout(
+                HOLD_ID,
+                new UserId("user-123"),
+                EVENT_ID,
+                Set.of(new SeatId("A10")),
+                PRICE,
+                NOW.minusSeconds(30),
+                NOW.plusSeconds(300));
         Booking booking = Booking.pending(
                         BOOKING_ID,
                         ReservationTestFixtures.from(hold),
@@ -118,7 +117,7 @@ class ReconcileBookingEarlyCallbackTest {
         }
 
         @Override
-        public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) {
+        public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, UserId userId, String key) {
             return Optional.empty();
         }
 
@@ -144,9 +143,7 @@ class ReconcileBookingEarlyCallbackTest {
         }
 
         @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new AssertionError("not expected"); }
-        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) { throw new AssertionError("not expected"); }
         @Override public Optional<Hold> findById(HoldId holdId) { return Optional.of(hold); }
-        @Override public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) { throw new AssertionError("not expected"); }
     }
 
     private static final class TrackingPaymentGateway implements PaymentGateway {
@@ -167,7 +164,7 @@ class ReconcileBookingEarlyCallbackTest {
     }
 
     private static final class UnusedCheckoutGateway implements CheckoutGateway {
-        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new AssertionError("not expected"); }
+        @Override public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) { throw new AssertionError("not expected"); }
         @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) { throw new AssertionError("not expected"); }
         @Override public void failBooking(ReservationCheckout reservation, Booking failedBooking) { throw new AssertionError("not expected"); }
     }

@@ -11,11 +11,11 @@ import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -98,9 +98,8 @@ class ReconcileBookingHandlerTest {
     void rejectsMismatchedHoldScopeBeforePaymentAccessOrReschedule() {
         Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED);
-        Hold mismatched = Hold.active(HOLD_ID, new UserId("user-456"), new EventId("event-other"),
-                        Set.of(new SeatId("A10")), PRICE, CREATED_AT, CREATED_AT.plusSeconds(300))
-                .startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
+        Hold mismatched = Hold.checkout(HOLD_ID, new UserId("user-456"), new EventId("event-other"),
+                Set.of(new SeatId("A10")), PRICE, CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
         scenario.holdRepository.hold = mismatched;
 
         assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
@@ -117,8 +116,8 @@ class ReconcileBookingHandlerTest {
     void rejectsHoldOutsideCheckoutStateBeforePaymentAccessOrReschedule() {
         Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.plusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED);
-        scenario.holdRepository.hold = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID,
-                Set.of(new SeatId("A10")), PRICE, CREATED_AT, CREATED_AT.plusSeconds(300));
+        scenario.holdRepository.hold = Hold.checkout(HOLD_ID, new UserId("user-456"), EVENT_ID,
+                Set.of(new SeatId("A10")), PRICE, CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE).convert();
 
         assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
                 .isInstanceOf(IllegalStateException.class)
@@ -134,9 +133,8 @@ class ReconcileBookingHandlerTest {
     void validatesHoldBeforeCreatingMissingPaymentIntent() {
         Scenario scenario = scenario(LOCAL_OWNER, CHECKOUT_DEADLINE.minusSeconds(1), PaymentIntentStatus.PROCESSING,
                 PaymentIntentStatus.CANCELED, false);
-        Hold mismatched = Hold.active(HOLD_ID, new UserId("user-456"), new EventId("event-other"),
-                        Set.of(new SeatId("A10")), PRICE, CREATED_AT, CREATED_AT.plusSeconds(300))
-                .startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
+        Hold mismatched = Hold.checkout(HOLD_ID, new UserId("user-456"), new EventId("event-other"),
+                Set.of(new SeatId("A10")), PRICE, CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
         scenario.holdRepository.hold = mismatched;
 
         assertThatThrownBy(() -> scenario.handler.handle(BOOKING_ID))
@@ -155,9 +153,8 @@ class ReconcileBookingHandlerTest {
     private static Scenario scenario(EventWriteAuthority authority, Instant now,
                                      PaymentIntentStatus paymentStatus, PaymentIntentStatus cancelStatus,
                                      boolean attachPaymentIntent) {
-        Hold active = Hold.active(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,
-                CREATED_AT, CREATED_AT.plusSeconds(300));
-        Hold checkout = active.startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
+        Hold checkout = Hold.checkout(HOLD_ID, new UserId("user-456"), EVENT_ID, Set.of(new SeatId("A10")), PRICE,
+                CHECKOUT_STARTED_AT, CHECKOUT_DEADLINE);
         Booking booking = Booking.pending(BOOKING_ID, ReservationTestFixtures.from(checkout),
                 "checkout-idempotency", CHECKOUT_STARTED_AT, CHECKOUT_STARTED_AT.plusSeconds(30), 0);
         if (attachPaymentIntent) booking = booking.attachPaymentIntent("pi-123");
@@ -182,7 +179,7 @@ class ReconcileBookingHandlerTest {
         @Override public Optional<Booking> findById(BookingId bookingId) {
             return booking.id().equals(bookingId) ? Optional.of(booking) : Optional.empty();
         }
-        @Override public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) {
+        @Override public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, UserId userId, String key) {
             return Optional.empty();
         }
         @Override public void savePaymentIntent(Booking booking) { this.booking = booking; }
@@ -195,14 +192,10 @@ class ReconcileBookingHandlerTest {
         private int findCalls;
         private FakeHoldRepository(Hold hold) { this.hold = hold; }
         @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new UnsupportedOperationException(); }
-        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) {
-            throw new UnsupportedOperationException();
-        }
         @Override public Optional<Hold> findById(HoldId holdId) {
             findCalls++;
             return hold.id().equals(holdId) ? Optional.of(hold) : Optional.empty();
         }
-        @Override public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) { throw new UnsupportedOperationException(); }
     }
 
     private static final class FakeCheckoutGateway implements CheckoutGateway {
@@ -210,7 +203,7 @@ class ReconcileBookingHandlerTest {
         private Booking confirmedBooking;
         private ReservationCheckout failedHold;
         private Booking failedBooking;
-        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new UnsupportedOperationException(); }
+        @Override public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) { throw new UnsupportedOperationException(); }
         @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) {
             this.confirmedHold = reservation; this.confirmedBooking = confirmedBooking;
         }

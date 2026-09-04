@@ -11,14 +11,11 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import com.systemdesign.ticketmaster.booking.infrastructure.input.DynamoSeatInventoryStreamProjector;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class SeatMapProjectionLambdaHandlerTest {
-    private static final Instant HOLD_EXPIRES_AT = Instant.parse("2026-08-28T21:45:00Z");
-
     private CapturingSeatMapRepository repository;
     private SeatMapProjectionLambdaHandler handler;
     private DynamodbEvent event;
@@ -28,7 +25,7 @@ class SeatMapProjectionLambdaHandlerTest {
     void adaptsSeatNewImageAndIgnoresNonSeatRecords() {
         givenSeatAndNonSeatStreamRecords();
         whenLambdaBatchIsHandled();
-        thenExpectSeatProjectedWithHoldExpiry();
+        thenExpectCheckoutSeatProjected();
     }
 
     @Test
@@ -66,14 +63,13 @@ class SeatMapProjectionLambdaHandlerTest {
         response = handler.handleRequest(event, null);
     }
 
-    private void thenExpectSeatProjectedWithHoldExpiry() {
+    private void thenExpectCheckoutSeatProjected() {
         assertThat(repository.projected).isNotNull();
         assertThat(repository.projected.eventId()).isEqualTo(new EventId("event-123"));
         assertThat(repository.projected.sectionId()).isEqualTo(new SectionId("101"));
         assertThat(repository.projected.seatId().value()).isEqualTo("A10");
         assertThat(repository.projected.price().amount()).isEqualByComparingTo(new BigDecimal("125.00"));
-        assertThat(repository.projected.status().name()).isEqualTo("HELD");
-        assertThat(repository.projected.holdExpiresAt()).isEqualTo(HOLD_EXPIRES_AT);
+        assertThat(repository.projected.status().name()).isEqualTo("CHECKOUT");
         assertThat(repository.upserts).isEqualTo(1);
         assertThat(failureIds()).isEmpty();
     }
@@ -118,19 +114,11 @@ class SeatMapProjectionLambdaHandlerTest {
                 Map.entry("number", string(seatId.substring(1))),
                 Map.entry("priceAmount", string("125.00")),
                 Map.entry("priceCurrency", string("USD")),
-                Map.entry("status", string("HELD")),
-                Map.entry("holdExpiresAt", number(HOLD_EXPIRES_AT.toEpochMilli())));
+                Map.entry("status", string("CHECKOUT")));
     }
 
     private static com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue string(String value) {
         return new com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue(value);
-    }
-
-    private static com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue number(long value) {
-        com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue attribute =
-                new com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue();
-        attribute.setN(Long.toString(value));
-        return attribute;
     }
 
     private static final class CapturingSeatMapRepository implements SeatMapRepository {

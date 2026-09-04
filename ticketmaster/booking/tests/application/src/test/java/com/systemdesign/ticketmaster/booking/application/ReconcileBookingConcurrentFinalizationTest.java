@@ -11,11 +11,11 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -111,15 +111,14 @@ class ReconcileBookingConcurrentFinalizationTest {
     }
 
     private static Hold checkoutHold() {
-        return Hold.active(
-                        HOLD_ID,
-                        new UserId("user-123"),
-                        EVENT_ID,
-                        Set.of(new SeatId("A10")),
-                        PRICE,
-                        NOW.minusSeconds(60),
-                        NOW.plusSeconds(240))
-                .startCheckout(NOW.minusSeconds(30), NOW.plusSeconds(300));
+        return Hold.checkout(
+                HOLD_ID,
+                new UserId("user-123"),
+                EVENT_ID,
+                Set.of(new SeatId("A10")),
+                PRICE,
+                NOW.minusSeconds(30),
+                NOW.plusSeconds(300));
     }
 
     private static final class MutableBookingRepository implements BookingRepository {
@@ -136,7 +135,7 @@ class ReconcileBookingConcurrentFinalizationTest {
             return booking.id().equals(bookingId) ? Optional.of(booking) : Optional.empty();
         }
 
-        @Override public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) { return Optional.empty(); }
+        @Override public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, UserId userId, String key) { return Optional.empty(); }
         @Override public void savePaymentIntent(Booking booking) { throw new AssertionError("not expected"); }
         @Override public void rescheduleReconciliation(Booking booking) { throw new AssertionError("not expected"); }
         @Override public List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit) { return List.of(); }
@@ -151,8 +150,6 @@ class ReconcileBookingConcurrentFinalizationTest {
 
         @Override public Optional<Hold> findById(HoldId holdId) { return Optional.of(hold); }
         @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new AssertionError("not expected"); }
-        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) { throw new AssertionError("not expected"); }
-        @Override public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) { throw new AssertionError("not expected"); }
     }
 
     private static final class RacingCheckoutGateway implements CheckoutGateway {
@@ -180,7 +177,7 @@ class ReconcileBookingConcurrentFinalizationTest {
             throw new CheckoutConflictException(HOLD_ID, new RuntimeException("concurrent finalization"));
         }
 
-        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new AssertionError("not expected"); }
+        @Override public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) { throw new AssertionError("not expected"); }
     }
 
     private static final class FixedPaymentGateway implements PaymentGateway {

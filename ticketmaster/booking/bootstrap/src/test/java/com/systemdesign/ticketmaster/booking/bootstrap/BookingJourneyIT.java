@@ -3,8 +3,6 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.systemdesign.ticketmaster.booking.application.AdmissionAccessService;
-import com.systemdesign.ticketmaster.booking.application.CreateHoldCommand;
-import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.ReconcileBookingHandler;
 import com.systemdesign.ticketmaster.booking.application.ReservationCheckoutServiceImpl;
 import com.systemdesign.ticketmaster.booking.application.StartCheckoutCommand;
@@ -14,8 +12,6 @@ import com.systemdesign.ticketmaster.booking.domain.AdmissionGrantService;
 import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventWriteAuthority;
-import com.systemdesign.ticketmaster.booking.domain.Hold;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldStatus;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -72,10 +68,8 @@ class BookingJourneyIT {
     private DynamoHoldRepository holdRepository;
     private DynamoBookingRepository bookingRepository;
     private DemoPaymentGateway paymentGateway;
-    private CreateHoldHandler createHoldHandler;
     private StartCheckoutHandler startCheckoutHandler;
     private ReconcileBookingHandler reconcileBookingHandler;
-    private Hold hold;
     private StartCheckoutResult checkout;
     private Booking confirmed;
 
@@ -90,9 +84,9 @@ class BookingJourneyIT {
     }
 
     @Test
-    void holdCheckoutSuccessfulPaymentAndReconciliationBooksSeatEndToEnd() {
+    void checkoutSuccessfulPaymentAndReconciliationBooksSeatEndToEnd() {
         givenAvailableSeatAndBookingWorkflow();
-        whenHoldIsCheckedOutAndPaymentSucceeds();
+        whenCheckoutStartsAndPaymentSucceeds();
         thenExpectConfirmedBookingAndBookedSeat();
     }
 
@@ -108,10 +102,9 @@ class BookingJourneyIT {
         DynamoWaitingRoomRepository waitingRoomRepository = new DynamoWaitingRoomRepository(dynamoDb, tableName);
         AdmissionAccessService admissionAccess = new AdmissionAccessService(
                 waitingRoomRepository, AdmissionGrantService.disabled());
-        ReservationCheckoutService reservationCheckoutService = new ReservationCheckoutServiceImpl(holdRepository);
+        ReservationCheckoutService reservationCheckoutService =
+                new ReservationCheckoutServiceImpl(holdRepository, admissionAccess);
         paymentGateway = new DemoPaymentGateway();
-        createHoldHandler = new CreateHoldHandler(
-                LOCAL_OWNER, holdRepository, admissionAccess, clock, Duration.ofMinutes(5));
         startCheckoutHandler = new StartCheckoutHandler(
                 LOCAL_OWNER, reservationCheckoutService, bookingRepository, checkoutGateway, paymentGateway, clock,
                 Duration.ofMinutes(10), Duration.ofSeconds(30), 16);
@@ -120,17 +113,13 @@ class BookingJourneyIT {
                 Duration.ofSeconds(30));
     }
 
-    private void whenHoldIsCheckedOutAndPaymentSucceeds() {
-        hold = createHoldHandler.handle(new CreateHoldCommand(
-                USER_ID,
-                EVENT_ID,
-                List.of(SEAT_ID),
-                new HoldIdempotencyKey("journey-hold-key")));
+    private void whenCheckoutStartsAndPaymentSucceeds() {
         checkout = startCheckoutHandler.handle(new StartCheckoutCommand(
                 EVENT_ID,
-                hold.id(),
                 USER_ID,
-                "journey-checkout-key"));
+                List.of(SEAT_ID),
+                "journey-checkout-key",
+                null));
         paymentGateway.succeedPayment(checkout.booking().id());
         confirmed = reconcileBookingHandler.handle(EVENT_ID, checkout.booking().id());
     }
@@ -139,7 +128,7 @@ class BookingJourneyIT {
         assertThat(confirmed.status().name()).isEqualTo("CONFIRMED");
         assertThat(bookingRepository.findById(confirmed.id()).orElseThrow().status().name())
                 .isEqualTo("CONFIRMED");
-        assertThat(holdRepository.findById(hold.id()).orElseThrow().status())
+        assertThat(holdRepository.findById(checkout.booking().holdId()).orElseThrow().status())
                 .isEqualTo(HoldStatus.CONVERTED);
         Map<String, AttributeValue> seat = seatItem();
         assertThat(seat.get("status").s()).isEqualTo("BOOKED");

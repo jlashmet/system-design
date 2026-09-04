@@ -14,6 +14,7 @@ import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -109,14 +110,14 @@ class ReconcileBookingEventScopeTest {
     }
 
     private static Booking pendingBooking() {
-        Hold hold = Hold.active(
+        Hold hold = Hold.checkout(
                 new HoldId("hold-1"),
                 new UserId("user-1"),
                 ACTUAL_EVENT,
                 Set.of(new SeatId("A10")),
                 PRICE,
-                NOW.minusSeconds(60),
-                NOW.plusSeconds(240)).startCheckout(NOW.minusSeconds(30), NOW.plusSeconds(300));
+                NOW.minusSeconds(30),
+                NOW.plusSeconds(300));
         return Booking.pending(
                         BOOKING_ID,
                         ReservationTestFixtures.from(hold),
@@ -143,7 +144,7 @@ class ReconcileBookingEventScopeTest {
 
         @Override
         public Optional<Booking> findByCheckoutIdempotencyKey(
-                EventId eventId, HoldId holdId, String idempotencyKey) {
+                EventId eventId, UserId userId, String idempotencyKey) {
             return Optional.empty();
         }
 
@@ -176,19 +177,11 @@ class ReconcileBookingEventScopeTest {
 
     private static final class UnusedHoldRepository implements HoldRepository {
         @Override public SeatPriceQuote quoteSeatPrices(EventId eventId, Set<SeatId> seatIds) { throw new AssertionError("not expected"); }
-        @Override public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now,
-                                                   com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey key) {
-            throw new AssertionError("not expected");
-        }
         @Override public Optional<Hold> findById(HoldId holdId) { throw new AssertionError("not expected"); }
-        @Override public Optional<Hold> findByIdempotencyKey(
-                com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey key) {
-            throw new AssertionError("not expected");
-        }
     }
 
     private static final class UnusedCheckoutGateway implements CheckoutGateway {
-        @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) { throw new AssertionError("not expected"); }
+        @Override public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) { throw new AssertionError("not expected"); }
         @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) { throw new AssertionError("not expected"); }
         @Override public void failBooking(ReservationCheckout reservation, Booking failedBooking) { throw new AssertionError("not expected"); }
     }

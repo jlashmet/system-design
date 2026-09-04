@@ -2,6 +2,7 @@ package com.systemdesign.ticketmaster.booking.application;
 
 import com.systemdesign.ticketmaster.booking.domain.SeatMapRepository;
 import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
+import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
 
@@ -10,6 +11,12 @@ public final class GetSectionSeatsHandler {
 
     public GetSectionSeatsHandler(SeatMapRepository repository) {
         this.repository = Objects.requireNonNull(repository, "repository");
+    }
+
+    /** Compatibility constructor; seat-map reads no longer perform clock-based hold expiry. */
+    public GetSectionSeatsHandler(SeatMapRepository repository, Clock ignoredClock) {
+        this(repository);
+        Objects.requireNonNull(ignoredClock, "ignoredClock");
     }
 
     public List<SeatMapSeat> handle(GetSectionSeatsQuery query) {

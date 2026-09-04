@@ -48,9 +48,7 @@ public final class DemoPaymentGateway implements PaymentGateway {
         Objects.requireNonNull(paymentIntentId, "paymentIntentId");
         return statusByIntentId.compute(paymentIntentId, (ignored, current) -> {
             if (current == null) throw new IllegalArgumentException("unknown demo payment intent: " + paymentIntentId);
-            if (current == PaymentIntentStatus.SUCCEEDED
-                    || current == PaymentIntentStatus.FAILED
-                    || current == PaymentIntentStatus.CANCELED) {
+            if (current == PaymentIntentStatus.SUCCEEDED || current == PaymentIntentStatus.CANCELED) {
                 return current;
             }
             return PaymentIntentStatus.CANCELED;
@@ -66,7 +64,7 @@ public final class DemoPaymentGateway implements PaymentGateway {
         String paymentIntentId = intentId(bookingId);
         return statusByIntentId.compute(paymentIntentId, (ignored, current) -> {
             if (current == null) throw new IllegalArgumentException("unknown demo payment intent: " + paymentIntentId);
-            if (current == PaymentIntentStatus.CANCELED || current == PaymentIntentStatus.FAILED) {
+            if (current == PaymentIntentStatus.CANCELED) {
                 throw new IllegalStateException("demo payment intent is already terminal: " + current);
             }
             return PaymentIntentStatus.SUCCEEDED;

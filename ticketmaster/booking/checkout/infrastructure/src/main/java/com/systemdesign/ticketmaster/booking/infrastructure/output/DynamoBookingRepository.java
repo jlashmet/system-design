@@ -9,7 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.Booking;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.BookingRepository;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
-import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -49,22 +49,22 @@ public final class DynamoBookingRepository implements BookingRepository {
 
     @Override
     public Optional<Booking> findByCheckoutIdempotencyKey(
-            EventId eventId, HoldId holdId, String idempotencyKey) {
+            EventId eventId, UserId userId, String idempotencyKey) {
         Objects.requireNonNull(eventId, "eventId");
-        Objects.requireNonNull(holdId, "holdId");
+        Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(idempotencyKey, "idempotencyKey");
         Map<String, AttributeValue> mapping = DynamoBookingCall.execute(
                         "checkout idempotency lookup",
                         () -> dynamoDb.getItem(GetItemRequest.builder()
                                 .tableName(tableName)
-                                .key(Map.of(PK, string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey))))
+                                .key(Map.of(PK, string(DynamoKeys.idempotencyPk(eventId, userId, idempotencyKey))))
                                 .consistentRead(true)
                                 .build()))
                 .item();
         if (mapping == null || mapping.isEmpty()) return Optional.empty();
 
         requireMappingValue(mapping, "eventId", eventId.value());
-        requireMappingValue(mapping, "holdId", holdId.value());
+        requireMappingValue(mapping, "userId", userId.value());
         requireMappingValue(mapping, "idempotencyKey", idempotencyKey);
         AttributeValue bookingIdValue = mapping.get("bookingId");
         if (bookingIdValue == null || bookingIdValue.s() == null || bookingIdValue.s().isBlank()) {
@@ -76,9 +76,9 @@ public final class DynamoBookingRepository implements BookingRepository {
                 .orElseThrow(() -> new IllegalStateException(
                         "checkout idempotency record references missing booking " + bookingIdValue.s()));
         if (!booking.eventId().equals(eventId)
-                || !booking.holdId().equals(holdId)
+                || !booking.userId().equals(userId)
                 || !booking.checkoutIdempotencyKey().equals(idempotencyKey)) {
-            throw new IllegalStateException("checkout idempotency record resolved outside its booking/event/hold/key scope");
+            throw new IllegalStateException("checkout idempotency record resolved outside its booking/event/user/key scope");
         }
         return Optional.of(booking);
     }

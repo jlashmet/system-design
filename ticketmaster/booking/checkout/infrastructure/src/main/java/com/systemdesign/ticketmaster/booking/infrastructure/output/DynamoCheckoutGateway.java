@@ -10,10 +10,13 @@ import com.systemdesign.ticketmaster.booking.domain.BookingStatus;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
+import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutStatus;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -43,16 +46,29 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
     }
 
     @Override
-    public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) {
+    public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) {
+        Objects.requireNonNull(preparedCheckout, "preparedCheckout");
+        ReservationCheckout reservation = preparedCheckout.reservation();
         requireStartState(reservation, pendingBooking);
         if (reservation.seatIds().size() > 96) {
             throw new IllegalArgumentException("checkout cannot contain more than 96 seats");
         }
 
         List<TransactWriteItem> writes = new ArrayList<>();
-        writes.add(TransactWriteItem.builder().update(startHoldUpdate(reservation, pendingBooking)).build());
+        writes.add(TransactWriteItem.builder()
+                .put(Put.builder()
+                        .tableName(tableName)
+                        .item(reservationItem(reservation, pendingBooking))
+                        .conditionExpression("attribute_not_exists(#pk)")
+                        .expressionAttributeNames(Map.of("#pk", PK))
+                        .build())
+                .build());
         for (SeatId seatId : reservation.seatIds()) {
-            writes.add(TransactWriteItem.builder().update(startSeatUpdate(reservation, pendingBooking, seatId)).build());
+            Price quotedPrice = preparedCheckout.seatPrices().get(seatId);
+            if (quotedPrice == null) throw new IllegalArgumentException("missing authoritative price for " + seatId.value());
+            writes.add(TransactWriteItem.builder()
+                    .update(startSeatUpdate(reservation, seatId, quotedPrice))
+                    .build());
         }
         writes.add(TransactWriteItem.builder()
                 .put(Put.builder()
@@ -97,68 +113,54 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         transact(reservation, writes);
     }
 
-    private Update startHoldUpdate(ReservationCheckout reservation, Booking booking) {
-        AttributeValue seatIds = AttributeValue.builder()
+    private Map<String, AttributeValue> reservationItem(ReservationCheckout reservation, Booking booking) {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put(PK, string(DynamoKeys.holdPk(reservation.id())));
+        item.put("entityType", string("HOLD"));
+        item.put("holdId", string(reservation.id().value()));
+        item.put("userId", string(reservation.userId().value()));
+        item.put("eventId", string(reservation.eventId().value()));
+        item.put("seatIds", AttributeValue.builder()
                 .ss(reservation.seatIds().stream().map(SeatId::value).sorted().toList())
-                .build();
-        return Update.builder()
-                .tableName(tableName)
-                .key(Map.of(PK, string(DynamoKeys.holdPk(reservation.id()))))
-                .updateExpression("SET #status = :checkout, #checkoutExpiresAt = :deadline")
-                .conditionExpression("#entityType = :holdType AND #holdId = :holdId AND #eventId = :eventId "
-                        + "AND #userId = :userId AND #seatIds = :seatIds "
-                        + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
-                        + "AND #expiresAt = :expiresAt AND #expiresAt > :now AND #status = :active")
-                .expressionAttributeNames(Map.of(
-                        "#entityType", "entityType",
-                        "#holdId", "holdId",
-                        "#eventId", "eventId",
-                        "#userId", "userId",
-                        "#seatIds", "seatIds",
-                        "#totalPriceAmount", "totalPriceAmount",
-                        "#totalPriceCurrency", "totalPriceCurrency",
-                        "#expiresAt", "expiresAt",
-                        "#status", "status",
-                        "#checkoutExpiresAt", "checkoutExpiresAt"))
-                .expressionAttributeValues(Map.ofEntries(
-                        Map.entry(":holdType", string("HOLD")),
-                        Map.entry(":holdId", string(reservation.id().value())),
-                        Map.entry(":eventId", string(reservation.eventId().value())),
-                        Map.entry(":userId", string(reservation.userId().value())),
-                        Map.entry(":seatIds", seatIds),
-                        Map.entry(":totalPriceAmount", string(reservation.totalPrice().amount().toPlainString())),
-                        Map.entry(":totalPriceCurrency", string(reservation.totalPrice().currency().getCurrencyCode())),
-                        Map.entry(":expiresAt", number(reservation.expiresAt().toEpochMilli())),
-                        Map.entry(":active", string("ACTIVE")),
-                        Map.entry(":checkout", string("CHECKOUT_IN_PROGRESS")),
-                        Map.entry(":deadline", number(reservation.checkoutExpiresAt().toEpochMilli())),
-                        Map.entry(":now", number(booking.createdAt().toEpochMilli()))))
-                .build();
+                .build());
+        item.put("totalPriceAmount", string(reservation.totalPrice().amount().toPlainString()));
+        item.put("totalPriceCurrency", string(reservation.totalPrice().currency().getCurrencyCode()));
+        item.put("status", string("CHECKOUT_IN_PROGRESS"));
+        item.put("checkoutExpiresAt", number(reservation.checkoutExpiresAt().toEpochMilli()));
+        item.put("createdAt", number(booking.createdAt().toEpochMilli()));
+        return item;
     }
 
-    private Update startSeatUpdate(ReservationCheckout reservation, Booking booking, SeatId seatId) {
+    private Update startSeatUpdate(ReservationCheckout reservation, SeatId seatId, Price quotedPrice) {
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.seatPk(reservation.eventId(), seatId))))
-                .updateExpression("SET #status = :checkout, #holdExpiresAt = :deadline")
+                .updateExpression("SET #status = :checkout, #holdId = :holdId, #checkoutExpiresAt = :deadline "
+                        + "REMOVE #legacyHoldExpiresAt, #bookingId")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
-                        + "AND #status = :held AND #holdId = :holdId AND #holdExpiresAt > :now")
+                        + "AND #status = :available "
+                        + "AND #priceAmount = :priceAmount AND #priceCurrency = :priceCurrency")
                 .expressionAttributeNames(Map.of(
                         "#entityType", "entityType",
                         "#eventId", "eventId",
                         "#seatId", "seatId",
                         "#status", "status",
                         "#holdId", "holdId",
-                        "#holdExpiresAt", "holdExpiresAt"))
+                        "#checkoutExpiresAt", "checkoutExpiresAt",
+                        "#legacyHoldExpiresAt", "holdExpiresAt",
+                        "#bookingId", "bookingId",
+                        "#priceAmount", "priceAmount",
+                        "#priceCurrency", "priceCurrency"))
                 .expressionAttributeValues(Map.of(
                         ":seatType", string("SEAT"),
                         ":eventId", string(reservation.eventId().value()),
                         ":seatId", string(seatId.value()),
                         ":checkout", string("CHECKOUT"),
-                        ":held", string("HELD"),
+                        ":available", string("AVAILABLE"),
                         ":holdId", string(reservation.id().value()),
                         ":deadline", number(reservation.checkoutExpiresAt().toEpochMilli()),
-                        ":now", number(booking.createdAt().toEpochMilli())))
+                        ":priceAmount", string(quotedPrice.amount().toPlainString()),
+                        ":priceCurrency", string(quotedPrice.currency().getCurrencyCode())))
                 .build();
     }
 
@@ -173,8 +175,7 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                 .conditionExpression("#entityType = :holdType AND #holdId = :holdId AND #eventId = :eventId "
                         + "AND #userId = :userId AND #seatIds = :seatIds "
                         + "AND #totalPriceAmount = :totalPriceAmount AND #totalPriceCurrency = :totalPriceCurrency "
-                        + "AND #expiresAt = :expiresAt AND #checkoutExpiresAt = :checkoutExpiresAt "
-                        + "AND #status = :checkout")
+                        + "AND #checkoutExpiresAt = :checkoutExpiresAt AND #status = :checkout")
                 .expressionAttributeNames(Map.of(
                         "#entityType", "entityType",
                         "#holdId", "holdId",
@@ -183,7 +184,6 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#seatIds", "seatIds",
                         "#totalPriceAmount", "totalPriceAmount",
                         "#totalPriceCurrency", "totalPriceCurrency",
-                        "#expiresAt", "expiresAt",
                         "#checkoutExpiresAt", "checkoutExpiresAt",
                         "#status", "status"))
                 .expressionAttributeValues(Map.ofEntries(
@@ -194,7 +194,6 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         Map.entry(":seatIds", seatIds),
                         Map.entry(":totalPriceAmount", string(reservation.totalPrice().amount().toPlainString())),
                         Map.entry(":totalPriceCurrency", string(reservation.totalPrice().currency().getCurrencyCode())),
-                        Map.entry(":expiresAt", number(reservation.expiresAt().toEpochMilli())),
                         Map.entry(":checkoutExpiresAt", number(reservation.checkoutExpiresAt().toEpochMilli())),
                         Map.entry(":checkout", string("CHECKOUT_IN_PROGRESS")),
                         Map.entry(":terminal", string(status))))
@@ -240,7 +239,8 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.seatPk(reservation.eventId(), seatId))))
-                .updateExpression("SET #status = :booked, #bookingId = :bookingId REMOVE #holdExpiresAt")
+                .updateExpression("SET #status = :booked, #bookingId = :bookingId "
+                        + "REMOVE #checkoutExpiresAt, #legacyHoldExpiresAt")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
                         + "AND #status = :checkout AND #holdId = :holdId")
                 .expressionAttributeNames(Map.of(
@@ -249,7 +249,8 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#seatId", "seatId",
                         "#status", "status",
                         "#bookingId", "bookingId",
-                        "#holdExpiresAt", "holdExpiresAt",
+                        "#checkoutExpiresAt", "checkoutExpiresAt",
+                        "#legacyHoldExpiresAt", "holdExpiresAt",
                         "#holdId", "holdId"))
                 .expressionAttributeValues(Map.of(
                         ":seatType", string("SEAT"),
@@ -266,7 +267,8 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
         return Update.builder()
                 .tableName(tableName)
                 .key(Map.of(PK, string(DynamoKeys.seatPk(reservation.eventId(), seatId))))
-                .updateExpression("SET #status = :available REMOVE #holdId, #holdExpiresAt, #bookingId")
+                .updateExpression("SET #status = :available "
+                        + "REMOVE #holdId, #checkoutExpiresAt, #legacyHoldExpiresAt, #bookingId")
                 .conditionExpression("#entityType = :seatType AND #eventId = :eventId AND #seatId = :seatId "
                         + "AND #status = :checkout AND #holdId = :holdId")
                 .expressionAttributeNames(Map.of(
@@ -275,7 +277,8 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
                         "#seatId", "seatId",
                         "#status", "status",
                         "#holdId", "holdId",
-                        "#holdExpiresAt", "holdExpiresAt",
+                        "#checkoutExpiresAt", "checkoutExpiresAt",
+                        "#legacyHoldExpiresAt", "holdExpiresAt",
                         "#bookingId", "bookingId"))
                 .expressionAttributeValues(Map.of(
                         ":seatType", string("SEAT"),
@@ -344,16 +347,16 @@ public final class DynamoCheckoutGateway implements CheckoutGateway {
 
     private static void requireSameCheckoutScope(ReservationCheckout reservation, Booking booking) {
         if (!reservation.id().equals(booking.holdId())) {
-            throw new IllegalArgumentException("booking does not belong to hold");
+            throw new IllegalArgumentException("booking does not belong to checkout reservation");
         }
         if (!reservation.eventId().equals(booking.eventId())) {
-            throw new IllegalArgumentException("booking does not belong to hold event");
+            throw new IllegalArgumentException("booking does not belong to reservation event");
         }
         if (!reservation.userId().equals(booking.userId())) {
-            throw new IllegalArgumentException("booking does not belong to hold user");
+            throw new IllegalArgumentException("booking does not belong to reservation user");
         }
         if (!reservation.totalPrice().equals(booking.totalPrice())) {
-            throw new IllegalArgumentException("booking price does not match hold price");
+            throw new IllegalArgumentException("booking price does not match reservation price");
         }
     }
 }

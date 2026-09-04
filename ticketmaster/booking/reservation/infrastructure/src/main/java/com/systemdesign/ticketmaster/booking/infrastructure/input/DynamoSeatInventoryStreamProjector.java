@@ -8,7 +8,6 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SeatStatus;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.Currency;
 import java.util.Map;
 import java.util.Objects;
@@ -35,8 +34,7 @@ public final class DynamoSeatInventoryStreamProjector {
                 string(image, "number"),
                 new Price(new BigDecimal(string(image, "priceAmount")),
                         Currency.getInstance(string(image, "priceCurrency"))),
-                SeatStatus.valueOf(string(image, "status")),
-                optionalInstant(image, "holdExpiresAt")));
+                SeatStatus.valueOf(string(image, "status"))));
     }
 
     private static String string(Map<String, AttributeValue> image, String name) {
@@ -45,11 +43,5 @@ public final class DynamoSeatInventoryStreamProjector {
             throw new IllegalArgumentException("seat stream image is missing " + name);
         }
         return value.s();
-    }
-
-    private static Instant optionalInstant(Map<String, AttributeValue> image, String name) {
-        AttributeValue value = image.get(name);
-        if (value == null || value.n() == null || value.n().isBlank()) return null;
-        return Instant.ofEpochMilli(Long.parseLong(value.n()));
     }
 }

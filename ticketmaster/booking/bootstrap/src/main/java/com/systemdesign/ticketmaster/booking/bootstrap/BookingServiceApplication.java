@@ -3,7 +3,6 @@ package com.systemdesign.ticketmaster.booking.bootstrap;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.ticketmaster.booking.application.AdmissionAccessService;
 import com.systemdesign.ticketmaster.booking.application.CheckAdmissionHandler;
-import com.systemdesign.ticketmaster.booking.application.CreateHoldHandler;
 import com.systemdesign.ticketmaster.booking.application.EnableAdmissionHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionSeatsHandler;
 import com.systemdesign.ticketmaster.booking.application.GetSectionsHandler;
@@ -98,14 +97,8 @@ public class BookingServiceApplication {
     @Bean
     HoldRepository holdRepository(
             DynamoDbClient dynamoDbClient,
-            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName,
-            @Value("${ticketmaster.aws.region:us-west-2}") String localRegion) {
-        return new DynamoHoldRepository(dynamoDbClient, tableName, localRegion);
-    }
-
-    @Bean
-    ReservationCheckoutService reservationCheckoutService(HoldRepository holdRepository) {
-        return new ReservationCheckoutServiceImpl(holdRepository);
+            @Value("${ticketmaster.booking.table-name:ticketmaster-booking}") String tableName) {
+        return new DynamoHoldRepository(dynamoDbClient, tableName);
     }
 
     @Bean
@@ -224,18 +217,10 @@ public class BookingServiceApplication {
     }
 
     @Bean
-    CreateHoldHandler createHoldHandler(
-            EventWriteAuthority eventWriteAuthority,
+    ReservationCheckoutService reservationCheckoutService(
             HoldRepository holdRepository,
-            AdmissionAccess admissionAccess,
-            Clock clock,
-            @Value("${ticketmaster.booking.hold-duration:PT5M}") String holdDuration) {
-        return new CreateHoldHandler(
-                eventWriteAuthority,
-                holdRepository,
-                admissionAccess,
-                clock,
-                Duration.parse(holdDuration));
+            AdmissionAccess admissionAccess) {
+        return new ReservationCheckoutServiceImpl(holdRepository, admissionAccess);
     }
 
     @Bean

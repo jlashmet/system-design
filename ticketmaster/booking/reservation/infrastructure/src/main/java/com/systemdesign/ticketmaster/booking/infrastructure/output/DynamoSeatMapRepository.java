@@ -9,9 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.SeatStatus;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import com.systemdesign.ticketmaster.booking.reservation.infrastructure.ReservationStorageUnavailableException;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.Currency;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -40,20 +38,17 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     public void upsert(SeatMapSeat seat) {
         Objects.requireNonNull(seat, "seat");
 
-        Map<String, AttributeValue> seatItem = new HashMap<>();
-        seatItem.put(PK, string(sectionPk(seat.eventId(), seat.sectionId())));
-        seatItem.put(SK, string(seatSk(seat.seatId())));
-        seatItem.put("eventId", string(seat.eventId().value()));
-        seatItem.put("sectionId", string(seat.sectionId().value()));
-        seatItem.put("seatId", string(seat.seatId().value()));
-        seatItem.put("row", string(seat.row()));
-        seatItem.put("number", string(seat.number()));
-        seatItem.put("priceAmount", string(seat.price().amount().toPlainString()));
-        seatItem.put("priceCurrency", string(seat.price().currency().getCurrencyCode()));
-        seatItem.put("status", string(seat.status().name()));
-        if (seat.holdExpiresAt() != null) {
-            seatItem.put("holdExpiresAt", number(seat.holdExpiresAt().toEpochMilli()));
-        }
+        Map<String, AttributeValue> seatItem = Map.ofEntries(
+                Map.entry(PK, string(sectionPk(seat.eventId(), seat.sectionId()))),
+                Map.entry(SK, string(seatSk(seat.seatId()))),
+                Map.entry("eventId", string(seat.eventId().value())),
+                Map.entry("sectionId", string(seat.sectionId().value())),
+                Map.entry("seatId", string(seat.seatId().value())),
+                Map.entry("row", string(seat.row())),
+                Map.entry("number", string(seat.number())),
+                Map.entry("priceAmount", string(seat.price().amount().toPlainString())),
+                Map.entry("priceCurrency", string(seat.price().currency().getCurrencyCode())),
+                Map.entry("status", string(seat.status().name())));
 
         Put seatPut = Put.builder()
                 .tableName(tableName)
@@ -186,10 +181,6 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
     }
 
     private static SeatMapSeat fromItem(Map<String, AttributeValue> item) {
-        AttributeValue expiry = item.get("holdExpiresAt");
-        Instant holdExpiresAt = expiry == null || expiry.n() == null
-                ? null
-                : Instant.ofEpochMilli(Long.parseLong(expiry.n()));
         return new SeatMapSeat(
                 new EventId(item.get("eventId").s()),
                 new SectionId(item.get("sectionId").s()),
@@ -198,15 +189,10 @@ public final class DynamoSeatMapRepository implements SeatMapRepository {
                 item.get("number").s(),
                 new Price(new BigDecimal(item.get("priceAmount").s()),
                         Currency.getInstance(item.get("priceCurrency").s())),
-                SeatStatus.valueOf(item.get("status").s()),
-                holdExpiresAt);
+                SeatStatus.valueOf(item.get("status").s()));
     }
 
     private static AttributeValue string(String value) {
         return AttributeValue.builder().s(value).build();
-    }
-
-    private static AttributeValue number(long value) {
-        return AttributeValue.builder().n(Long.toString(value)).build();
     }
 }

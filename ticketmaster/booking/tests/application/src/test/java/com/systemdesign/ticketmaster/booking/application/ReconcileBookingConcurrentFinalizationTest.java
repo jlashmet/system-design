@@ -53,7 +53,7 @@ class ReconcileBookingConcurrentFinalizationTest {
 
     @Test
     void concurrentFailureIsIdempotent() {
-        givenConcurrentWinner(PaymentIntentStatus.FAILED, BookingStatus.FAILED);
+        givenConcurrentWinner(PaymentIntentStatus.CANCELED, BookingStatus.FAILED);
         whenBookingReconciled();
         thenExpectTerminalResult(BookingStatus.FAILED);
     }

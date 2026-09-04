@@ -4,11 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.systemdesign.ticketmaster.booking.checkout.infrastructure.BookingStorageUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
@@ -28,138 +27,99 @@ class BookingExceptionHandlerTest {
 
     @Test
     void wrongRegionReturnsRerouteHint() {
-        givenWrongRegion();
+        exception = new WrongBookingRegionException(new EventId("event-123"), "us-west-2", "us-east-1");
         whenExceptionIsHandled();
-        thenExpectRerouteHint();
+        assertThat(response.getStatusCode().value()).isEqualTo(421);
+        assertThat(response.getHeaders().getFirst(BookingExceptionHandler.BOOKING_REGION_HEADER)).isEqualTo("us-east-1");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getProperties()).containsEntry("eventId", "event-123");
+        assertThat(response.getBody().getProperties()).containsEntry("ownerRegion", "us-east-1");
     }
 
     @Test
     void unavailableOwnershipRemainsServiceUnavailable() {
-        givenOwnershipUnavailable();
+        exception = new EventOwnershipUnavailableException(new EventId("event-123"), "control plane unavailable");
         whenExceptionIsHandled();
-        thenExpectServiceUnavailable();
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
     }
 
     @Test
-    void reusedHoldIdempotencyKeyForDifferentRequestIsConflict() {
-        givenHoldIdempotencyConflict();
+    void reusedCheckoutIdempotencyKeyForDifferentSeatsIsConflict() {
+        exception = new CheckoutIdempotencyConflictException("request-123");
         whenExceptionIsHandled();
         thenExpectConflict("Booking conflict");
     }
 
     @Test
-    void checkoutForAnotherUsersHoldIsForbidden() {
-        givenHoldOwnershipViolation();
+    void checkoutReservationForAnotherUserIsForbidden() {
+        exception = new HoldOwnershipException(new HoldId("checkout-1"), new UserId("user-other"));
         whenExceptionIsHandled();
-        thenExpectForbidden();
+        assertThat(response.getStatusCode().value()).isEqualTo(403);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Checkout reservation access forbidden");
     }
 
     @Test
-    void missingHoldIsNotFound() {
-        givenHoldNotFound();
+    void missingCheckoutReservationIsNotFound() {
+        exception = new HoldNotFoundException(new HoldId("checkout-missing"));
         whenExceptionIsHandled();
-        thenExpectNotFound("Hold not found");
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Checkout reservation not found");
     }
 
     @Test
     void expiredCheckoutIsConflict() {
-        givenCheckoutExpired();
+        exception = new CheckoutExpiredException(new HoldId("checkout-expired"));
         whenExceptionIsHandled();
         thenExpectConflict("Checkout expired");
     }
 
     @Test
     void missingWaitingRoomEntryIsNotFound() {
-        givenWaitingRoomEntryNotFound();
+        exception = new WaitingRoomEntryNotFoundException(new EventId("event-123"), new UserId("user-missing"));
         whenExceptionIsHandled();
-        thenExpectNotFound("Waiting-room entry not found");
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Waiting-room entry not found");
     }
 
     @Test
     void joiningDisabledWaitingRoomIsConflict() {
-        givenWaitingRoomDisabled();
+        exception = new WaitingRoomDisabledException(new EventId("event-123"));
         whenExceptionIsHandled();
         thenExpectConflict("Waiting room disabled");
     }
 
     @Test
     void transientBookingStorageFailureIsRetryableServiceUnavailable() {
-        givenBookingStorageUnavailable();
+        exception = new BookingStorageUnavailableException("checkout transaction", new IllegalStateException("throttled"));
         whenExceptionIsHandled();
-        thenExpectRetryableStorageUnavailable();
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Booking storage unavailable");
     }
 
     @Test
     void transientPaymentProviderFailureIsRetryableServiceUnavailable() {
-        givenPaymentProviderUnavailable();
+        exception = new PaymentProviderUnavailableException(
+                "payment intent creation", new IllegalStateException("provider timeout"));
         whenExceptionIsHandled();
-        thenExpectRetryablePaymentProviderUnavailable("payment intent creation");
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Payment provider unavailable");
+        assertThat(response.getBody().getProperties()).containsEntry("operation", "payment intent creation");
     }
 
     @Test
     void invalidPaymentWebhookAuthenticationIsUnauthorized() {
-        givenPaymentWebhookAuthenticationFailure();
-        whenExceptionIsHandled();
-        thenExpectUnauthorizedWebhook();
-    }
-
-    private void givenWrongRegion() {
-        exception = new WrongBookingRegionException(
-                new EventId("event-123"), "us-west-2", "us-east-1");
-        response = null;
-    }
-
-    private void givenOwnershipUnavailable() {
-        exception = new EventOwnershipUnavailableException(
-                new EventId("event-123"), "control plane unavailable");
-        response = null;
-    }
-
-    private void givenHoldIdempotencyConflict() {
-        exception = new HoldIdempotencyConflictException(new HoldIdempotencyKey("request-123"));
-        response = null;
-    }
-
-    private void givenHoldOwnershipViolation() {
-        exception = new HoldOwnershipException(new HoldId("hold-1"), new UserId("user-other"));
-        response = null;
-    }
-
-    private void givenHoldNotFound() {
-        exception = new HoldNotFoundException(new HoldId("hold-missing"));
-        response = null;
-    }
-
-    private void givenCheckoutExpired() {
-        exception = new CheckoutExpiredException(new HoldId("hold-expired"));
-        response = null;
-    }
-
-    private void givenWaitingRoomEntryNotFound() {
-        exception = new WaitingRoomEntryNotFoundException(
-                new EventId("event-123"), new UserId("user-missing"));
-        response = null;
-    }
-
-    private void givenWaitingRoomDisabled() {
-        exception = new WaitingRoomDisabledException(new EventId("event-123"));
-        response = null;
-    }
-
-    private void givenBookingStorageUnavailable() {
-        exception = new BookingStorageUnavailableException("seat claim", new IllegalStateException("throttled"));
-        response = null;
-    }
-
-    private void givenPaymentProviderUnavailable() {
-        exception = new PaymentProviderUnavailableException(
-                "payment intent creation", new IllegalStateException("provider timeout"));
-        response = null;
-    }
-
-    private void givenPaymentWebhookAuthenticationFailure() {
         exception = new PaymentWebhookAuthenticationException();
-        response = null;
+        whenExceptionIsHandled();
+        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getTitle()).isEqualTo("Payment webhook authentication failed");
     }
 
     private void whenExceptionIsHandled() {
@@ -188,55 +148,9 @@ class BookingExceptionHandlerTest {
         }
     }
 
-    private void thenExpectRerouteHint() {
-        assertThat(response.getStatusCode().value()).isEqualTo(421);
-        assertThat(response.getHeaders().getFirst(BookingExceptionHandler.BOOKING_REGION_HEADER)).isEqualTo("us-east-1");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getProperties()).containsEntry("eventId", "event-123");
-        assertThat(response.getBody().getProperties()).containsEntry("ownerRegion", "us-east-1");
-    }
-
-    private void thenExpectServiceUnavailable() {
-        assertThat(response.getStatusCode().value()).isEqualTo(503);
-        assertThat(response.getHeaders().getFirst(BookingExceptionHandler.BOOKING_REGION_HEADER)).isNull();
-    }
-
     private void thenExpectConflict(String title) {
         assertThat(response.getStatusCode().value()).isEqualTo(409);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getTitle()).isEqualTo(title);
-    }
-
-    private void thenExpectForbidden() {
-        assertThat(response.getStatusCode().value()).isEqualTo(403);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getTitle()).isEqualTo("Hold access forbidden");
-    }
-
-    private void thenExpectNotFound(String title) {
-        assertThat(response.getStatusCode().value()).isEqualTo(404);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getTitle()).isEqualTo(title);
-    }
-
-    private void thenExpectRetryableStorageUnavailable() {
-        assertThat(response.getStatusCode().value()).isEqualTo(503);
-        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getTitle()).isEqualTo("Booking storage unavailable");
-    }
-
-    private void thenExpectRetryablePaymentProviderUnavailable(String operation) {
-        assertThat(response.getStatusCode().value()).isEqualTo(503);
-        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getTitle()).isEqualTo("Payment provider unavailable");
-        assertThat(response.getBody().getProperties()).containsEntry("operation", operation);
-    }
-
-    private void thenExpectUnauthorizedWebhook() {
-        assertThat(response.getStatusCode().value()).isEqualTo(401);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getTitle()).isEqualTo("Payment webhook authentication failed");
     }
 }

@@ -5,8 +5,8 @@ import com.systemdesign.ticketmaster.booking.checkout.infrastructure.BookingStor
 import com.systemdesign.ticketmaster.booking.domain.AdmissionRequiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
+import com.systemdesign.ticketmaster.booking.domain.CheckoutIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventOwnershipUnavailableException;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyConflictException;
 import com.systemdesign.ticketmaster.booking.domain.HoldNotFoundException;
 import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.PaymentProviderUnavailableException;
@@ -45,14 +45,14 @@ public final class BookingExceptionHandler {
     @ExceptionHandler(HoldOwnershipException.class)
     ResponseEntity<ProblemDetail> holdOwnership(HoldOwnershipException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
-        detail.setTitle("Hold access forbidden");
+        detail.setTitle("Checkout reservation access forbidden");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(detail);
     }
 
     @ExceptionHandler(HoldNotFoundException.class)
     ResponseEntity<ProblemDetail> holdNotFound(HoldNotFoundException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
-        detail.setTitle("Hold not found");
+        detail.setTitle("Checkout reservation not found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(detail);
     }
 
@@ -118,7 +118,7 @@ public final class BookingExceptionHandler {
     }
 
     @ExceptionHandler({SeatClaimConflictException.class, SeatUnavailableException.class,
-            CheckoutConflictException.class, HoldIdempotencyConflictException.class})
+            CheckoutConflictException.class, CheckoutIdempotencyConflictException.class})
     ResponseEntity<ProblemDetail> conflict(RuntimeException exception) {
         ProblemDetail detail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
         detail.setTitle("Booking conflict");

@@ -75,17 +75,14 @@ public final class ReconcileBookingHandler {
         Booking withIntent = ensurePaymentIntent(booking);
         PaymentIntentStatus paymentStatus = getPaymentStatusOrReschedule(withIntent);
         if (paymentStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, reservation);
-        if (paymentStatus == PaymentIntentStatus.FAILED || paymentStatus == PaymentIntentStatus.CANCELED) {
-            return fail(withIntent, reservation);
-        }
+        if (paymentStatus == PaymentIntentStatus.CANCELED) return fail(withIntent, reservation);
+
         Instant checkoutDeadline = Objects.requireNonNull(
                 reservation.checkoutExpiresAt(), "pending booking hold must have checkout expiration");
         if (!clock.instant().isBefore(checkoutDeadline)) {
             PaymentIntentStatus cancelStatus = cancelPaymentOrReschedule(withIntent);
             if (cancelStatus == PaymentIntentStatus.SUCCEEDED) return confirm(withIntent, reservation);
-            if (cancelStatus == PaymentIntentStatus.FAILED || cancelStatus == PaymentIntentStatus.CANCELED) {
-                return fail(withIntent, reservation);
-            }
+            if (cancelStatus == PaymentIntentStatus.CANCELED) return fail(withIntent, reservation);
         }
         return reschedule(withIntent);
     }

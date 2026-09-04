@@ -12,7 +12,6 @@ import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import io.floci.testcontainers.FlociContainer;
 import java.math.BigDecimal;
 import java.net.URI;
-import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +40,6 @@ class DynamoSeatMapRepositoryIT {
     private static final SectionId SECTION_101 = new SectionId("101");
     private static final SectionId SECTION_102 = new SectionId("102");
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
-    private static final Instant HOLD_EXPIRES_AT = Instant.parse("2026-08-28T20:05:00Z");
 
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
@@ -61,22 +59,22 @@ class DynamoSeatMapRepositoryIT {
     }
 
     @Test
-    void sectionReadModelReflectsLatestProjectedSeatStateAndHoldExpiry() {
+    void sectionReadModelReflectsLatestProjectedCheckoutState() {
         givenProjectedSeats(
-                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE, null),
-                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE, null));
-        whenProjectAndRead(seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD, HOLD_EXPIRES_AT));
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE));
+        whenProjectAndRead(seat(SECTION_101, "A10", "A", "10", SeatStatus.CHECKOUT));
         thenExpectSection(
-                seat(SECTION_101, "A10", "A", "10", SeatStatus.HELD, HOLD_EXPIRES_AT),
-                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE, null));
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.CHECKOUT),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.AVAILABLE));
     }
 
     @Test
     void discoversEachProjectedSectionOnceWithoutScanningSeatPartitions() {
         givenProjectedSeats(
-                seat(SECTION_102, "B10", "B", "10", SeatStatus.AVAILABLE, null),
-                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE, null),
-                seat(SECTION_101, "A11", "A", "11", SeatStatus.HELD, HOLD_EXPIRES_AT));
+                seat(SECTION_102, "B10", "B", "10", SeatStatus.AVAILABLE),
+                seat(SECTION_101, "A10", "A", "10", SeatStatus.AVAILABLE),
+                seat(SECTION_101, "A11", "A", "11", SeatStatus.CHECKOUT));
         whenSectionsAreRead();
         thenExpectSections(SECTION_101, SECTION_102);
     }
@@ -161,13 +159,8 @@ class DynamoSeatMapRepositoryIT {
     }
 
     private static SeatMapSeat seat(
-            SectionId sectionId,
-            String seatId,
-            String row,
-            String number,
-            SeatStatus status,
-            Instant holdExpiresAt) {
-        return new SeatMapSeat(EVENT_ID, sectionId, new SeatId(seatId), row, number, PRICE, status, holdExpiresAt);
+            SectionId sectionId, String seatId, String row, String number, SeatStatus status) {
+        return new SeatMapSeat(EVENT_ID, sectionId, new SeatId(seatId), row, number, PRICE, status);
     }
 
     private static AttributeValue string(String value) {

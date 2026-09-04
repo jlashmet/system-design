@@ -4,6 +4,11 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * Reservation record created when the customer enters checkout. There is no
+ * pre-checkout ACTIVE phase: seat selection remains client-side until the
+ * customer clicks Next, which creates this reservation with one fixed deadline.
+ */
 public record Hold(
         HoldId id,
         UserId userId,
@@ -11,7 +16,6 @@ public record Hold(
         Set<SeatId> seatIds,
         Price totalPrice,
         HoldStatus status,
-        Instant expiresAt,
         Instant checkoutExpiresAt,
         Instant createdAt) {
 
@@ -19,45 +23,37 @@ public record Hold(
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(eventId, "eventId");
-        seatIds = Set.copyOf(seatIds);
-        if (seatIds.isEmpty()) throw new IllegalArgumentException("hold must contain at least one seat");
+        seatIds = Set.copyOf(Objects.requireNonNull(seatIds, "seatIds"));
+        if (seatIds.isEmpty()) throw new IllegalArgumentException("checkout reservation must contain at least one seat");
         Objects.requireNonNull(totalPrice, "totalPrice");
         Objects.requireNonNull(status, "status");
-        Objects.requireNonNull(expiresAt, "expiresAt");
+        Objects.requireNonNull(checkoutExpiresAt, "checkoutExpiresAt");
         Objects.requireNonNull(createdAt, "createdAt");
-        if (status == HoldStatus.CHECKOUT_IN_PROGRESS && checkoutExpiresAt == null) {
-            throw new IllegalArgumentException("checkout in progress requires a checkout expiration");
+        if (!checkoutExpiresAt.isAfter(createdAt)) {
+            throw new IllegalArgumentException("checkout expiration must be after creation");
         }
     }
 
-    public static Hold active(HoldId id, UserId userId, EventId eventId, Set<SeatId> seatIds,
-                              Price totalPrice, Instant createdAt, Instant expiresAt) {
-        if (!expiresAt.isAfter(createdAt)) throw new IllegalArgumentException("hold expiration must be after creation");
-        return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.ACTIVE, expiresAt, null, createdAt);
-    }
-
-    public boolean isActiveAt(Instant now) {
-        return status == HoldStatus.ACTIVE && expiresAt.isAfter(now);
-    }
-
-    public Hold startCheckout(Instant now, Instant checkoutDeadline) {
-        Objects.requireNonNull(now, "now");
-        Objects.requireNonNull(checkoutDeadline, "checkoutDeadline");
-        if (!isActiveAt(now)) throw new IllegalStateException("hold is not active");
-        if (!checkoutDeadline.isAfter(now)) throw new IllegalArgumentException("checkout deadline must be in the future");
+    public static Hold checkout(HoldId id, UserId userId, EventId eventId, Set<SeatId> seatIds,
+                                Price totalPrice, Instant createdAt, Instant checkoutExpiresAt) {
         return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.CHECKOUT_IN_PROGRESS,
-                expiresAt, checkoutDeadline, createdAt);
+                checkoutExpiresAt, createdAt);
+    }
+
+    public boolean isCheckoutActiveAt(Instant now) {
+        Objects.requireNonNull(now, "now");
+        return status == HoldStatus.CHECKOUT_IN_PROGRESS && checkoutExpiresAt.isAfter(now);
     }
 
     public Hold convert() {
-        if (status != HoldStatus.CHECKOUT_IN_PROGRESS) throw new IllegalStateException("hold is not in checkout");
+        if (status != HoldStatus.CHECKOUT_IN_PROGRESS) throw new IllegalStateException("reservation is not in checkout");
         return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.CONVERTED,
-                expiresAt, checkoutExpiresAt, createdAt);
+                checkoutExpiresAt, createdAt);
     }
 
     public Hold fail() {
-        if (status != HoldStatus.CHECKOUT_IN_PROGRESS) throw new IllegalStateException("hold is not in checkout");
+        if (status != HoldStatus.CHECKOUT_IN_PROGRESS) throw new IllegalStateException("reservation is not in checkout");
         return new Hold(id, userId, eventId, seatIds, totalPrice, HoldStatus.FAILED,
-                expiresAt, checkoutExpiresAt, createdAt);
+                checkoutExpiresAt, createdAt);
     }
 }

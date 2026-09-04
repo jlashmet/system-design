@@ -69,7 +69,7 @@ public final class StartCheckoutHandler {
 
         try {
             checkoutGateway.startCheckout(reservation, booking);
-            return createAndPersistPaymentIntent(booking);
+            return createAndPersistPaymentIntent(booking, reservation.checkoutExpiresAt());
         } catch (CheckoutConflictException conflict) {
             return findIdempotentBooking(command)
                     .map(bookingAfterConflict -> ensureSameScope(command, bookingAfterConflict))
@@ -103,17 +103,20 @@ public final class StartCheckoutHandler {
         requirePaymentReservationScope(booking, reservation, clock.instant());
 
         if (booking.paymentIntentIdOptional().isPresent()) {
-            return new StartCheckoutResult(booking, booking.paymentIntentIdOptional().orElseThrow());
+            return new StartCheckoutResult(
+                    booking,
+                    booking.paymentIntentIdOptional().orElseThrow(),
+                    reservation.checkoutExpiresAt());
         }
-        return createAndPersistPaymentIntent(booking);
+        return createAndPersistPaymentIntent(booking, reservation.checkoutExpiresAt());
     }
 
-    private StartCheckoutResult createAndPersistPaymentIntent(Booking booking) {
+    private StartCheckoutResult createAndPersistPaymentIntent(Booking booking, Instant checkoutExpiresAt) {
         PaymentIntent intent = paymentGateway.createPaymentIntent(
                 booking.eventId(), booking.id(), booking.totalPrice(), booking.id().value());
         Booking withIntent = booking.attachPaymentIntent(intent.id());
         bookingRepository.savePaymentIntent(withIntent);
-        return new StartCheckoutResult(withIntent, intent.id());
+        return new StartCheckoutResult(withIntent, intent.id(), checkoutExpiresAt);
     }
 
     private static void requirePaymentReservationScope(

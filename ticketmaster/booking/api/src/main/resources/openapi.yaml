@@ -94,7 +94,7 @@ paths:
         '403': { description: Waiting-room admission is enabled for the event and the user is not yet admitted }
         '409': { description: "Seats are unavailable, an authoritative price changed, or the idempotency key was reused for a different seat selection" }
         '421': { description: Request reached the wrong booking region; X-Booking-Region identifies the current owner }
-        '503': { description: Booking ownership, authoritative storage, or payment provider is temporarily unavailable; retry may succeed }
+        '503': { description: "Booking ownership, authoritative storage, or payment provider is temporarily unavailable; retry may succeed" }
   /events/{eventId}/waiting-room:
     post:
       tags: [WaitingRoom]

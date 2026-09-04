@@ -47,6 +47,8 @@ class DynamoBookingRepositoryIT {
     private static final Instant FIRST_DUE = Instant.parse("2026-08-27T22:00:00Z");
     private static final Instant SECOND_DUE = FIRST_DUE.plusSeconds(60);
     private static final Instant THIRD_DUE = SECOND_DUE.plusSeconds(60);
+    private static final Instant CHECKOUT_CREATED_AT = FIRST_DUE.minusSeconds(30);
+    private static final Instant CHECKOUT_EXPIRES_AT = FIRST_DUE.plusSeconds(90);
 
     @Container
     static final FlociContainer FLOCI = new FlociContainer();
@@ -94,12 +96,11 @@ class DynamoBookingRepositoryIT {
     void directLookupRejectsBookingWhoseStoredIdDisagreesWithPrimaryKey() {
         initialize();
         BookingId requestedId = new BookingId("booking-1");
-        Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
-                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
-                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Hold checkout = checkoutHold(
+                new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"));
         Booking booking = Booking.pending(requestedId,
-                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
-                "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+                ReservationTestFixtures.from(checkout),
+                "checkout-1", CHECKOUT_CREATED_AT, FIRST_DUE, 2);
         Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
         corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
         putRaw(corruptBooking);
@@ -112,12 +113,11 @@ class DynamoBookingRepositoryIT {
     @Test
     void reconciliationQueryRejectsBookingWhoseStoredIdDisagreesWithPrimaryKey() {
         initialize();
-        Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
-                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
-                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Hold checkout = checkoutHold(
+                new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"));
         Booking booking = Booking.pending(new BookingId("booking-1"),
-                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
-                "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+                ReservationTestFixtures.from(checkout),
+                "checkout-1", CHECKOUT_CREATED_AT, FIRST_DUE, 2);
         Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
         corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
         putRaw(corruptBooking);
@@ -131,16 +131,16 @@ class DynamoBookingRepositoryIT {
     void checkoutIdempotencyLookupFailsClosedWhenMappingIsMissingBookingId() {
         initialize();
         EventId eventId = new EventId("event-1");
-        HoldId holdId = new HoldId("hold-1");
+        UserId userId = new UserId("user-1");
         String idempotencyKey = "checkout-1";
         putRaw(Map.of(
-                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey)),
+                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, userId, idempotencyKey)),
                 "entityType", DynamoItemCodec.string("CHECKOUT_IDEMPOTENCY"),
                 "eventId", DynamoItemCodec.string(eventId.value()),
-                "holdId", DynamoItemCodec.string(holdId.value()),
+                "userId", DynamoItemCodec.string(userId.value()),
                 "idempotencyKey", DynamoItemCodec.string(idempotencyKey)));
 
-        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, userId, idempotencyKey))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("checkout idempotency record is missing bookingId");
     }
@@ -149,17 +149,17 @@ class DynamoBookingRepositoryIT {
     void checkoutIdempotencyLookupFailsClosedWhenMappingReferencesMissingBooking() {
         initialize();
         EventId eventId = new EventId("event-1");
-        HoldId holdId = new HoldId("hold-1");
+        UserId userId = new UserId("user-1");
         String idempotencyKey = "checkout-1";
         putRaw(Map.of(
-                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey)),
+                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, userId, idempotencyKey)),
                 "entityType", DynamoItemCodec.string("CHECKOUT_IDEMPOTENCY"),
                 "eventId", DynamoItemCodec.string(eventId.value()),
-                "holdId", DynamoItemCodec.string(holdId.value()),
+                "userId", DynamoItemCodec.string(userId.value()),
                 "idempotencyKey", DynamoItemCodec.string(idempotencyKey),
                 "bookingId", DynamoItemCodec.string("missing-booking")));
 
-        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, userId, idempotencyKey))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("checkout idempotency record references missing booking missing-booking");
     }
@@ -168,58 +168,53 @@ class DynamoBookingRepositoryIT {
     void checkoutIdempotencyLookupRejectsReferencedBookingOutsideMappingScope() {
         initialize();
         EventId eventId = new EventId("event-1");
-        HoldId holdId = new HoldId("hold-1");
+        UserId userId = new UserId("user-1");
         String idempotencyKey = "checkout-1";
-        Hold hold = Hold.active(holdId, new UserId("user-1"), eventId,
-                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
-                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Hold checkout = checkoutHold(new HoldId("hold-1"), userId, eventId);
         Booking wrongKeyBooking = Booking.pending(new BookingId("booking-1"),
-                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
-                "different-checkout-key", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+                ReservationTestFixtures.from(checkout),
+                "different-checkout-key", CHECKOUT_CREATED_AT, FIRST_DUE, 2);
         put(wrongKeyBooking);
         putRaw(Map.of(
-                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, holdId, idempotencyKey)),
+                "pk", DynamoItemCodec.string(DynamoKeys.idempotencyPk(eventId, userId, idempotencyKey)),
                 "entityType", DynamoItemCodec.string("CHECKOUT_IDEMPOTENCY"),
                 "eventId", DynamoItemCodec.string(eventId.value()),
-                "holdId", DynamoItemCodec.string(holdId.value()),
+                "userId", DynamoItemCodec.string(userId.value()),
                 "idempotencyKey", DynamoItemCodec.string(idempotencyKey),
                 "bookingId", DynamoItemCodec.string(wrongKeyBooking.id().value())));
 
-        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, userId, idempotencyKey))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("checkout idempotency record resolved outside its booking/event/hold/key scope");
+                .hasMessage("checkout idempotency record resolved outside its booking/event/user/key scope");
     }
 
     @Test
     void checkoutIdempotencyLookupRejectsBookingWhoseStoredIdDisagreesWithPrimaryKey() {
         initialize();
         EventId eventId = new EventId("event-1");
-        HoldId holdId = new HoldId("hold-1");
+        UserId userId = new UserId("user-1");
         String idempotencyKey = "checkout-1";
-        Hold hold = Hold.active(holdId, new UserId("user-1"), eventId,
-                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
-                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Hold checkout = checkoutHold(new HoldId("hold-1"), userId, eventId);
         Booking booking = Booking.pending(new BookingId("booking-1"),
-                ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
-                idempotencyKey, FIRST_DUE.minusSeconds(30), FIRST_DUE, 2);
+                ReservationTestFixtures.from(checkout),
+                idempotencyKey, CHECKOUT_CREATED_AT, FIRST_DUE, 2);
         Map<String, AttributeValue> corruptBooking = new HashMap<>(DynamoItemCodec.bookingToItem(booking));
         corruptBooking.put("bookingId", DynamoItemCodec.string("different-booking-id"));
         putRaw(corruptBooking);
         putRaw(DynamoItemCodec.idempotencyItem(booking));
 
-        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, holdId, idempotencyKey))
+        assertThatThrownBy(() -> repository.findByCheckoutIdempotencyKey(eventId, userId, idempotencyKey))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("booking record identity mismatch for booking-1");
     }
 
     private void givenPendingBooking() {
         initialize();
-        Hold hold = Hold.active(new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"),
-                Set.of(new SeatId("A10")), new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
-                FIRST_DUE.minusSeconds(300), FIRST_DUE.plusSeconds(300));
+        Hold checkout = checkoutHold(
+                new HoldId("hold-1"), new UserId("user-1"), new EventId("event-1"));
         booking = Booking.pending(new BookingId("booking-1"),
-                        ReservationTestFixtures.from(hold.startCheckout(FIRST_DUE.minusSeconds(30), FIRST_DUE.plusSeconds(90))),
-                        "checkout-1", FIRST_DUE.minusSeconds(30), FIRST_DUE, 2)
+                        ReservationTestFixtures.from(checkout),
+                        "checkout-1", CHECKOUT_CREATED_AT, FIRST_DUE, 2)
                 .attachPaymentIntent("pi-1");
         put(booking);
         rescheduled = null;
@@ -227,6 +222,17 @@ class DynamoBookingRepositoryIT {
         stale = null;
         confirmed = null;
         thrown = null;
+    }
+
+    private static Hold checkoutHold(HoldId holdId, UserId userId, EventId eventId) {
+        return Hold.checkout(
+                holdId,
+                userId,
+                eventId,
+                Set.of(new SeatId("A10")),
+                new Price(new BigDecimal("100.00"), Currency.getInstance("USD")),
+                CHECKOUT_CREATED_AT,
+                CHECKOUT_EXPIRES_AT);
     }
 
     private void givenConfirmedBookingWithPaymentIntent() {

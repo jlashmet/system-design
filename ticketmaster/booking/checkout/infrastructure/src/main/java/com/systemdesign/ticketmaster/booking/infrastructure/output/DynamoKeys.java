@@ -3,7 +3,6 @@ package com.systemdesign.ticketmaster.booking.infrastructure.output;
 import com.systemdesign.ticketmaster.booking.domain.BookingId;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
 import com.systemdesign.ticketmaster.booking.domain.UserId;
 import java.nio.charset.StandardCharsets;
@@ -25,11 +24,6 @@ final class DynamoKeys {
 
     static String holdPk(HoldId holdId) {
         return "HOLD#" + holdId.value();
-    }
-
-    static String holdIdempotencyPk(EventId eventId, UserId userId, HoldIdempotencyKey idempotencyKey) {
-        String scoped = eventId.value() + "\u0000" + userId.value() + "\u0000" + idempotencyKey.value();
-        return "HOLD_IDEMPOTENCY#" + sha256(scoped);
     }
 
     static String bookingPk(BookingId bookingId) {

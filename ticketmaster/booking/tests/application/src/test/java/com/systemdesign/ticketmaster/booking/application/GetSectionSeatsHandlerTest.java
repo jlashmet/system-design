@@ -10,51 +10,30 @@ import com.systemdesign.ticketmaster.booking.domain.SeatMapSeat;
 import com.systemdesign.ticketmaster.booking.domain.SeatStatus;
 import com.systemdesign.ticketmaster.booking.domain.SectionId;
 import java.math.BigDecimal;
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.Currency;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class GetSectionSeatsHandlerTest {
-    private static final Instant NOW = Instant.parse("2026-08-28T20:00:00Z");
     private static final EventId EVENT_ID = new EventId("event-1");
     private static final SectionId SECTION_ID = new SectionId("101");
     private static final Price PRICE = new Price(new BigDecimal("125.00"), Currency.getInstance("USD"));
 
-    private GetSectionSeatsHandler handler;
-    private List<SeatMapSeat> result;
-
     @Test
-    void derivesDisplayAvailabilityFromOrdinaryHoldExpiryWithoutReleasingCheckout() {
-        givenSeatMapWithExpiredHoldActiveHoldAndCheckout();
-        whenSectionSeatsAreRead();
-        thenExpectOnlyExpiredOrdinaryHoldDisplayedAvailable();
-    }
-
-    private void givenSeatMapWithExpiredHoldActiveHoldAndCheckout() {
+    void returnsAuthoritativeSeatStatusesWithoutClientSideExpiryRewrites() {
         SeatMapRepository repository = new FixedSeatMapRepository(List.of(
-                seat("A10", SeatStatus.HELD, NOW.minusSeconds(1)),
-                seat("A11", SeatStatus.HELD, NOW.plusSeconds(30)),
-                seat("A12", SeatStatus.CHECKOUT, NOW.minusSeconds(1))));
-        handler = new GetSectionSeatsHandler(repository, Clock.fixed(NOW, ZoneOffset.UTC));
-        result = null;
-    }
+                seat("A10", SeatStatus.AVAILABLE),
+                seat("A11", SeatStatus.CHECKOUT),
+                seat("A12", SeatStatus.BOOKED)));
+        GetSectionSeatsHandler handler = new GetSectionSeatsHandler(repository);
 
-    private void whenSectionSeatsAreRead() {
-        result = handler.handle(new GetSectionSeatsQuery(EVENT_ID, SECTION_ID));
-    }
+        List<SeatMapSeat> result = handler.handle(new GetSectionSeatsQuery(EVENT_ID, SECTION_ID));
 
-    private void thenExpectOnlyExpiredOrdinaryHoldDisplayedAvailable() {
         assertThat(result).extracting(SeatMapSeat::status)
-                .containsExactly(SeatStatus.AVAILABLE, SeatStatus.HELD, SeatStatus.CHECKOUT);
-        assertThat(result.get(0).holdExpiresAt()).isNull();
-        assertThat(result.get(1).holdExpiresAt()).isEqualTo(NOW.plusSeconds(30));
-        assertThat(result.get(2).holdExpiresAt()).isEqualTo(NOW.minusSeconds(1));
+                .containsExactly(SeatStatus.AVAILABLE, SeatStatus.CHECKOUT, SeatStatus.BOOKED);
     }
 
-    private static SeatMapSeat seat(String seatId, SeatStatus status, Instant holdExpiresAt) {
+    private static SeatMapSeat seat(String seatId, SeatStatus status) {
         return new SeatMapSeat(
                 EVENT_ID,
                 SECTION_ID,
@@ -62,8 +41,7 @@ class GetSectionSeatsHandlerTest {
                 "A",
                 seatId.substring(1),
                 PRICE,
-                status,
-                holdExpiresAt);
+                status);
     }
 
     private record FixedSeatMapRepository(List<SeatMapSeat> seats) implements SeatMapRepository {

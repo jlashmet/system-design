@@ -36,8 +36,8 @@ final class DynamoKeys {
         return "BOOKING#" + bookingId.value();
     }
 
-    static String idempotencyPk(EventId eventId, HoldId holdId, String idempotencyKey) {
-        String scoped = eventId.value() + "\u0000" + holdId.value() + "\u0000" + idempotencyKey;
+    static String idempotencyPk(EventId eventId, UserId userId, String idempotencyKey) {
+        String scoped = eventId.value() + "\u0000" + userId.value() + "\u0000" + idempotencyKey;
         return "CHECKOUT_IDEMPOTENCY#" + sha256(scoped);
     }
 

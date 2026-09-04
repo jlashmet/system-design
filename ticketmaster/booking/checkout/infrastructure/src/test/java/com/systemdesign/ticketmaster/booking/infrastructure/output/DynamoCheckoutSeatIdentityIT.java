@@ -9,6 +9,7 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutConflictException;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -57,9 +58,9 @@ class DynamoCheckoutSeatIdentityIT {
     private DynamoDbClient dynamoDb;
     private String tableName;
     private DynamoCheckoutGateway gateway;
-    private Hold activeHold;
     private Hold checkoutHold;
     private ReservationCheckout checkoutReservation;
+    private PreparedCheckout preparedCheckout;
     private Booking pendingBooking;
 
     @BeforeEach
@@ -80,9 +81,11 @@ class DynamoCheckoutSeatIdentityIT {
                         .attributeName("pk").keyType(KeyType.HASH).build())
                 .build());
         gateway = new DynamoCheckoutGateway(dynamoDb, tableName);
-        activeHold = Hold.active(HOLD_ID, USER_ID, EVENT_ID, Set.of(SEAT_ID), PRICE, NOW, NOW.plusSeconds(300));
-        checkoutHold = activeHold.startCheckout(NOW.plusSeconds(10), NOW.plusSeconds(120));
+        checkoutHold = Hold.checkout(
+                HOLD_ID, USER_ID, EVENT_ID, Set.of(SEAT_ID), PRICE,
+                NOW.plusSeconds(10), NOW.plusSeconds(120));
         checkoutReservation = ReservationTestFixtures.from(checkoutHold);
+        preparedCheckout = new PreparedCheckout(checkoutReservation, Map.of(SEAT_ID, PRICE));
         pendingBooking = Booking.pending(
                         new BookingId("booking-1"), checkoutReservation, "checkout-key", NOW.plusSeconds(10),
                         NOW.plusSeconds(40), 1)
@@ -99,14 +102,16 @@ class DynamoCheckoutSeatIdentityIT {
 
     @Test
     void startCheckoutRejectsMismatchedSeatIdentityWithoutMutatingTransaction() {
-        putHold(activeHold, "ACTIVE", null);
-        putSeat("HELD", "other-event", HOLD_ID.value(), activeHold.expiresAt().toEpochMilli());
+        putAvailableSeat("other-event");
+        Booking pendingWithoutIntent = Booking.pending(
+                pendingBooking.id(), checkoutReservation, pendingBooking.checkoutIdempotencyKey(),
+                pendingBooking.createdAt(), pendingBooking.nextReconcileAt(), pendingBooking.reconcileShard());
 
-        assertThatThrownBy(() -> gateway.startCheckout(checkoutReservation, pendingBooking))
+        assertThatThrownBy(() -> gateway.startCheckout(preparedCheckout, pendingWithoutIntent))
                 .isInstanceOf(CheckoutConflictException.class);
 
-        assertThat(holdItem().get("status").s()).isEqualTo("ACTIVE");
-        assertThat(seatItem().get("status").s()).isEqualTo("HELD");
+        assertThat(holdItem()).isEmpty();
+        assertThat(seatItem().get("status").s()).isEqualTo("AVAILABLE");
         assertThat(seatItem().get("eventId").s()).isEqualTo("other-event");
         assertThat(bookingItem()).isEmpty();
     }
@@ -134,9 +139,9 @@ class DynamoCheckoutSeatIdentityIT {
     }
 
     private void givenPendingCheckoutWithCorruptSeat() {
-        putHold(checkoutHold, "CHECKOUT_IN_PROGRESS", checkoutHold.checkoutExpiresAt().toEpochMilli());
+        putHold(checkoutHold);
         putBooking(pendingBooking);
-        putSeat("CHECKOUT", "other-event", HOLD_ID.value(), checkoutHold.checkoutExpiresAt().toEpochMilli());
+        putCheckoutSeat("other-event", HOLD_ID.value(), checkoutHold.checkoutExpiresAt().toEpochMilli());
     }
 
     private void assertPendingCheckoutUnchanged() {
@@ -146,7 +151,7 @@ class DynamoCheckoutSeatIdentityIT {
         assertThat(seatItem().get("eventId").s()).isEqualTo("other-event");
     }
 
-    private void putHold(Hold hold, String status, Long checkoutExpiresAt) {
+    private void putHold(Hold hold) {
         Map<String, AttributeValue> item = new LinkedHashMap<>();
         item.put("pk", string(DynamoKeys.holdPk(hold.id())));
         item.put("entityType", string("HOLD"));
@@ -156,10 +161,9 @@ class DynamoCheckoutSeatIdentityIT {
         item.put("seatIds", AttributeValue.builder().ss(SEAT_ID.value()).build());
         item.put("totalPriceAmount", string(PRICE.amount().toPlainString()));
         item.put("totalPriceCurrency", string(PRICE.currency().getCurrencyCode()));
-        item.put("status", string(status));
-        item.put("expiresAt", number(activeHold.expiresAt().toEpochMilli()));
-        item.put("createdAt", number(activeHold.createdAt().toEpochMilli()));
-        if (checkoutExpiresAt != null) item.put("checkoutExpiresAt", number(checkoutExpiresAt));
+        item.put("status", string("CHECKOUT_IN_PROGRESS"));
+        item.put("checkoutExpiresAt", number(hold.checkoutExpiresAt().toEpochMilli()));
+        item.put("createdAt", number(hold.createdAt().toEpochMilli()));
         dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
     }
 
@@ -170,7 +174,21 @@ class DynamoCheckoutSeatIdentityIT {
                 .build());
     }
 
-    private void putSeat(String status, String eventId, String holdId, long holdExpiresAt) {
+    private void putAvailableSeat(String eventId) {
+        dynamoDb.putItem(PutItemRequest.builder()
+                .tableName(tableName)
+                .item(Map.of(
+                        "pk", string(DynamoKeys.seatPk(EVENT_ID, SEAT_ID)),
+                        "entityType", string("SEAT"),
+                        "eventId", string(eventId),
+                        "seatId", string(SEAT_ID.value()),
+                        "status", string("AVAILABLE"),
+                        "priceAmount", string(PRICE.amount().toPlainString()),
+                        "priceCurrency", string(PRICE.currency().getCurrencyCode())))
+                .build());
+    }
+
+    private void putCheckoutSeat(String eventId, String holdId, long checkoutExpiresAt) {
         dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
                 .item(Map.ofEntries(
@@ -178,9 +196,9 @@ class DynamoCheckoutSeatIdentityIT {
                         Map.entry("entityType", string("SEAT")),
                         Map.entry("eventId", string(eventId)),
                         Map.entry("seatId", string(SEAT_ID.value())),
-                        Map.entry("status", string(status)),
+                        Map.entry("status", string("CHECKOUT")),
                         Map.entry("holdId", string(holdId)),
-                        Map.entry("holdExpiresAt", number(holdExpiresAt)),
+                        Map.entry("checkoutExpiresAt", number(checkoutExpiresAt)),
                         Map.entry("priceAmount", string(PRICE.amount().toPlainString())),
                         Map.entry("priceCurrency", string(PRICE.currency().getCurrencyCode()))))
                 .build());

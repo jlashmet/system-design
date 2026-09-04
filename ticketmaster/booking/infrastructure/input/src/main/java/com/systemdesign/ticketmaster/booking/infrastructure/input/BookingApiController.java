@@ -97,6 +97,7 @@ public final class BookingApiController implements BookingApi {
         response.setBookingId(result.booking().id().value());
         response.setStatus(result.booking().status().name());
         response.setPaymentIntentId(result.paymentIntentId());
+        response.setCheckoutExpiresAt(result.checkoutExpiresAt().atOffset(ZoneOffset.UTC));
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, NO_STORE).body(response);
     }
 

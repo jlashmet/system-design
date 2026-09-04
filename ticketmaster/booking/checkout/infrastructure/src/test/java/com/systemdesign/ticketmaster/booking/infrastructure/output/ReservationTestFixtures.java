@@ -16,7 +16,6 @@ final class ReservationTestFixtures {
                 hold.seatIds(),
                 hold.totalPrice(),
                 ReservationCheckoutStatus.valueOf(hold.status().name()),
-                hold.expiresAt(),
                 hold.checkoutExpiresAt());
     }
 }

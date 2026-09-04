@@ -12,7 +12,6 @@ public record ReservationCheckout(
         Set<SeatId> seatIds,
         Price totalPrice,
         ReservationCheckoutStatus status,
-        Instant expiresAt,
         Instant checkoutExpiresAt) {
 
     public ReservationCheckout {
@@ -23,9 +22,6 @@ public record ReservationCheckout(
         if (seatIds.isEmpty()) throw new IllegalArgumentException("reservation must contain at least one seat");
         Objects.requireNonNull(totalPrice, "totalPrice");
         Objects.requireNonNull(status, "status");
-        Objects.requireNonNull(expiresAt, "expiresAt");
-        if (status == ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS && checkoutExpiresAt == null) {
-            throw new IllegalArgumentException("checkout reservation requires a checkout expiration");
-        }
+        Objects.requireNonNull(checkoutExpiresAt, "checkoutExpiresAt");
     }
 }

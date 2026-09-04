@@ -6,7 +6,7 @@ import java.util.Optional;
 
 public interface BookingRepository {
     Optional<Booking> findById(BookingId bookingId);
-    Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String idempotencyKey);
+    Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, UserId userId, String idempotencyKey);
     void savePaymentIntent(Booking booking);
     void rescheduleReconciliation(Booking booking);
     List<Booking> findDueForReconciliation(int shard, Instant dueAtOrBefore, int limit);

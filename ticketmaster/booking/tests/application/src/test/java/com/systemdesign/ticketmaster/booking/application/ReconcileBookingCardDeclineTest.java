@@ -10,11 +10,11 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.Hold;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldIdempotencyKey;
 import com.systemdesign.ticketmaster.booking.domain.HoldRepository;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.SeatId;
@@ -105,15 +105,14 @@ class ReconcileBookingCardDeclineTest {
     }
 
     private static Hold checkoutHold() {
-        return Hold.active(
-                        HOLD_ID,
-                        USER_ID,
-                        EVENT_ID,
-                        Set.of(new SeatId("A10")),
-                        PRICE,
-                        CHECKOUT_STARTED_AT.minusSeconds(30),
-                        CHECKOUT_STARTED_AT.plusSeconds(270))
-                .startCheckout(CHECKOUT_STARTED_AT, CHECKOUT_EXPIRES_AT);
+        return Hold.checkout(
+                HOLD_ID,
+                USER_ID,
+                EVENT_ID,
+                Set.of(new SeatId("A10")),
+                PRICE,
+                CHECKOUT_STARTED_AT,
+                CHECKOUT_EXPIRES_AT);
     }
 
     private static final class TrackingBookingRepository implements BookingRepository {
@@ -130,7 +129,7 @@ class ReconcileBookingCardDeclineTest {
         }
 
         @Override
-        public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) {
+        public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, UserId userId, String key) {
             return Optional.empty();
         }
 
@@ -164,18 +163,8 @@ class ReconcileBookingCardDeclineTest {
         }
 
         @Override
-        public void createWithSeatClaims(Hold hold, SeatPriceQuote quote, Instant now, HoldIdempotencyKey key) {
-            throw new AssertionError("not expected");
-        }
-
-        @Override
         public Optional<Hold> findById(HoldId holdId) {
             return hold.id().equals(holdId) ? Optional.of(hold) : Optional.empty();
-        }
-
-        @Override
-        public Optional<Hold> findByIdempotencyKey(HoldIdempotencyKey key) {
-            throw new AssertionError("not expected");
         }
     }
 
@@ -184,7 +173,7 @@ class ReconcileBookingCardDeclineTest {
         private Booking failed;
 
         @Override
-        public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) {
+        public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) {
             throw new AssertionError("not expected");
         }
 

@@ -98,7 +98,8 @@ paths:
     post:
       tags: [Booking]
       operationId: startCheckout
-      summary: Start checkout for an active hold owned by the authenticated user in the event's authoritative booking region
+      summary: Start a fixed-window checkout for an active hold owned by the authenticated user
+      description: Once checkout starts, checkoutExpiresAt is fixed. Recoverable card declines keep the same Payment Intent and do not release seats or extend the checkout deadline.
       parameters:
         - in: path
           name: eventId
@@ -119,7 +120,7 @@ paths:
           schema: { type: string, minLength: 1 }
       responses:
         '200':
-          description: Checkout started or the existing idempotent checkout result returned
+          description: Checkout started or the existing idempotent checkout result returned with its original fixed deadline
           headers:
             Cache-Control:
               schema: { type: string, example: no-store }
@@ -128,7 +129,7 @@ paths:
               schema: { $ref: '#/components/schemas/CheckoutResponse' }
         '403': { description: The Hold belongs to a different user }
         '404': { description: Hold does not exist }
-        '409': { description: Hold is expired or not active }
+        '409': { description: Hold is expired or not active, or the checkout deadline has passed }
         '421': { description: Request reached the wrong booking region; X-Booking-Region identifies the current owner }
         '503': { description: Booking ownership or authoritative storage is temporarily unavailable; retry may succeed }
   /events/{eventId}/waiting-room:
@@ -229,11 +230,15 @@ components:
         expiresAt: { type: string, format: date-time }
     CheckoutResponse:
       type: object
-      required: [bookingId, status, paymentIntentId]
+      required: [bookingId, status, paymentIntentId, checkoutExpiresAt]
       properties:
         bookingId: { type: string }
         status: { type: string }
         paymentIntentId: { type: string }
+        checkoutExpiresAt:
+          type: string
+          format: date-time
+          description: Fixed absolute checkout deadline. Retrying a declined card does not move this value.
     WaitingRoomEntryResponse:
       type: object
       required: [eventId, userId, joinedAt]

@@ -10,10 +10,10 @@ import com.systemdesign.ticketmaster.booking.domain.CheckoutExpiredException;
 import com.systemdesign.ticketmaster.booking.domain.CheckoutGateway;
 import com.systemdesign.ticketmaster.booking.domain.EventId;
 import com.systemdesign.ticketmaster.booking.domain.HoldId;
-import com.systemdesign.ticketmaster.booking.domain.HoldOwnershipException;
 import com.systemdesign.ticketmaster.booking.domain.PaymentGateway;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntent;
 import com.systemdesign.ticketmaster.booking.domain.PaymentIntentStatus;
+import com.systemdesign.ticketmaster.booking.domain.PreparedCheckout;
 import com.systemdesign.ticketmaster.booking.domain.Price;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckout;
 import com.systemdesign.ticketmaster.booking.domain.ReservationCheckoutService;
@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
 class StartCheckoutIdempotentPaymentScopeTest {
     private static final EventId EVENT_ID = new EventId("event-123");
     private static final HoldId HOLD_ID = new HoldId("hold-1");
+    private static final SeatId A10 = new SeatId("A10");
     private static final UserId OWNER = new UserId("user-owner");
     private static final UserId DRIFTED_OWNER = new UserId("user-drifted");
     private static final Instant NOW = Instant.parse("2026-08-28T10:00:00Z");
@@ -50,9 +51,9 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 payments,
                 reservation(DRIFTED_OWNER));
 
-        assertThatThrownBy(() -> handler.handle(
-                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
-                .isInstanceOf(HoldOwnershipException.class);
+        assertThatThrownBy(() -> handler.handle(command()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("checkout reservation owner mismatch for booking-existing");
         assertThat(payments.createCalls).isZero();
         assertThat(bookings.saveIntentCalls).isZero();
     }
@@ -68,9 +69,9 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 payments,
                 reservation(DRIFTED_OWNER));
 
-        assertThatThrownBy(() -> handler.handle(
-                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
-                .isInstanceOf(HoldOwnershipException.class);
+        assertThatThrownBy(() -> handler.handle(command()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("checkout reservation owner mismatch for booking-existing");
         assertThat(payments.createCalls).isZero();
         assertThat(bookings.saveIntentCalls).isZero();
     }
@@ -82,8 +83,7 @@ class StartCheckoutIdempotentPaymentScopeTest {
         TrackingPaymentGateway payments = new TrackingPaymentGateway();
         StartCheckoutHandler handler = handler(bookings, payments, expiredReservation);
 
-        assertThatThrownBy(() -> handler.handle(
-                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
+        assertThatThrownBy(() -> handler.handle(command()))
                 .isInstanceOf(CheckoutExpiredException.class)
                 .hasMessage("checkout expired for hold hold-1");
         assertThat(payments.createCalls).isZero();
@@ -98,12 +98,15 @@ class StartCheckoutIdempotentPaymentScopeTest {
         TrackingPaymentGateway payments = new TrackingPaymentGateway();
         StartCheckoutHandler handler = handler(bookings, payments, expiredReservation);
 
-        assertThatThrownBy(() -> handler.handle(
-                        new StartCheckoutCommand(EVENT_ID, HOLD_ID, OWNER, "idem-existing")))
+        assertThatThrownBy(() -> handler.handle(command()))
                 .isInstanceOf(CheckoutExpiredException.class)
                 .hasMessage("checkout expired for hold hold-1");
         assertThat(payments.createCalls).isZero();
         assertThat(bookings.saveIntentCalls).isZero();
+    }
+
+    private static StartCheckoutCommand command() {
+        return new StartCheckoutCommand(EVENT_ID, OWNER, List.of(A10), "idem-existing", null);
     }
 
     private static Booking pendingBooking(ReservationCheckout bookingReservation) {
@@ -122,8 +125,9 @@ class StartCheckoutIdempotentPaymentScopeTest {
             ReservationCheckout authoritativeReservation) {
         ReservationCheckoutService reservations = new ReservationCheckoutService() {
             @Override
-            public ReservationCheckout prepareCheckout(
-                    EventId eventId, HoldId holdId, UserId userId, Instant now, Instant checkoutExpiresAt) {
+            public PreparedCheckout prepareCheckout(
+                    EventId eventId, UserId userId, Set<SeatId> seatIds,
+                    String admissionToken, Instant now, Instant checkoutExpiresAt) {
                 throw new AssertionError("fresh checkout must not start on an idempotent retry");
             }
 
@@ -133,7 +137,7 @@ class StartCheckoutIdempotentPaymentScopeTest {
             }
         };
         CheckoutGateway checkout = new CheckoutGateway() {
-            @Override public void startCheckout(ReservationCheckout reservation, Booking pendingBooking) {
+            @Override public void startCheckout(PreparedCheckout preparedCheckout, Booking pendingBooking) {
                 throw new AssertionError("checkout must not restart on an idempotent retry");
             }
             @Override public void finalizeBooking(ReservationCheckout reservation, Booking confirmedBooking) {
@@ -160,10 +164,9 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 HOLD_ID,
                 owner,
                 EVENT_ID,
-                Set.of(new SeatId("A10")),
+                Set.of(A10),
                 PRICE,
                 ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
-                NOW.plusSeconds(270),
                 NOW.plusSeconds(300));
     }
 
@@ -172,10 +175,9 @@ class StartCheckoutIdempotentPaymentScopeTest {
                 HOLD_ID,
                 OWNER,
                 EVENT_ID,
-                Set.of(new SeatId("A10")),
+                Set.of(A10),
                 PRICE,
                 ReservationCheckoutStatus.CHECKOUT_IN_PROGRESS,
-                NOW.minusSeconds(30),
                 NOW.minusSeconds(1));
     }
 
@@ -190,8 +192,12 @@ class StartCheckoutIdempotentPaymentScopeTest {
         @Override public Optional<Booking> findById(BookingId bookingId) { return Optional.empty(); }
 
         @Override
-        public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, HoldId holdId, String key) {
-            return booking.checkoutIdempotencyKey().equals(key) ? Optional.of(booking) : Optional.empty();
+        public Optional<Booking> findByCheckoutIdempotencyKey(EventId eventId, UserId userId, String key) {
+            return booking.eventId().equals(eventId)
+                    && booking.userId().equals(userId)
+                    && booking.checkoutIdempotencyKey().equals(key)
+                    ? Optional.of(booking)
+                    : Optional.empty();
         }
 
         @Override

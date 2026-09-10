@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.application;
 
+import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
@@ -49,6 +50,25 @@ class ProcessGenerationHandlerTest {
     }
 
     @Test
+    void usesGenerationScopedContextFromAssembler() {
+        List<Message> captured = new ArrayList<>();
+        Fixture fixture = new Fixture(messages -> {
+            captured.addAll(messages);
+            return new ModelGateway.Completion("test-model", "ok");
+        }, (conversation, generation) -> List.of(
+                conversation.messages().stream()
+                        .filter(message -> message.id().equals(generation.userMessageId()))
+                        .findFirst()
+                        .orElseThrow()));
+
+        fixture.handler.handle(fixture.generation.id());
+
+        assertThat(captured)
+                .extracting(Message::role, Message::content)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"));
+    }
+
+    @Test
     void duplicateDeliveryDoesNotInvokeProviderTwice() {
         AtomicInteger calls = new AtomicInteger();
         Fixture fixture = new Fixture(messages -> {
@@ -87,6 +107,10 @@ class ProcessGenerationHandlerTest {
         private final ProcessGenerationHandler handler;
 
         private Fixture(ModelGateway gateway) {
+            this(gateway, (conversation, ignored) -> conversation.messages());
+        }
+
+        private Fixture(ModelGateway gateway, ContextAssembler contextAssembler) {
             Conversation conversation = Conversation.start(conversationId, "user-1", NOW);
             conversation.append(new Message(userMessageId, MessageRole.USER, "hello", NOW.plusSeconds(1)));
             generation = Generation.pending(
@@ -97,6 +121,7 @@ class ProcessGenerationHandlerTest {
                     store,
                     gateway,
                     eventBus,
+                    contextAssembler,
                     UUID::randomUUID,
                     Clock.fixed(NOW.plusSeconds(2), ZoneOffset.UTC));
         }

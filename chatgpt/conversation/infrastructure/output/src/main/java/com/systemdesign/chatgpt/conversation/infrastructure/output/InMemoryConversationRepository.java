@@ -3,8 +3,10 @@ package com.systemdesign.chatgpt.conversation.infrastructure.output;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,13 +51,24 @@ public final class InMemoryConversationRepository implements ConversationReposit
     }
 
     @Override
+    public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
+        Generation current = generationsById.get(generationId);
+        if (current == null || current.status() == GenerationStatus.RUNNING || current.status() == GenerationStatus.COMPLETED) {
+            return Optional.empty();
+        }
+        Generation running = current.running(startedAt);
+        putGeneration(running);
+        return Optional.of(running);
+    }
+
+    @Override
     public synchronized void complete(Conversation conversation, Generation generation) {
         conversations.put(conversation.id(), copy(conversation));
         putGeneration(generation);
     }
 
     @Override
-    public void fail(Generation generation) {
+    public synchronized void fail(Generation generation) {
         putGeneration(generation);
     }
 

@@ -51,21 +51,17 @@ Retry semantics are intentionally explicit:
 - If the provider fails, the user message remains durable and the generation becomes `FAILED`; retrying the same key reuses that user message rather than appending another one.
 - Durable conversational state is idempotent while external inference remains at-least-once unless the provider itself supplies stronger idempotency guarantees.
 
-### 3. Asynchronous inference boundary and generation events
+### 3. Asynchronous inference and token streaming
 
 Message submission no longer invokes the model in the HTTP request lifecycle. `POST /messages` persists the user message and generation, enqueues the generation ID through an `InferenceJobQueue` port, and returns `202 Accepted` immediately.
 
-A separate `ProcessGenerationHandler` owns provider inference. Workers atomically claim a generation (`PENDING`/`FAILED` -> `RUNNING`) before invoking the provider, so duplicate queue delivery cannot produce duplicate assistant messages. The development composition uses an in-memory queue and a scheduled worker; a production adapter can replace these with Kafka/SQS/Pulsar or another durable queue without changing the use cases.
+A separate `ProcessGenerationHandler` owns provider inference. Workers atomically claim a generation (`PENDING`/`FAILED` -> `RUNNING`) before invoking the provider, so duplicate queue delivery cannot produce duplicate assistant messages.
 
-Clients can inspect or follow generation state independently of the original request:
+The model gateway exposes a streaming callback. `ProcessGenerationHandler` publishes model deltas through a `GenerationEventBus`, and the SSE endpoint subscribes directly to `delta`, `completed`, `failed`, and `cancelled` events.
 
-```text
-GET /v1/conversations/{conversationId}/generations/{generationId}
-GET /v1/conversations/{conversationId}/generations/{generationId}/events
-    Accept: text/event-stream
-```
+### 4. Generation cancellation
 
-The model gateway now has a streaming callback in addition to whole-completion inference. `ProcessGenerationHandler` publishes each model delta through a `GenerationEventBus`, and the SSE endpoint subscribes directly to those events. This removes the previous status-polling loop from the streaming edge and allows clients to receive `delta`, `completed`, and `failed` events as inference happens.
+`POST /v1/conversations/{conversationId}/generations/{generationId}/cancel` moves a non-terminal generation to `CANCELLED` and publishes a terminal SSE event. Cancellation is enforced in the persistence boundary: a provider response arriving after cancellation cannot persist an assistant message or overwrite the cancelled state. The worker also stops publishing further deltas once cancellation is observed.
 
 ### HTTP endpoints
 
@@ -76,17 +72,14 @@ POST /v1/conversations/{conversationId}/messages
      Idempotency-Key: <client-generated-key>
 GET  /v1/conversations/{conversationId}/generations/{generationId}
 GET  /v1/conversations/{conversationId}/generations/{generationId}/events
+POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 ```
 
-The model adapter is intentionally deterministic so the vertical slices remain runnable without external credentials; its streaming implementation emits multiple chunks so the SSE path is testable locally.
-
-## Why these slices first
-
-The key boundary is not a particular LLM vendor or datastore. It is the contract between conversational state and inference. Durable turn identity plus an independent generation lifecycle means request retries, worker retries, provider failures, and streaming transports can evolve without duplicating conversational truth.
+The development composition uses in-memory queue/event adapters and a deterministic model so the vertical slices remain runnable without external credentials.
 
 ## Next implementation slices
 
-1. Complete the async inference slice: cancellation, queue admission control/backpressure, and worker retry/dead-letter policy.
+1. Complete the async inference slice: queue admission control/backpressure and worker retry/dead-letter policy.
 2. Add model routing: model capability/cost policy, provider health, fallback policy, and per-tenant/user quotas.
 3. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
 4. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.

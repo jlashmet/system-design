@@ -28,7 +28,7 @@ public final class InMemoryConversationRepository implements ConversationReposit
     }
 
     @Override
-    public Optional<Generation> findById(UUID generationId) {
+    public Optional<Generation> findGenerationById(UUID generationId) {
         return Optional.ofNullable(generationsById.get(generationId));
     }
 

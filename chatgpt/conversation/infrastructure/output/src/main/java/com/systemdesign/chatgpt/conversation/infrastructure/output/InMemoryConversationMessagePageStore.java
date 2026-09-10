@@ -7,6 +7,7 @@ import com.systemdesign.chatgpt.conversation.domain.Message;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -20,8 +21,8 @@ public final class InMemoryConversationMessagePageStore implements ConversationM
     @Override
     public Page read(UUID conversationId, int limit, String cursor) {
         List<Message> messages = conversations.findById(conversationId)
-                .map(conversation -> conversation.messages())
-                .orElse(List.of());
+                .orElseThrow(() -> new NoSuchElementException("conversation not found: " + conversationId))
+                .messages();
         int start = decode(cursor);
         if (start < 0 || start > messages.size()) throw new IllegalArgumentException("invalid message cursor");
         int end = Math.min(start + limit, messages.size());

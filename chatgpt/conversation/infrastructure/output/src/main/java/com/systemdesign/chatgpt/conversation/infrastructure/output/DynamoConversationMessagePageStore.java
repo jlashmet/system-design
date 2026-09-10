@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
 
@@ -13,10 +14,12 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.UUID;
 
 public final class DynamoConversationMessagePageStore implements ConversationMessagePageStore {
+    private static final String META = "META";
     private static final String MESSAGE_PREFIX = "MSG#";
 
     private final DynamoDbClient dynamoDb;
@@ -31,6 +34,7 @@ public final class DynamoConversationMessagePageStore implements ConversationMes
     @Override
     public Page read(UUID conversationId, int limit, String cursor) {
         Objects.requireNonNull(conversationId, "conversationId");
+        ensureConversationExists(conversationId);
         QueryRequest.Builder request = QueryRequest.builder()
                 .tableName(tableName)
                 .consistentRead(true)
@@ -52,6 +56,20 @@ public final class DynamoConversationMessagePageStore implements ConversationMes
         Map<String, AttributeValue> lastKey = response.lastEvaluatedKey();
         String next = lastKey == null || lastKey.isEmpty() ? null : encode(lastKey.get("sk").s());
         return new Page(messages, next);
+    }
+
+    private void ensureConversationExists(UUID conversationId) {
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
+                        .tableName(tableName)
+                        .consistentRead(true)
+                        .key(Map.of(
+                                "pk", string(conversationPk(conversationId)),
+                                "sk", string(META)))
+                        .build())
+                .item();
+        if (item == null || item.isEmpty()) {
+            throw new NoSuchElementException("conversation not found: " + conversationId);
+        }
     }
 
     private Message messageFromItem(Map<String, AttributeValue> item) {

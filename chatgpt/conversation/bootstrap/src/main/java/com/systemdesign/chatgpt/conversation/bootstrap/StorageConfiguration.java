@@ -3,6 +3,7 @@ package com.systemdesign.chatgpt.conversation.bootstrap;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMessagePageStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
+import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
@@ -42,6 +43,7 @@ public class StorageConfiguration {
         @Bean ConversationRepository conversationRepository(InMemoryConversationRepository store) { return store; }
         @Bean TurnRepository turnRepository(InMemoryConversationRepository store) { return store; }
         @Bean RunningMessageStore runningMessageStore(InMemoryConversationRepository store) { return store; }
+        @Bean GenerationContinuationStore generationContinuationStore(InMemoryConversationRepository store) { return store; }
         @Bean ConversationMessagePageStore conversationMessagePageStore(ConversationRepository repository) {
             return new InMemoryConversationMessagePageStore(repository);
         }
@@ -73,10 +75,12 @@ public class StorageConfiguration {
         }
         @Bean ConversationRepository conversationRepository(DynamoConversationTurnStore store) { return store; }
         @Bean TurnRepository turnRepository(DynamoConversationTurnStore store) { return store; }
-        @Bean RunningMessageStore runningMessageStore(DynamoDbClient conversationDynamoDbClient,
+        @Bean DynamoRunningMessageStore runningMessageAdapter(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoRunningMessageStore(conversationDynamoDbClient, tableName);
         }
+        @Bean RunningMessageStore runningMessageStore(DynamoRunningMessageStore store) { return store; }
+        @Bean GenerationContinuationStore generationContinuationStore(DynamoRunningMessageStore store) { return store; }
         @Bean ConversationMessagePageStore conversationMessagePageStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoConversationMessagePageStore(conversationDynamoDbClient, tableName);
@@ -92,8 +96,7 @@ public class StorageConfiguration {
         @Bean InferenceQuota inferenceQuota(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName,
                 @Value("${chatgpt.inference.requests-per-minute:60}") int maxRequests) {
-            return new DynamoFixedWindowInferenceQuota(
-                    conversationDynamoDbClient, tableName, maxRequests, Duration.ofMinutes(1));
+            return new DynamoFixedWindowInferenceQuota(conversationDynamoDbClient, tableName, maxRequests, Duration.ofMinutes(1));
         }
         @Bean ConversationSummaryStore conversationSummaryStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.summary-table-name:chatgpt-conversation-summaries}") String tableName) {

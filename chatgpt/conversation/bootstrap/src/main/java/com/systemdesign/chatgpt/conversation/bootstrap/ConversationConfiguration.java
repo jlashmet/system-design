@@ -21,6 +21,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
+import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
@@ -65,9 +66,9 @@ public class ConversationConfiguration {
             @Value("${chatgpt.context.memory-priority:30}") int priority,
             @Value("${chatgpt.context.memory-limit:10}") int limit) { return new LongTermMemoryContextSource(store, priority, limit); }
     @Bean ContextAssembler contextAssembler(TokenEstimator estimator, List<ContextSource> sources,
-            ConversationTelemetry telemetry,
+            GenerationContinuationStore continuationStore, ConversationTelemetry telemetry,
             @Value("${chatgpt.context.max-input-tokens:8192}") int maxInputTokens) {
-        return new BudgetedContextAssembler(estimator, maxInputTokens, sources, telemetry);
+        return new BudgetedContextAssembler(estimator, maxInputTokens, sources, continuationStore, telemetry);
     }
     @Bean ModelEndpoint deterministicModelEndpoint() { return new DeterministicModelGateway(); }
     @Bean ModelGateway modelGateway(List<ModelEndpoint> endpoints, ConversationTelemetry telemetry) {

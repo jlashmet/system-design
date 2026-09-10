@@ -24,36 +24,23 @@ public final class InMemoryConversationRepository
     private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
     private final Map<UUID, List<Message>> continuationByGeneration = new ConcurrentHashMap<>();
 
-    @Override
-    public Optional<Conversation> findById(UUID conversationId) {
+    @Override public Optional<Conversation> findById(UUID conversationId) {
         return Optional.ofNullable(conversations.get(conversationId)).map(this::copy);
     }
 
-    @Override
-    public Optional<Metadata> find(UUID conversationId) {
+    @Override public Optional<Metadata> find(UUID conversationId) {
         Conversation conversation = conversations.get(conversationId);
-        return conversation == null
-                ? Optional.empty()
+        return conversation == null ? Optional.empty()
                 : Optional.of(new Metadata(conversation.id(), conversation.userId(), conversation.createdAt()));
     }
 
-    @Override
-    public void save(Conversation conversation) {
-        conversations.put(conversation.id(), copy(conversation));
-    }
-
-    @Override
-    public Optional<Generation> findGenerationById(UUID generationId) {
-        return Optional.ofNullable(generationsById.get(generationId));
-    }
-
-    @Override
-    public Optional<Generation> findByIdempotencyKey(UUID conversationId, String idempotencyKey) {
+    @Override public void save(Conversation conversation) { conversations.put(conversation.id(), copy(conversation)); }
+    @Override public Optional<Generation> findGenerationById(UUID generationId) { return Optional.ofNullable(generationsById.get(generationId)); }
+    @Override public Optional<Generation> findByIdempotencyKey(UUID conversationId, String idempotencyKey) {
         return Optional.ofNullable(generations.get(new TurnKey(conversationId, idempotencyKey)));
     }
 
-    @Override
-    public synchronized BeginResult begin(Conversation conversation, Generation generation) {
+    @Override public synchronized BeginResult begin(Conversation conversation, Generation generation) {
         TurnKey key = new TurnKey(generation.conversationId(), generation.idempotencyKey());
         Generation existing = generations.get(key);
         if (existing != null) return new BeginResult(existing, false);
@@ -62,20 +49,24 @@ public final class InMemoryConversationRepository
         return new BeginResult(generation, true);
     }
 
-    @Override
-    public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
+    @Override public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
+        return claim(generationId, startedAt, startedAt.plusSeconds(60));
+    }
+
+    @Override public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt, Instant leaseUntil) {
         Generation current = generationsById.get(generationId);
-        if (current == null || current.status() == GenerationStatus.RUNNING
-                || current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) {
+        if (current == null || current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) {
             return Optional.empty();
         }
-        Generation running = current.running(startedAt);
+        if (current.status() == GenerationStatus.RUNNING && !current.leaseExpiredAt(startedAt)) {
+            return Optional.empty();
+        }
+        Generation running = current.running(startedAt, UUID.randomUUID(), leaseUntil);
         putGeneration(running);
         return Optional.of(running);
     }
 
-    @Override
-    public synchronized Optional<Generation> cancel(UUID generationId, Instant cancelledAt) {
+    @Override public synchronized Optional<Generation> cancel(UUID generationId, Instant cancelledAt) {
         Generation current = generationsById.get(generationId);
         if (current == null) return Optional.empty();
         if (current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) return Optional.of(current);
@@ -84,10 +75,15 @@ public final class InMemoryConversationRepository
         return Optional.of(cancelled);
     }
 
-    @Override
-    public synchronized boolean append(UUID generationId, List<Message> messages) {
+    @Override public synchronized boolean append(UUID generationId, List<Message> messages) {
+        Generation current = generationsById.get(generationId);
+        return current != null && append(generationId, current.claimToken(), messages);
+    }
+
+    @Override public synchronized boolean append(UUID generationId, UUID claimToken, List<Message> messages) {
         Generation generation = generationsById.get(generationId);
-        if (generation == null || generation.status() != GenerationStatus.RUNNING) return false;
+        if (generation == null || generation.status() != GenerationStatus.RUNNING
+                || !java.util.Objects.equals(generation.claimToken(), claimToken)) return false;
         Conversation conversation = conversations.get(generation.conversationId());
         if (conversation == null) throw new IllegalStateException("conversation not found for generation: " + generationId);
         Conversation updated = copy(conversation);
@@ -97,31 +93,28 @@ public final class InMemoryConversationRepository
         return true;
     }
 
-    @Override
-    public List<Message> list(UUID generationId) {
+    @Override public List<Message> list(UUID generationId) {
         return List.copyOf(continuationByGeneration.getOrDefault(generationId, List.of()));
     }
 
-    @Override
-    public synchronized void complete(Conversation conversation, Generation generation) {
+    @Override public synchronized void complete(Conversation conversation, Generation generation) {
         Generation current = generationsById.get(generation.id());
-        if (current != null && current.status() == GenerationStatus.CANCELLED) return;
+        if (current == null || current.status() == GenerationStatus.CANCELLED || current.status() == GenerationStatus.COMPLETED) return;
+        if (current.status() != GenerationStatus.RUNNING || !java.util.Objects.equals(current.claimToken(), generation.claimToken())) return;
         conversations.put(conversation.id(), copy(conversation));
         putGeneration(generation);
     }
 
-    @Override
-    public synchronized void fail(Generation generation) {
+    @Override public synchronized void fail(Generation generation) {
         Generation current = generationsById.get(generation.id());
-        if (current != null && current.status() == GenerationStatus.CANCELLED) return;
+        if (current == null || current.status() == GenerationStatus.CANCELLED || current.status() == GenerationStatus.FAILED) return;
+        if (current.status() != GenerationStatus.RUNNING || !java.util.Objects.equals(current.claimToken(), generation.claimToken())) return;
         putGeneration(generation);
     }
 
     private List<Message> concat(List<Message> current, List<Message> added) {
         java.util.ArrayList<Message> result = new java.util.ArrayList<>(current.size() + added.size());
-        result.addAll(current);
-        result.addAll(added);
-        return List.copyOf(result);
+        result.addAll(current); result.addAll(added); return List.copyOf(result);
     }
 
     private void putGeneration(Generation generation) {

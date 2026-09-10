@@ -66,19 +66,29 @@ public final class BudgetedContextAssembler implements ContextAssembler {
         List<Message> sourcedContext = new ArrayList<>();
         int sourceTokenLimit = maxInputTokens - usedTokens - (target.role() == MessageRole.SYSTEM ? 0 : targetTokens);
         int sourceTokens = 0;
+        int historyFloorIndex = 0;
         for (ContextSource source : contextSources) {
+            boolean admittedAny = false;
             for (Message message : source.load(conversation, generation)) {
                 int tokens = tokenEstimator.estimateTokens(message);
                 if (sourceTokens + tokens <= sourceTokenLimit) {
                     sourcedContext.add(message);
                     sourceTokens += tokens;
+                    admittedAny = true;
                 }
+            }
+            if (admittedAny) {
+                historyFloorIndex = Math.max(
+                        historyFloorIndex,
+                        source.replacesHistoryThrough(conversation, generation)
+                                .map(messageId -> historyFloorAfter(eligible, messageId, targetIndex))
+                                .orElse(0));
             }
         }
         usedTokens += sourceTokens;
 
         List<Message> recent = new ArrayList<>();
-        for (int index = targetIndex; index >= 0; index--) {
+        for (int index = targetIndex; index >= historyFloorIndex; index--) {
             Message message = eligible.get(index);
             if (message.role() == MessageRole.SYSTEM) {
                 continue;
@@ -97,6 +107,15 @@ public final class BudgetedContextAssembler implements ContextAssembler {
         assembled.addAll(sourcedContext);
         assembled.addAll(recent);
         return List.copyOf(assembled);
+    }
+
+    private int historyFloorAfter(List<Message> messages, java.util.UUID messageId, int targetIndex) {
+        for (int index = 0; index < messages.size(); index++) {
+            if (messages.get(index).id().equals(messageId)) {
+                return Math.min(index + 1, targetIndex);
+            }
+        }
+        return 0;
     }
 
     private int indexOf(List<Message> messages, java.util.UUID messageId) {

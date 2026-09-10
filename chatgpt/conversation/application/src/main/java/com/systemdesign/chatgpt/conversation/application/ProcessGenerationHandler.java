@@ -58,65 +58,41 @@ public final class ProcessGenerationHandler {
         this.eventBus = Objects.requireNonNull(eventBus, "eventBus");
         this.summaryRefresher = Objects.requireNonNull(summaryRefresher, "summaryRefresher");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor");
-        if (maxToolRounds < 0) {
-            throw new IllegalArgumentException("maxToolRounds must be >= 0");
-        }
+        if (maxToolRounds < 0) throw new IllegalArgumentException("maxToolRounds must be >= 0");
         this.maxToolRounds = maxToolRounds;
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public void handle(UUID generationId) {
-        Instant startedAt = Instant.now(clock);
-        Generation generation = turnRepository.claim(generationId, startedAt).orElse(null);
+        Generation generation = turnRepository.claim(generationId, Instant.now(clock)).orElse(null);
         if (generation == null) {
-            if (turnRepository.findGenerationById(generationId).isEmpty()) {
-                throw new NoSuchElementException("generation not found: " + generationId);
-            }
+            if (turnRepository.findGenerationById(generationId).isEmpty()) throw new NoSuchElementException("generation not found: " + generationId);
             return;
         }
-
         Conversation conversation = loadConversation(generation);
-
         try {
             List<ToolDefinition> tools = generation.requiredCapabilities().contains(ModelCapability.TOOL_CALLING)
-                    ? toolExecutor.definitionsFor(conversation.userId(), conversation.id())
-                    : List.of();
-
+                    ? toolExecutor.definitionsFor(conversation.userId(), conversation.id()) : List.of();
             for (int round = 0; ; round++) {
                 List<Message> context = contextAssembler.assemble(conversation, generation);
-                ModelGateway.TurnResult turn = modelGateway.streamTurn(
-                        context,
-                        generation.requiredCapabilities(),
-                        tools,
+                ModelGateway.TurnResult turn = modelGateway.streamTurn(context, generation.requiredCapabilities(), tools,
                         delta -> publishDeltaUnlessCancelled(generation.id(), delta));
-
                 if (turn instanceof ModelGateway.FinalResponse finalResponse) {
                     completeGeneration(conversation, generation, finalResponse.completion());
                     return;
                 }
-
                 ModelGateway.ToolRequests requests = (ModelGateway.ToolRequests) turn;
-                if (tools.isEmpty()) {
-                    throw new IllegalStateException("model requested tools when no authorized tools were available");
-                }
-                if (round >= maxToolRounds) {
-                    throw new ToolRoundLimitExceededException(maxToolRounds);
-                }
-
-                List<Message> transcript = executeToolRound(conversation, requests.calls());
-                if (!runningMessageStore.append(generation.id(), transcript)) {
-                    return;
-                }
+                if (tools.isEmpty()) throw new IllegalStateException("model requested tools when no authorized tools were available");
+                if (round >= maxToolRounds) throw new ToolRoundLimitExceededException(maxToolRounds);
+                List<Message> transcript = executeToolRound(conversation, generation.id(), requests.calls());
+                if (!runningMessageStore.append(generation.id(), transcript)) return;
                 conversation = loadConversation(generation);
             }
         } catch (GenerationCancelledException ignored) {
-            // Cancellation is a normal terminal outcome and is already published by the cancel use case.
         } catch (RuntimeException exception) {
             turnRepository.fail(generation.failed(Instant.now(clock)));
-            if (!isCancelled(generation.id())) {
-                eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
-            }
+            if (!isCancelled(generation.id())) eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
             throw exception;
         }
     }
@@ -126,56 +102,33 @@ public final class ProcessGenerationHandler {
                 .orElseThrow(() -> new NoSuchElementException("conversation not found: " + generation.conversationId()));
     }
 
-    private List<Message> executeToolRound(Conversation conversation, List<ToolCall> calls) {
+    private List<Message> executeToolRound(Conversation conversation, UUID generationId, List<ToolCall> calls) {
         Instant base = nextMessageTime(conversation);
         List<Message> messages = new ArrayList<>(calls.size() + 1);
-        messages.add(new Message(
-                idGenerator.get(),
-                MessageRole.ASSISTANT,
-                formatToolRequests(calls),
-                base));
+        messages.add(new Message(idGenerator.get(), MessageRole.ASSISTANT, formatToolRequests(calls), base));
         int index = 1;
         for (ToolCall call : calls) {
-            ToolResult result = toolExecutor.execute(conversation.userId(), conversation.id(), call);
-            messages.add(new Message(
-                    idGenerator.get(),
-                    MessageRole.TOOL,
-                    formatToolResult(call, result),
-                    base.plusNanos(index++)));
+            ToolResult result = toolExecutor.execute(conversation.userId(), conversation.id(), generationId, call);
+            messages.add(new Message(idGenerator.get(), MessageRole.TOOL, formatToolResult(call, result), base.plusNanos(index++)));
         }
         return List.copyOf(messages);
     }
 
     private String formatToolRequests(List<ToolCall> calls) {
-        return "Tool requests:\n" + calls.stream()
-                .map(call -> call.id() + ":" + call.name())
+        return "Tool requests:\n" + calls.stream().map(call -> call.id() + ":" + call.name())
                 .collect(java.util.stream.Collectors.joining("\n"));
     }
 
     private String formatToolResult(ToolCall call, ToolResult result) {
-        return "tool_call_id=" + call.id()
-                + "\ntool=" + call.name()
-                + "\nstatus=" + result.status().name().toLowerCase()
-                + "\nresult=" + result.content();
+        return "tool_call_id=" + call.id() + "\ntool=" + call.name() + "\nstatus=" + result.status().name().toLowerCase() + "\nresult=" + result.content();
     }
 
-    private void completeGeneration(
-            Conversation conversation,
-            Generation generation,
-            ModelGateway.Completion completion) {
-        if (isCancelled(generation.id())) {
-            return;
-        }
-
+    private void completeGeneration(Conversation conversation, Generation generation, ModelGateway.Completion completion) {
+        if (isCancelled(generation.id())) return;
         Instant completedAt = nextMessageTime(conversation);
-        Message assistantMessage = new Message(
-                idGenerator.get(),
-                MessageRole.ASSISTANT,
-                completion.content(),
-                completedAt);
+        Message assistantMessage = new Message(idGenerator.get(), MessageRole.ASSISTANT, completion.content(), completedAt);
         conversation.append(assistantMessage);
         turnRepository.complete(conversation, generation.completed(assistantMessage.id(), completedAt));
-
         Generation finalState = turnRepository.findGenerationById(generation.id()).orElseThrow();
         if (finalState.status() == GenerationStatus.COMPLETED) {
             eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
@@ -186,35 +139,24 @@ public final class ProcessGenerationHandler {
     private Instant nextMessageTime(Conversation conversation) {
         Instant now = Instant.now(clock);
         List<Message> messages = conversation.messages();
-        if (messages.isEmpty()) {
-            return now;
-        }
+        if (messages.isEmpty()) return now;
         Instant last = messages.getLast().createdAt();
         return now.isAfter(last) ? now : last.plusNanos(1);
     }
 
     private void refreshSummaryBestEffort(Conversation conversation) {
-        try {
-            summaryRefresher.refreshIfNeeded(conversation);
-        } catch (RuntimeException ignored) {
-            // Summary freshness is auxiliary. A refresh outage must not corrupt an already-completed generation.
-        }
+        try { summaryRefresher.refreshIfNeeded(conversation); } catch (RuntimeException ignored) { }
     }
 
     private void publishDeltaUnlessCancelled(UUID generationId, String delta) {
-        if (isCancelled(generationId)) {
-            throw new GenerationCancelledException();
-        }
+        if (isCancelled(generationId)) throw new GenerationCancelledException();
         eventBus.publish(generationId, GenerationEventBus.Event.delta(delta));
     }
 
     private boolean isCancelled(UUID generationId) {
-        return turnRepository.findGenerationById(generationId)
-                .map(Generation::status)
-                .filter(status -> status == GenerationStatus.CANCELLED)
-                .isPresent();
+        return turnRepository.findGenerationById(generationId).map(Generation::status)
+                .filter(status -> status == GenerationStatus.CANCELLED).isPresent();
     }
 
-    private static final class GenerationCancelledException extends RuntimeException {
-    }
+    private static final class GenerationCancelledException extends RuntimeException { }
 }

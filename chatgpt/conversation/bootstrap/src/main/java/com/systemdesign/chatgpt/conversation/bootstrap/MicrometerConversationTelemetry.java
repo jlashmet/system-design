@@ -33,6 +33,12 @@ public final class MicrometerConversationTelemetry implements ConversationTeleme
         registry.counter("chatgpt.inference.delivery", "attempt", Integer.toString(Math.max(1, attempt)),
                 "outcome", bounded(outcome)).increment();
     }
+    @Override public void routingDecision(String model, String outcome) {
+        registry.counter("chatgpt.model.routing", "model", bounded(model), "outcome", bounded(outcome)).increment();
+    }
+    @Override public void contextTokens(String source, int tokens) {
+        registry.summary("chatgpt.context.tokens", "source", bounded(source)).record(Math.max(0, tokens));
+    }
 
     private Duration nonNegative(Duration value) { return value.isNegative() ? Duration.ZERO : value; }
     private String bounded(String value) {

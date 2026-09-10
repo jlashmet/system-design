@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.application;
 
+import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
@@ -16,107 +17,93 @@ import java.util.function.Consumer;
 
 public final class RoutingModelGateway implements ModelGateway {
     private static final Set<ModelCapability> COMPLETE_CAPABILITIES = Set.of(ModelCapability.TEXT_GENERATION);
-    private static final Set<ModelCapability> STREAM_CAPABILITIES = Set.of(
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.STREAMING);
-
+    private static final Set<ModelCapability> STREAM_CAPABILITIES = Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING);
     private final List<ModelEndpoint> endpoints;
+    private final ConversationTelemetry telemetry;
 
     public RoutingModelGateway(List<ModelEndpoint> endpoints) {
-        this.endpoints = List.copyOf(Objects.requireNonNull(endpoints, "endpoints"));
-        if (this.endpoints.isEmpty()) {
-            throw new IllegalArgumentException("at least one model endpoint is required");
-        }
+        this(endpoints, ConversationTelemetry.noop());
     }
 
-    @Override
-    public Completion complete(List<Message> messages) {
-        return complete(messages, Set.of());
+    public RoutingModelGateway(List<ModelEndpoint> endpoints, ConversationTelemetry telemetry) {
+        this.endpoints = List.copyOf(Objects.requireNonNull(endpoints, "endpoints"));
+        this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
+        if (this.endpoints.isEmpty()) throw new IllegalArgumentException("at least one model endpoint is required");
     }
+
+    @Override public Completion complete(List<Message> messages) { return complete(messages, Set.of()); }
 
     @Override
     public Completion complete(List<Message> messages, Set<ModelCapability> requiredCapabilities) {
         RuntimeException lastFailure = null;
         for (ModelEndpoint endpoint : candidates(withBase(COMPLETE_CAPABILITIES, requiredCapabilities))) {
+            String model = endpoint.profile().model();
             try {
-                return endpoint.complete(messages, requiredCapabilities);
+                Completion completion = endpoint.complete(messages, requiredCapabilities);
+                telemetry.routingDecision(model, lastFailure == null ? "selected" : "fallback_selected");
+                return completion;
             } catch (RuntimeException exception) {
+                telemetry.routingDecision(model, "failed_before_output");
                 lastFailure = exception;
             }
         }
         throw unavailable(lastFailure);
     }
 
-    @Override
-    public Completion stream(List<Message> messages, Consumer<String> deltaConsumer) {
-        return stream(messages, Set.of(), deltaConsumer);
-    }
+    @Override public Completion stream(List<Message> messages, Consumer<String> deltaConsumer) { return stream(messages, Set.of(), deltaConsumer); }
 
     @Override
-    public Completion stream(
-            List<Message> messages,
-            Set<ModelCapability> requiredCapabilities,
-            Consumer<String> deltaConsumer) {
+    public Completion stream(List<Message> messages, Set<ModelCapability> requiredCapabilities, Consumer<String> deltaConsumer) {
         TurnResult result = streamTurn(messages, requiredCapabilities, List.of(), deltaConsumer);
-        if (result instanceof FinalResponse finalResponse) {
-            return finalResponse.completion();
-        }
+        if (result instanceof FinalResponse finalResponse) return finalResponse.completion();
         throw new ModelUnavailableException("model requested tools when no tools were available");
     }
 
     @Override
-    public TurnResult streamTurn(
-            List<Message> messages,
-            Set<ModelCapability> requiredCapabilities,
-            List<ToolDefinition> tools,
-            Consumer<String> deltaConsumer) {
+    public TurnResult streamTurn(List<Message> messages, Set<ModelCapability> requiredCapabilities,
+            List<ToolDefinition> tools, Consumer<String> deltaConsumer) {
         Objects.requireNonNull(tools, "tools");
         Objects.requireNonNull(deltaConsumer, "deltaConsumer");
         Set<ModelCapability> capabilities = new HashSet<>(STREAM_CAPABILITIES);
         capabilities.addAll(Objects.requireNonNull(requiredCapabilities, "requiredCapabilities"));
-        if (!tools.isEmpty()) {
-            capabilities.add(ModelCapability.TOOL_CALLING);
-        }
+        if (!tools.isEmpty()) capabilities.add(ModelCapability.TOOL_CALLING);
 
         RuntimeException lastFailure = null;
         for (ModelEndpoint endpoint : candidates(Set.copyOf(capabilities))) {
             AtomicBoolean emitted = new AtomicBoolean();
+            String model = endpoint.profile().model();
             try {
-                return endpoint.streamTurn(messages, requiredCapabilities, tools, delta -> {
+                TurnResult result = endpoint.streamTurn(messages, requiredCapabilities, tools, delta -> {
                     emitted.set(true);
                     deltaConsumer.accept(delta);
                 });
+                telemetry.routingDecision(model, lastFailure == null ? "selected" : "fallback_selected");
+                return result;
             } catch (RuntimeException exception) {
                 if (emitted.get()) {
+                    telemetry.routingDecision(model, "failed_after_output");
                     throw exception;
                 }
+                telemetry.routingDecision(model, "failed_before_output");
                 lastFailure = exception;
             }
         }
         throw unavailable(lastFailure);
     }
 
-    private Set<ModelCapability> withBase(
-            Set<ModelCapability> base,
-            Set<ModelCapability> requiredCapabilities) {
+    private Set<ModelCapability> withBase(Set<ModelCapability> base, Set<ModelCapability> requiredCapabilities) {
         Objects.requireNonNull(requiredCapabilities, "requiredCapabilities");
-        Set<ModelCapability> required = new HashSet<>(base);
-        required.addAll(requiredCapabilities);
-        return Set.copyOf(required);
+        Set<ModelCapability> required = new HashSet<>(base); required.addAll(requiredCapabilities); return Set.copyOf(required);
     }
 
     private List<ModelEndpoint> candidates(Set<ModelCapability> requiredCapabilities) {
-        return endpoints.stream()
-                .filter(ModelEndpoint::healthy)
+        return endpoints.stream().filter(ModelEndpoint::healthy)
                 .filter(endpoint -> endpoint.profile().supports(requiredCapabilities))
-                .sorted(Comparator.comparingLong(endpoint -> endpoint.profile().relativeCost()))
-                .toList();
+                .sorted(Comparator.comparingLong(endpoint -> endpoint.profile().relativeCost())).toList();
     }
 
     private RuntimeException unavailable(RuntimeException lastFailure) {
-        if (lastFailure == null) {
-            return new ModelUnavailableException("no healthy model supports the required capabilities");
-        }
+        if (lastFailure == null) return new ModelUnavailableException("no healthy model supports the required capabilities");
         return new ModelUnavailableException("all eligible model providers failed", lastFailure);
     }
 }

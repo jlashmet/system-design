@@ -4,6 +4,7 @@ import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
 
 import java.util.Comparator;
 import java.util.HashSet;
@@ -56,12 +57,32 @@ public final class RoutingModelGateway implements ModelGateway {
             List<Message> messages,
             Set<ModelCapability> requiredCapabilities,
             Consumer<String> deltaConsumer) {
+        TurnResult result = streamTurn(messages, requiredCapabilities, List.of(), deltaConsumer);
+        if (result instanceof FinalResponse finalResponse) {
+            return finalResponse.completion();
+        }
+        throw new ModelUnavailableException("model requested tools when no tools were available");
+    }
+
+    @Override
+    public TurnResult streamTurn(
+            List<Message> messages,
+            Set<ModelCapability> requiredCapabilities,
+            List<ToolDefinition> tools,
+            Consumer<String> deltaConsumer) {
+        Objects.requireNonNull(tools, "tools");
         Objects.requireNonNull(deltaConsumer, "deltaConsumer");
+        Set<ModelCapability> capabilities = new HashSet<>(STREAM_CAPABILITIES);
+        capabilities.addAll(Objects.requireNonNull(requiredCapabilities, "requiredCapabilities"));
+        if (!tools.isEmpty()) {
+            capabilities.add(ModelCapability.TOOL_CALLING);
+        }
+
         RuntimeException lastFailure = null;
-        for (ModelEndpoint endpoint : candidates(withBase(STREAM_CAPABILITIES, requiredCapabilities))) {
+        for (ModelEndpoint endpoint : candidates(Set.copyOf(capabilities))) {
             AtomicBoolean emitted = new AtomicBoolean();
             try {
-                return endpoint.stream(messages, requiredCapabilities, delta -> {
+                return endpoint.streamTurn(messages, requiredCapabilities, tools, delta -> {
                     emitted.set(true);
                     deltaConsumer.accept(delta);
                 });

@@ -101,10 +101,11 @@ public class ConversationConfiguration {
             GenerationEventBus events, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
             ConversationTelemetry telemetry,
             @Value("${chatgpt.inference.generation-claim-lease-ms:60000}") long generationClaimLeaseMs,
+            @Value("${chatgpt.inference.generation-heartbeat-ms:20000}") long generationHeartbeatMs,
             @Value("${chatgpt.tools.max-rounds:4}") int maxToolRounds,
             Supplier<UUID> ids, Clock clock) {
         return new ProcessGenerationHandler(repository, turns, runningMessages, contextAssembler, modelGateway, events,
                 summaryRefresher, toolExecutor, telemetry, Duration.ofMillis(generationClaimLeaseMs),
-                maxToolRounds, ids, clock);
+                Duration.ofMillis(generationHeartbeatMs), maxToolRounds, ids, clock);
     }
 }

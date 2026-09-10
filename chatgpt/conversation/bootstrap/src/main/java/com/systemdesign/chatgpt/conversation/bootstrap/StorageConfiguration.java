@@ -15,6 +15,7 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConvers
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConversationTurnStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoFixedWindowInferenceQuota;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoGenerationLeaseTurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoLongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoRunningMessageStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoToolInvocationStore;
@@ -81,7 +82,10 @@ public class StorageConfiguration {
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoConversationMetadataStore(conversationDynamoDbClient, tableName);
         }
-        @Bean TurnRepository turnRepository(DynamoConversationTurnStore store) { return store; }
+        @Bean TurnRepository turnRepository(DynamoConversationTurnStore store, DynamoDbClient conversationDynamoDbClient,
+                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
+            return new DynamoGenerationLeaseTurnRepository(store, conversationDynamoDbClient, tableName);
+        }
         @Bean DynamoRunningMessageStore runningMessageAdapter(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoRunningMessageStore(conversationDynamoDbClient, tableName);

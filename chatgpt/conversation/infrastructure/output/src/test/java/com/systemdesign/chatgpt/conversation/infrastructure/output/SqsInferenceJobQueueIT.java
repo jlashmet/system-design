@@ -23,8 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
 class SqsInferenceJobQueueIT {
-    @Container
-    static final FlociContainer FLOCI = new FlociContainer();
+    @Container static final FlociContainer FLOCI = new FlociContainer();
 
     private SqsClient sqs;
     private String queueUrl;
@@ -47,12 +46,8 @@ class SqsInferenceJobQueueIT {
     @AfterEach
     void tearDown() {
         if (sqs != null) {
-            if (queueUrl != null) {
-                sqs.deleteQueue(DeleteQueueRequest.builder().queueUrl(queueUrl).build());
-            }
-            if (deadLetterQueueUrl != null) {
-                sqs.deleteQueue(DeleteQueueRequest.builder().queueUrl(deadLetterQueueUrl).build());
-            }
+            if (queueUrl != null) sqs.deleteQueue(DeleteQueueRequest.builder().queueUrl(queueUrl).build());
+            if (deadLetterQueueUrl != null) sqs.deleteQueue(DeleteQueueRequest.builder().queueUrl(deadLetterQueueUrl).build());
             sqs.close();
         }
     }
@@ -60,11 +55,9 @@ class SqsInferenceJobQueueIT {
     @Test
     void enqueuesPollsAndAcknowledgesDelivery() {
         InferenceJobQueue.Job expected = new InferenceJobQueue.Job(UUID.randomUUID(), 2);
-
         assertThat(queue.tryEnqueue(expected)).isTrue();
         InferenceJobQueue.Delivery delivery = queue.poll().orElseThrow();
         queue.acknowledge(delivery);
-
         assertThat(delivery.job()).isEqualTo(expected);
         assertThat(queue.poll()).isEmpty();
     }
@@ -73,24 +66,37 @@ class SqsInferenceJobQueueIT {
     void unacknowledgedDeliveryBecomesVisibleAgainAfterVisibilityTimeout() throws Exception {
         InferenceJobQueue.Job expected = InferenceJobQueue.Job.firstAttempt(UUID.randomUUID());
         queue.tryEnqueue(expected);
-
         InferenceJobQueue.Delivery first = queue.poll().orElseThrow();
         assertThat(queue.poll()).isEmpty();
         Thread.sleep(Duration.ofMillis(1200));
         InferenceJobQueue.Delivery redelivery = queue.poll().orElseThrow();
         queue.acknowledge(redelivery);
-
         assertThat(first.job()).isEqualTo(expected);
         assertThat(redelivery.job()).isEqualTo(expected);
         assertThat(redelivery.receipt()).isNotEqualTo(first.receipt());
     }
 
     @Test
+    void renewExtendsVisibilityForTheCurrentDeliveryReceipt() throws Exception {
+        InferenceJobQueue.Job expected = InferenceJobQueue.Job.firstAttempt(UUID.randomUUID());
+        queue.tryEnqueue(expected);
+        InferenceJobQueue.Delivery delivery = queue.poll().orElseThrow();
+
+        Thread.sleep(Duration.ofMillis(700));
+        queue.renew(delivery);
+        Thread.sleep(Duration.ofMillis(600));
+        assertThat(queue.poll()).isEmpty();
+
+        Thread.sleep(Duration.ofMillis(600));
+        InferenceJobQueue.Delivery redelivery = queue.poll().orElseThrow();
+        assertThat(redelivery.job()).isEqualTo(expected);
+        queue.acknowledge(redelivery);
+    }
+
+    @Test
     void deadLettersJobWithReason() {
         InferenceJobQueue.Job job = new InferenceJobQueue.Job(UUID.randomUUID(), 3);
-
         queue.deadLetter(job, "provider unavailable");
-
         var messages = sqs.receiveMessage(ReceiveMessageRequest.builder()
                 .queueUrl(deadLetterQueueUrl)
                 .maxNumberOfMessages(1)

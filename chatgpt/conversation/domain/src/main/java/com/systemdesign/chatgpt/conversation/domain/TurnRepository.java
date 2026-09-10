@@ -17,6 +17,10 @@ public interface TurnRepository {
         return claim(generationId, startedAt);
     }
 
+    default boolean renewClaim(UUID generationId, UUID claimToken, Instant renewedAt, Instant leaseUntil) {
+        return true;
+    }
+
     Optional<Generation> cancel(UUID generationId, Instant cancelledAt);
 
     void complete(Conversation conversation, Generation generation);

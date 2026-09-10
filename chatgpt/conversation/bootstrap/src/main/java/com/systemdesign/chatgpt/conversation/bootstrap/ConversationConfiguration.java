@@ -29,7 +29,6 @@ import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.ExtractiveConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicTokenEstimator;
-import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
@@ -48,21 +47,6 @@ import java.util.function.Supplier;
 
 @Configuration
 public class ConversationConfiguration {
-    @Bean
-    InMemoryConversationRepository conversationStore() {
-        return new InMemoryConversationRepository();
-    }
-
-    @Bean
-    ConversationRepository conversationRepository(InMemoryConversationRepository store) {
-        return store;
-    }
-
-    @Bean
-    TurnRepository turnRepository(InMemoryConversationRepository store) {
-        return store;
-    }
-
     @Bean
     InferenceJobQueue inferenceJobQueue(
             @Value("${chatgpt.inference.queue-capacity:1024}") int capacity) {

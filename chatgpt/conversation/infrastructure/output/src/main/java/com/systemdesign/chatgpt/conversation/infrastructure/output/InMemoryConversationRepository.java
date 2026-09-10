@@ -6,7 +6,6 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
-import com.systemdesign.chatgpt.conversation.domain.InferenceOutbox;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
@@ -19,12 +18,11 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class InMemoryConversationRepository implements ConversationRepository, ConversationMetadataStore,
-        TurnRepository, RunningMessageStore, GenerationContinuationStore, InferenceOutbox {
+        TurnRepository, RunningMessageStore, GenerationContinuationStore {
     private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
     private final Map<TurnKey, Generation> generations = new ConcurrentHashMap<>();
     private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
     private final Map<UUID, List<Message>> continuationByGeneration = new ConcurrentHashMap<>();
-    private final Map<UUID, OutboxState> outbox = new ConcurrentHashMap<>();
 
     @Override public Optional<Conversation> findById(UUID conversationId) {
         return Optional.ofNullable(conversations.get(conversationId)).map(this::copy);
@@ -46,39 +44,7 @@ public final class InMemoryConversationRepository implements ConversationReposit
         if (existing != null) return new BeginResult(existing, false);
         conversations.put(conversation.id(), copy(conversation));
         putGeneration(generation);
-        outbox.put(generation.id(), OutboxState.pending(generation.id(), generation.createdAt()));
         return new BeginResult(generation, true);
-    }
-
-    @Override public synchronized Optional<InferenceOutbox.Entry> claimNext(Instant claimedAt, Instant leaseUntil) {
-        if (claimedAt == null || leaseUntil == null || !leaseUntil.isAfter(claimedAt))
-            throw new IllegalArgumentException("leaseUntil must be after claimedAt");
-        OutboxState candidate = outbox.values().stream()
-                .filter(state -> state.status == OutboxStatus.PENDING
-                        || (state.status == OutboxStatus.CLAIMED && !state.leaseUntil.isAfter(claimedAt)))
-                .sorted(java.util.Comparator.comparing(OutboxState::createdAt).thenComparing(OutboxState::generationId))
-                .findFirst().orElse(null);
-        if (candidate == null) return Optional.empty();
-        UUID token = UUID.randomUUID();
-        OutboxState claimed = candidate.claim(token, leaseUntil);
-        outbox.put(candidate.generationId, claimed);
-        return Optional.of(new InferenceOutbox.Entry(candidate.generationId, token, candidate.createdAt, leaseUntil));
-    }
-
-    @Override public synchronized boolean markDispatched(UUID generationId, UUID claimToken, Instant dispatchedAt) {
-        OutboxState current = outbox.get(generationId);
-        if (current == null || current.status != OutboxStatus.CLAIMED
-                || !java.util.Objects.equals(current.claimToken, claimToken)) return false;
-        outbox.put(generationId, current.dispatched(dispatchedAt));
-        return true;
-    }
-
-    @Override public synchronized boolean release(UUID generationId, UUID claimToken) {
-        OutboxState current = outbox.get(generationId);
-        if (current == null || current.status != OutboxStatus.CLAIMED
-                || !java.util.Objects.equals(current.claimToken, claimToken)) return false;
-        outbox.put(generationId, OutboxState.pending(generationId, current.createdAt));
-        return true;
     }
 
     @Override public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
@@ -153,17 +119,4 @@ public final class InMemoryConversationRepository implements ConversationReposit
         return Conversation.rehydrate(conversation.id(), conversation.userId(), conversation.createdAt(), conversation.messages());
     }
     private record TurnKey(UUID conversationId, String idempotencyKey) { }
-    private enum OutboxStatus { PENDING, CLAIMED, DISPATCHED }
-    private record OutboxState(UUID generationId, Instant createdAt, OutboxStatus status, UUID claimToken,
-            Instant leaseUntil, Instant dispatchedAt) {
-        static OutboxState pending(UUID generationId, Instant createdAt) {
-            return new OutboxState(generationId, createdAt, OutboxStatus.PENDING, null, null, null);
-        }
-        OutboxState claim(UUID token, Instant leaseUntil) {
-            return new OutboxState(generationId, createdAt, OutboxStatus.CLAIMED, token, leaseUntil, null);
-        }
-        OutboxState dispatched(Instant at) {
-            return new OutboxState(generationId, createdAt, OutboxStatus.DISPATCHED, claimToken, leaseUntil, at);
-        }
-    }
 }

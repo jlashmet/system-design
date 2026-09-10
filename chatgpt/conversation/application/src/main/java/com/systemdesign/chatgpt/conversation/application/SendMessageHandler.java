@@ -3,6 +3,8 @@ package com.systemdesign.chatgpt.conversation.application;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
+import com.systemdesign.chatgpt.conversation.domain.InferenceDispatch;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
@@ -18,6 +20,7 @@ import java.util.function.Supplier;
 public final class SendMessageHandler {
     private final ConversationRepository repository;
     private final TurnRepository turnRepository;
+    private final InferenceDispatch inferenceDispatch;
     private final InferenceQuota inferenceQuota;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
@@ -25,11 +28,13 @@ public final class SendMessageHandler {
     public SendMessageHandler(
             ConversationRepository repository,
             TurnRepository turnRepository,
+            InferenceDispatch inferenceDispatch,
             InferenceQuota inferenceQuota,
             Supplier<UUID> idGenerator,
             Clock clock) {
         this.repository = Objects.requireNonNull(repository, "repository");
         this.turnRepository = Objects.requireNonNull(turnRepository, "turnRepository");
+        this.inferenceDispatch = Objects.requireNonNull(inferenceDispatch, "inferenceDispatch");
         this.inferenceQuota = Objects.requireNonNull(inferenceQuota, "inferenceQuota");
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -44,6 +49,7 @@ public final class SendMessageHandler {
                 .orElse(null);
         if (generation != null) {
             validateReplay(generation, command);
+            dispatchIfUnfinished(generation);
             return new SendMessageResult(conversation, findMessage(conversation, generation.userMessageId()), generation);
         }
 
@@ -68,10 +74,19 @@ public final class SendMessageHandler {
         if (!begin.created()) {
             validateReplay(persisted, command);
             Conversation reloaded = loadConversation(command.conversationId());
+            dispatchIfUnfinished(persisted);
             return new SendMessageResult(reloaded, findMessage(reloaded, persisted.userMessageId()), persisted);
         }
 
+        inferenceDispatch.dispatch(candidate);
         return new SendMessageResult(conversation, userMessage, candidate);
+    }
+
+    private void dispatchIfUnfinished(Generation generation) {
+        if (generation.status() != GenerationStatus.COMPLETED
+                && generation.status() != GenerationStatus.CANCELLED) {
+            inferenceDispatch.dispatch(generation);
+        }
     }
 
     private void validateReplay(Generation generation, SendMessageCommand command) {

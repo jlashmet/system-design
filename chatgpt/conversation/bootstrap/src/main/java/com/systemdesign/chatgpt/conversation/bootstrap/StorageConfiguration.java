@@ -1,12 +1,14 @@
 package com.systemdesign.chatgpt.conversation.bootstrap;
 
+import com.systemdesign.chatgpt.conversation.application.ImmediateInferenceDispatch;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMessagePageStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationConversationStore;
-import com.systemdesign.chatgpt.conversation.domain.InferenceOutbox;
+import com.systemdesign.chatgpt.conversation.domain.InferenceDispatch;
+import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
@@ -20,7 +22,6 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoFixedWi
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoGenerationConversationStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoGenerationLeaseTurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoLongTermMemoryStore;
-import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoOutboxTurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoRunningMessageStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoToolInvocationStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationMessagePageStore;
@@ -51,7 +52,7 @@ public class StorageConfiguration {
         @Bean ConversationRepository conversationRepository(InMemoryConversationRepository store) { return store; }
         @Bean ConversationMetadataStore conversationMetadataStore(InMemoryConversationRepository store) { return store; }
         @Bean TurnRepository turnRepository(InMemoryConversationRepository store) { return store; }
-        @Bean InferenceOutbox inferenceOutbox(InMemoryConversationRepository store) { return store; }
+        @Bean InferenceDispatch inferenceDispatch(InferenceJobQueue queue) { return new ImmediateInferenceDispatch(queue); }
         @Bean RunningMessageStore runningMessageStore(InMemoryConversationRepository store) { return store; }
         @Bean GenerationContinuationStore generationContinuationStore(InMemoryConversationRepository store) { return store; }
         @Bean GenerationConversationStore generationConversationStore(ConversationRepository repository) {
@@ -94,18 +95,11 @@ public class StorageConfiguration {
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoGenerationConversationStore(conversationDynamoDbClient, tableName);
         }
-        @Bean DynamoGenerationLeaseTurnRepository leasedTurnRepository(DynamoConversationTurnStore store,
-                DynamoDbClient conversationDynamoDbClient,
+        @Bean TurnRepository turnRepository(DynamoConversationTurnStore store, DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoGenerationLeaseTurnRepository(store, conversationDynamoDbClient, tableName);
         }
-        @Bean DynamoOutboxTurnRepository outboxTurnRepository(DynamoGenerationLeaseTurnRepository leased,
-                DynamoDbClient conversationDynamoDbClient,
-                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoOutboxTurnRepository(leased, conversationDynamoDbClient, tableName);
-        }
-        @Bean TurnRepository turnRepository(DynamoOutboxTurnRepository store) { return store; }
-        @Bean InferenceOutbox inferenceOutbox(DynamoOutboxTurnRepository store) { return store; }
+        @Bean InferenceDispatch inferenceDispatch() { return InferenceDispatch.noop(); }
         @Bean DynamoRunningMessageStore runningMessageAdapter(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoRunningMessageStore(conversationDynamoDbClient, tableName);

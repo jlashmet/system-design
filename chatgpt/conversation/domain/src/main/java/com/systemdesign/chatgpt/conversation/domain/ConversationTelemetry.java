@@ -8,6 +8,7 @@ public interface ConversationTelemetry {
     void modelRound(Duration latency, String outcome);
     void generationFinished(Duration endToEndLatency, String outcome);
     void toolInvocation(String toolName, Duration latency, String outcome);
+    void inferenceDelivery(int attempt, String outcome);
 
     static ConversationTelemetry noop() {
         return new ConversationTelemetry() {
@@ -16,6 +17,7 @@ public interface ConversationTelemetry {
             @Override public void modelRound(Duration latency, String outcome) { }
             @Override public void generationFinished(Duration endToEndLatency, String outcome) { }
             @Override public void toolInvocation(String toolName, Duration latency, String outcome) { }
+            @Override public void inferenceDelivery(int attempt, String outcome) { }
         };
     }
 }

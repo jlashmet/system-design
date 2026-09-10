@@ -2,7 +2,9 @@ package com.systemdesign.chatgpt.conversation.application;
 
 import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
+import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
@@ -41,8 +43,7 @@ class BudgetedContextAssemblerTest {
 
         List<Message> context = assembler.assemble(conversation, generation);
 
-        assertThat(context)
-                .extracting(Message::content)
+        assertThat(context).extracting(Message::content)
                 .containsExactly("system", "recent-user", "recent-assistant", "target");
     }
 
@@ -64,6 +65,31 @@ class BudgetedContextAssemblerTest {
     }
 
     @Test
+    void includesGenerationOwnedToolContinuationButNotInterleavedLaterUserTurn() {
+        UUID conversationId = UUID.randomUUID();
+        UUID generationId = UUID.randomUUID();
+        Conversation conversation = Conversation.start(conversationId, "user-1", NOW);
+        Message target = message(MessageRole.USER, "target", 1);
+        Message later = message(MessageRole.USER, "later-user", 2);
+        conversation.append(target);
+        conversation.append(later);
+        Generation generation = Generation.pending(
+                generationId, conversationId, "request-1", "target", target.id(), target.createdAt());
+        Message toolRequest = new Message(
+                UUID.randomUUID(), MessageRole.ASSISTANT, "tool-request", NOW.plusSeconds(3), generationId);
+        Message toolResult = new Message(
+                UUID.randomUUID(), MessageRole.TOOL, "tool-result", NOW.plusSeconds(4), generationId);
+        GenerationContinuationStore continuation = ignored -> List.of(toolRequest, toolResult);
+        BudgetedContextAssembler assembler = new BudgetedContextAssembler(
+                estimator, 20, List.of(), continuation, ConversationTelemetry.noop());
+
+        List<Message> context = assembler.assemble(conversation, generation);
+
+        assertThat(context).extracting(Message::content)
+                .containsExactly("target", "tool-request", "tool-result");
+    }
+
+    @Test
     void higherPrioritySourcesWinBudgetBeforeLowerPrioritySourcesAndHistory() {
         UUID conversationId = UUID.randomUUID();
         Conversation conversation = Conversation.start(conversationId, "user-1", NOW);
@@ -78,34 +104,20 @@ class BudgetedContextAssemblerTest {
         ContextSource retrieval = source(ContextSource.Kind.RETRIEVAL, 20, "retrieval");
         ContextSource summary = source(ContextSource.Kind.SUMMARY, 10, "summary");
         BudgetedContextAssembler assembler = new BudgetedContextAssembler(
-                estimator,
-                9,
-                List.of(memory, retrieval, summary));
+                estimator, 9, List.of(memory, retrieval, summary));
 
         List<Message> context = assembler.assemble(conversation, generation);
 
-        assertThat(context)
-                .extracting(Message::content)
+        assertThat(context).extracting(Message::content)
                 .containsExactly("summary", "retrieval", "memory", "target");
     }
 
     private ContextSource source(ContextSource.Kind kind, int priority, String content) {
         Message sourceMessage = message(MessageRole.SYSTEM, content, 0);
         return new ContextSource() {
-            @Override
-            public Kind kind() {
-                return kind;
-            }
-
-            @Override
-            public int priority() {
-                return priority;
-            }
-
-            @Override
-            public List<Message> load(Conversation conversation, Generation generation) {
-                return List.of(sourceMessage);
-            }
+            @Override public Kind kind() { return kind; }
+            @Override public int priority() { return priority; }
+            @Override public List<Message> load(Conversation conversation, Generation generation) { return List.of(sourceMessage); }
         };
     }
 

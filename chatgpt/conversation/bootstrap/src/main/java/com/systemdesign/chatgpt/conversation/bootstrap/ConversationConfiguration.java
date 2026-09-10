@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
 import org.springframework.context.annotation.Bean;
@@ -17,8 +18,18 @@ import java.util.function.Supplier;
 @Configuration
 public class ConversationConfiguration {
     @Bean
-    ConversationRepository conversationRepository() {
+    InMemoryConversationRepository conversationStore() {
         return new InMemoryConversationRepository();
+    }
+
+    @Bean
+    ConversationRepository conversationRepository(InMemoryConversationRepository store) {
+        return store;
+    }
+
+    @Bean
+    TurnRepository turnRepository(InMemoryConversationRepository store) {
+        return store;
     }
 
     @Bean
@@ -52,9 +63,10 @@ public class ConversationConfiguration {
     @Bean
     SendMessageHandler sendMessageHandler(
             ConversationRepository repository,
+            TurnRepository turnRepository,
             ModelGateway modelGateway,
             Supplier<UUID> idGenerator,
             Clock clock) {
-        return new SendMessageHandler(repository, modelGateway, idGenerator, clock);
+        return new SendMessageHandler(repository, turnRepository, modelGateway, idGenerator, clock);
     }
 }

@@ -3,20 +3,21 @@ package com.systemdesign.chatgpt.conversation.application;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
-import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -25,41 +26,37 @@ class SendMessageHandlerTest {
     private static final Instant NOW = Instant.parse("2026-09-10T12:00:00Z");
 
     @Test
-    void appendsUserAndAssistantMessages() {
-        Fixture fixture = new Fixture(messages -> new ModelGateway.Completion(
-                "test-model", "assistant: " + messages.getLast().content()));
+    void persistsUserMessageAndEnqueuesGenerationWithoutAssistantMessage() {
+        Fixture fixture = new Fixture();
 
         SendMessageResult result = fixture.handler.handle(
                 new SendMessageCommand(fixture.conversationId, "request-1", "hello"));
 
         assertThat(result.conversation().messages())
                 .extracting(Message::role, Message::content)
-                .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"),
-                        org.assertj.core.groups.Tuple.tuple(MessageRole.ASSISTANT, "assistant: hello"));
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"));
+        assertThat(result.generation().status().name()).isEqualTo("PENDING");
+        assertThat(fixture.queue.poll()).contains(result.generation().id());
     }
 
     @Test
-    void completedReplayReturnsSameTurnWithoutCallingModelAgain() {
-        AtomicInteger calls = new AtomicInteger();
-        Fixture fixture = new Fixture(messages -> {
-            calls.incrementAndGet();
-            return new ModelGateway.Completion("test-model", "assistant: hello");
-        });
-
+    void replayReusesLogicalTurnAndRequeuesUnfinishedGeneration() {
+        Fixture fixture = new Fixture();
         SendMessageCommand command = new SendMessageCommand(fixture.conversationId, "request-1", "hello");
+
         SendMessageResult first = fixture.handler.handle(command);
+        fixture.queue.poll();
         SendMessageResult replay = fixture.handler.handle(command);
 
-        assertThat(calls).hasValue(1);
         assertThat(replay.userMessage().id()).isEqualTo(first.userMessage().id());
-        assertThat(replay.assistantMessage().id()).isEqualTo(first.assistantMessage().id());
-        assertThat(replay.conversation().messages()).hasSize(2);
+        assertThat(replay.generation().id()).isEqualTo(first.generation().id());
+        assertThat(replay.conversation().messages()).hasSize(1);
+        assertThat(fixture.queue.poll()).contains(first.generation().id());
     }
 
     @Test
     void rejectsReuseOfIdempotencyKeyWithDifferentContent() {
-        Fixture fixture = new Fixture(messages -> new ModelGateway.Completion("test-model", "ok"));
+        Fixture fixture = new Fixture();
         fixture.handler.handle(new SendMessageCommand(fixture.conversationId, "request-1", "hello"));
 
         assertThatThrownBy(() -> fixture.handler.handle(
@@ -68,50 +65,41 @@ class SendMessageHandlerTest {
                 .hasMessageContaining("different content");
     }
 
-    @Test
-    void retriesFailedGenerationWithoutDuplicatingUserMessage() {
-        AtomicInteger calls = new AtomicInteger();
-        Fixture fixture = new Fixture(messages -> {
-            if (calls.getAndIncrement() == 0) {
-                throw new IllegalStateException("provider unavailable");
-            }
-            return new ModelGateway.Completion("test-model", "recovered");
-        });
-        SendMessageCommand command = new SendMessageCommand(fixture.conversationId, "request-1", "hello");
-
-        assertThatThrownBy(() -> fixture.handler.handle(command))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("provider unavailable");
-
-        SendMessageResult retry = fixture.handler.handle(command);
-
-        assertThat(calls).hasValue(2);
-        assertThat(retry.conversation().messages())
-                .extracting(Message::role, Message::content)
-                .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"),
-                        org.assertj.core.groups.Tuple.tuple(MessageRole.ASSISTANT, "recovered"));
-    }
-
     private static final class Fixture {
         private final UUID conversationId = UUID.randomUUID();
         private final FakeStore store = new FakeStore();
+        private final FakeQueue queue = new FakeQueue();
         private final SendMessageHandler handler;
 
-        private Fixture(ModelGateway gateway) {
+        private Fixture() {
             store.save(Conversation.start(conversationId, "user-1", NOW));
             handler = new SendMessageHandler(
                     store,
                     store,
-                    gateway,
+                    queue,
                     UUID::randomUUID,
                     Clock.fixed(NOW.plusSeconds(1), ZoneOffset.UTC));
+        }
+    }
+
+    private static final class FakeQueue implements InferenceJobQueue {
+        private final Queue<UUID> jobs = new ArrayDeque<>();
+
+        @Override
+        public void enqueue(UUID generationId) {
+            jobs.add(generationId);
+        }
+
+        @Override
+        public Optional<UUID> poll() {
+            return Optional.ofNullable(jobs.poll());
         }
     }
 
     private static final class FakeStore implements ConversationRepository, TurnRepository {
         private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
         private final Map<String, Generation> generations = new ConcurrentHashMap<>();
+        private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
 
         @Override
         public Optional<Conversation> findById(UUID conversationId) {
@@ -121,6 +109,11 @@ class SendMessageHandlerTest {
         @Override
         public void save(Conversation conversation) {
             conversations.put(conversation.id(), conversation);
+        }
+
+        @Override
+        public Optional<Generation> findById(UUID generationId) {
+            return Optional.ofNullable(generationsById.get(generationId));
         }
 
         @Override
@@ -136,19 +129,24 @@ class SendMessageHandlerTest {
                 return new BeginResult(existing, false);
             }
             conversations.put(conversation.id(), conversation);
-            generations.put(key, generation);
+            put(generation);
             return new BeginResult(generation, true);
         }
 
         @Override
         public synchronized void complete(Conversation conversation, Generation generation) {
             conversations.put(conversation.id(), conversation);
-            generations.put(key(generation.conversationId(), generation.idempotencyKey()), generation);
+            put(generation);
         }
 
         @Override
         public void fail(Generation generation) {
+            put(generation);
+        }
+
+        private void put(Generation generation) {
             generations.put(key(generation.conversationId(), generation.idempotencyKey()), generation);
+            generationsById.put(generation.id(), generation);
         }
 
         private String key(UUID conversationId, String idempotencyKey) {

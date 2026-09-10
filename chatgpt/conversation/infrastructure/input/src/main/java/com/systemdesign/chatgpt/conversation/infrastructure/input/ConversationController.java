@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.input;
 
+import com.systemdesign.chatgpt.conversation.api.ConversationPageResponse;
 import com.systemdesign.chatgpt.conversation.api.ConversationResponse;
 import com.systemdesign.chatgpt.conversation.api.CreateConversationResponse;
 import com.systemdesign.chatgpt.conversation.api.GenerationResponse;
@@ -13,6 +14,7 @@ import com.systemdesign.chatgpt.conversation.application.CreateConversationHandl
 import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.ListConversationsHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageCommand;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
@@ -48,6 +50,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/v1/conversations")
 public final class ConversationController {
     private final CreateConversationHandler createConversationHandler;
+    private final ListConversationsHandler listConversationsHandler;
     private final ConversationAccessGuard accessGuard;
     private final GetConversationMetadataHandler getConversationMetadataHandler;
     private final GetConversationMessagesHandler getConversationMessagesHandler;
@@ -58,6 +61,7 @@ public final class ConversationController {
 
     public ConversationController(
             CreateConversationHandler createConversationHandler,
+            ListConversationsHandler listConversationsHandler,
             ConversationAccessGuard accessGuard,
             GetConversationMetadataHandler getConversationMetadataHandler,
             GetConversationMessagesHandler getConversationMessagesHandler,
@@ -66,6 +70,7 @@ public final class ConversationController {
             SendMessageHandler sendMessageHandler,
             ReplayableGenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
+        this.listConversationsHandler = listConversationsHandler;
         this.accessGuard = accessGuard;
         this.getConversationMetadataHandler = getConversationMetadataHandler;
         this.getConversationMessagesHandler = getConversationMessagesHandler;
@@ -80,6 +85,15 @@ public final class ConversationController {
     public CreateConversationResponse create(Principal principal) {
         Conversation conversation = createConversationHandler.handle(new CreateConversationCommand(subject(principal)));
         return new CreateConversationResponse(conversation.id());
+    }
+
+    @GetMapping
+    public ConversationPageResponse list(
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) String cursor,
+            Principal principal) {
+        var page = listConversationsHandler.handle(subject(principal), limit, cursor);
+        return new ConversationPageResponse(page.conversations().stream().map(this::toResponse).toList(), page.nextCursor());
     }
 
     @GetMapping("/{conversationId}")

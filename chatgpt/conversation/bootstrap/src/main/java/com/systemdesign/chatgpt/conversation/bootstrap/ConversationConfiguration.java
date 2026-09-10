@@ -42,6 +42,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -98,9 +99,12 @@ public class ConversationConfiguration {
     @Bean ProcessGenerationHandler processGenerationHandler(ConversationRepository repository, TurnRepository turns,
             RunningMessageStore runningMessages, ContextAssembler contextAssembler, ModelGateway modelGateway,
             GenerationEventBus events, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
-            ConversationTelemetry telemetry, @Value("${chatgpt.tools.max-rounds:4}") int maxToolRounds,
+            ConversationTelemetry telemetry,
+            @Value("${chatgpt.inference.generation-claim-lease-ms:60000}") long generationClaimLeaseMs,
+            @Value("${chatgpt.tools.max-rounds:4}") int maxToolRounds,
             Supplier<UUID> ids, Clock clock) {
         return new ProcessGenerationHandler(repository, turns, runningMessages, contextAssembler, modelGateway, events,
-                summaryRefresher, toolExecutor, telemetry, maxToolRounds, ids, clock);
+                summaryRefresher, toolExecutor, telemetry, Duration.ofMillis(generationClaimLeaseMs),
+                maxToolRounds, ids, clock);
     }
 }

@@ -36,13 +36,25 @@ public final class DynamoRunningMessageStore implements RunningMessageStore, Gen
 
     @Override
     public boolean append(UUID generationId, List<Message> messages) {
+        Map<String, AttributeValue> generation = generationItem(generationId);
+        if (generation.isEmpty()) return false;
+        AttributeValue token = generation.get("claimToken");
+        return token != null && append(generationId, UUID.fromString(token.s()), messages);
+    }
+
+    @Override
+    public boolean append(UUID generationId, UUID claimToken, List<Message> messages) {
         Objects.requireNonNull(generationId, "generationId");
+        Objects.requireNonNull(claimToken, "claimToken");
         List<Message> copy = List.copyOf(Objects.requireNonNull(messages, "messages"));
         if (copy.isEmpty()) return true;
         if (copy.size() > 49) throw new IllegalArgumentException("a continuation append may contain at most 49 messages");
 
         Map<String, AttributeValue> generation = generationItem(generationId);
         if (generation.isEmpty()) return false;
+        if (!GenerationStatus.RUNNING.name().equals(generation.get("status").s())) return false;
+        AttributeValue currentToken = generation.get("claimToken");
+        if (currentToken == null || !claimToken.toString().equals(currentToken.s())) return false;
         UUID conversationId = UUID.fromString(generation.get("conversationId").s());
 
         List<TransactWriteItem> items = new ArrayList<>(1 + copy.size() * 2);
@@ -50,9 +62,11 @@ public final class DynamoRunningMessageStore implements RunningMessageStore, Gen
                 .conditionCheck(ConditionCheck.builder()
                         .tableName(tableName)
                         .key(Map.of("pk", string(generationPk(generationId)), "sk", string(META)))
-                        .conditionExpression("#status = :running")
+                        .conditionExpression("#status = :running AND claimToken = :claimToken")
                         .expressionAttributeNames(Map.of("#status", "status"))
-                        .expressionAttributeValues(Map.of(":running", string(GenerationStatus.RUNNING.name())))
+                        .expressionAttributeValues(Map.of(
+                                ":running", string(GenerationStatus.RUNNING.name()),
+                                ":claimToken", string(claimToken.toString())))
                         .build())
                 .build());
         for (Message message : copy) {
@@ -65,7 +79,9 @@ public final class DynamoRunningMessageStore implements RunningMessageStore, Gen
             return true;
         } catch (TransactionCanceledException exception) {
             Map<String, AttributeValue> current = generationItem(generationId);
-            if (current.isEmpty() || !GenerationStatus.RUNNING.name().equals(current.get("status").s())) return false;
+            AttributeValue token = current.get("claimToken");
+            if (current.isEmpty() || !GenerationStatus.RUNNING.name().equals(current.get("status").s())
+                    || token == null || !claimToken.toString().equals(token.s())) return false;
             throw exception;
         }
     }

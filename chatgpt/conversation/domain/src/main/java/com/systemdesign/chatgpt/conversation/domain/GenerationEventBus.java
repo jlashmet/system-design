@@ -12,7 +12,8 @@ public interface GenerationEventBus {
     enum Type {
         DELTA,
         COMPLETED,
-        FAILED
+        FAILED,
+        CANCELLED
     }
 
     record Event(Type type, String data) {
@@ -34,6 +35,10 @@ public interface GenerationEventBus {
 
         public static Event failed(String message) {
             return new Event(Type.FAILED, message);
+        }
+
+        public static Event cancelled() {
+            return new Event(Type.CANCELLED, "");
         }
     }
 

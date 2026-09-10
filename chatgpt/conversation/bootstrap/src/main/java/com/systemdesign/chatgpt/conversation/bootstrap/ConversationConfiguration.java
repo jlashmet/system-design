@@ -32,7 +32,6 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicToke
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
-import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryInferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryLongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryRetrievalContextStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,12 +46,6 @@ import java.util.function.Supplier;
 
 @Configuration
 public class ConversationConfiguration {
-    @Bean
-    InferenceJobQueue inferenceJobQueue(
-            @Value("${chatgpt.inference.queue-capacity:1024}") int capacity) {
-        return new InMemoryInferenceJobQueue(capacity);
-    }
-
     @Bean
     InferenceQuota inferenceQuota(
             @Value("${chatgpt.inference.requests-per-minute:60}") int maxRequests) {

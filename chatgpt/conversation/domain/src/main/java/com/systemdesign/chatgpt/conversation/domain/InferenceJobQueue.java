@@ -7,7 +7,9 @@ import java.util.UUID;
 public interface InferenceJobQueue {
     boolean tryEnqueue(Job job);
 
-    Optional<Job> poll();
+    Optional<Delivery> poll();
+
+    void acknowledge(Delivery delivery);
 
     void deadLetter(Job job, String reason);
 
@@ -25,6 +27,15 @@ public interface InferenceJobQueue {
 
         public Job nextAttempt() {
             return new Job(generationId, attempt + 1);
+        }
+    }
+
+    record Delivery(Job job, String receipt) {
+        public Delivery {
+            Objects.requireNonNull(job, "job");
+            if (receipt == null || receipt.isBlank()) {
+                throw new IllegalArgumentException("receipt must not be blank");
+            }
         }
     }
 }

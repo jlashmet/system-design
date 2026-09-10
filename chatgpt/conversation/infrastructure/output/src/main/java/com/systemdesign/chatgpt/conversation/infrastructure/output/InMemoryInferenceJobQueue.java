@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 
 public final class InMemoryInferenceJobQueue implements InferenceJobQueue {
@@ -24,8 +25,14 @@ public final class InMemoryInferenceJobQueue implements InferenceJobQueue {
     }
 
     @Override
-    public Optional<Job> poll() {
-        return Optional.ofNullable(jobs.poll());
+    public Optional<Delivery> poll() {
+        Job job = jobs.poll();
+        return job == null ? Optional.empty() : Optional.of(new Delivery(job, UUID.randomUUID().toString()));
+    }
+
+    @Override
+    public void acknowledge(Delivery delivery) {
+        // Poll removes in-memory jobs immediately. Durable adapters use the receipt here.
     }
 
     @Override

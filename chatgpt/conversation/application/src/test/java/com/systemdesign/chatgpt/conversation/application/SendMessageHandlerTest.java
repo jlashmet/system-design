@@ -42,7 +42,8 @@ class SendMessageHandlerTest {
                 .extracting(Message::role, Message::content)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"));
         assertThat(result.generation().requiredCapabilities()).containsExactly(ModelCapability.TOOL_CALLING);
-        assertThat(fixture.queue.poll()).contains(InferenceJobQueue.Job.firstAttempt(result.generation().id()));
+        assertThat(fixture.queue.poll().map(InferenceJobQueue.Delivery::job))
+                .contains(InferenceJobQueue.Job.firstAttempt(result.generation().id()));
         assertThat(fixture.quota.calls).hasValue(1);
     }
 
@@ -57,7 +58,8 @@ class SendMessageHandlerTest {
 
         assertThat(replay.generation().id()).isEqualTo(first.generation().id());
         assertThat(fixture.quota.calls).hasValue(1);
-        assertThat(fixture.queue.poll()).contains(InferenceJobQueue.Job.firstAttempt(first.generation().id()));
+        assertThat(fixture.queue.poll().map(InferenceJobQueue.Delivery::job))
+                .contains(InferenceJobQueue.Job.firstAttempt(first.generation().id()));
     }
 
     @Test
@@ -141,8 +143,13 @@ class SendMessageHandlerTest {
         }
 
         @Override
-        public Optional<Job> poll() {
-            return Optional.ofNullable(jobs.poll());
+        public Optional<Delivery> poll() {
+            Job job = jobs.poll();
+            return job == null ? Optional.empty() : Optional.of(new Delivery(job, UUID.randomUUID().toString()));
+        }
+
+        @Override
+        public void acknowledge(Delivery delivery) {
         }
 
         @Override

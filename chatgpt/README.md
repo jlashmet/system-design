@@ -101,6 +101,35 @@ Turn creation uses a DynamoDB transaction to commit the user message, generation
 
 Idempotency keys are represented by a SHA-256-derived storage key while the original key is retained in the mapping record. This keeps Dynamo partition keys bounded without weakening the application-level idempotency contract.
 
+Runtime storage is selectable:
+
+```text
+chatgpt.storage.mode=memory|dynamo
+chatgpt.storage.dynamo.region=us-east-1
+chatgpt.storage.dynamo.endpoint=
+chatgpt.storage.dynamo.table-name=chatgpt-conversations
+```
+
+`memory` remains the default. Dynamo table provisioning stays external to application startup.
+
+### 12. Durable SQS inference delivery
+
+`InferenceJobQueue` now models an explicit delivery receipt. Workers acknowledge a delivery only after inference succeeds, after a retry has been successfully re-enqueued, or after dead-letter handoff succeeds. A worker crash before acknowledgement therefore leaves the SQS message available for redelivery after its visibility timeout instead of losing the job.
+
+The queue runtime is selectable:
+
+```text
+chatgpt.inference.queue-mode=memory|sqs
+chatgpt.inference.sqs.region=us-east-1
+chatgpt.inference.sqs.endpoint=
+chatgpt.inference.sqs.queue-url=<required in sqs mode>
+chatgpt.inference.sqs.dead-letter-queue-url=<required in sqs mode>
+chatgpt.inference.sqs.visibility-timeout-seconds=60
+chatgpt.inference.sqs.wait-time-seconds=10
+```
+
+`memory` remains the default. The SQS adapter uses long polling, explicit delete-on-ack, and a separate externally provisioned DLQ.
+
 ## Testing
 
 The testing layout intentionally follows Ticketmaster:
@@ -111,7 +140,7 @@ The testing layout intentionally follows Ticketmaster:
 - each integration test creates isolated emulated AWS resources and points AWS SDK clients at the `FlociContainer` endpoint;
 - `maven-failsafe-plugin` runs `integration-test` + `verify`, so `mvn verify` exercises the Floci tests in CI.
 
-`DynamoConversationSummaryStoreIT` verifies summary round-trip behavior and stale-summary fencing against Floci. `DynamoConversationTurnStoreIT` verifies atomic idempotent begin, retryable claim/failure, atomic assistant completion, and cancellation fencing. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
+`DynamoConversationSummaryStoreIT` verifies summary round-trip behavior and stale-summary fencing against Floci. `DynamoConversationTurnStoreIT` verifies atomic idempotent begin, retryable claim/failure, atomic assistant completion, and cancellation fencing. `SqsInferenceJobQueueIT` verifies SQS enqueue/poll/acknowledgement, visibility-timeout redelivery, and explicit dead-letter handoff. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
 
 ### HTTP endpoints
 
@@ -128,9 +157,9 @@ POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 
 ## Next implementation slices
 
-1. Make the DynamoDB conversation/turn adapter selectable in runtime composition and add table/bootstrap configuration.
+1. Add replayable generation event streaming so SSE reconnects can resume without losing token/lifecycle events.
 2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-3. Add durable queue/event adapters and cache/read models where they materially improve latency or recovery.
+3. Add durable quota/context-memory adapters and cache/read models where they materially improve latency or recovery.
 4. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
 
 ## Build

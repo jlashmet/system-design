@@ -107,7 +107,17 @@ public final class InMemoryConversationRepository
         Generation current = generationsById.get(generation.id());
         if (current == null || current.status() == GenerationStatus.CANCELLED || current.status() == GenerationStatus.COMPLETED) return;
         if (current.status() != GenerationStatus.RUNNING || !java.util.Objects.equals(current.claimToken(), generation.claimToken())) return;
-        conversations.put(conversation.id(), copy(conversation));
+        Message assistant = conversation.messages().stream()
+                .filter(message -> message.id().equals(generation.assistantMessageId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("completed generation references missing assistant message"));
+        Conversation persisted = conversations.get(conversation.id());
+        if (persisted == null) throw new IllegalStateException("conversation not found: " + conversation.id());
+        java.util.ArrayList<Message> merged = new java.util.ArrayList<>(persisted.messages());
+        if (merged.stream().noneMatch(message -> message.id().equals(assistant.id()))) merged.add(assistant);
+        merged.sort(java.util.Comparator.comparing(Message::createdAt).thenComparing(Message::id));
+        conversations.put(conversation.id(), Conversation.rehydrate(
+                persisted.id(), persisted.userId(), persisted.createdAt(), merged));
         putGeneration(generation);
     }
     @Override public synchronized void fail(Generation generation) {

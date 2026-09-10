@@ -23,6 +23,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
+import com.systemdesign.chatgpt.conversation.domain.GenerationConversationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
@@ -96,16 +97,19 @@ public class ConversationConfiguration {
             InferenceJobQueue queue, InferenceQuota quota, Supplier<UUID> ids, Clock clock) {
         return new SendMessageHandler(repository, turns, queue, quota, ids, clock);
     }
-    @Bean ProcessGenerationHandler processGenerationHandler(ConversationRepository repository, TurnRepository turns,
+    @Bean ProcessGenerationHandler processGenerationHandler(ConversationRepository repository,
+            GenerationConversationStore generationConversationStore, TurnRepository turns,
             RunningMessageStore runningMessages, ContextAssembler contextAssembler, ModelGateway modelGateway,
             GenerationEventBus events, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
             ConversationTelemetry telemetry,
             @Value("${chatgpt.inference.generation-claim-lease-ms:60000}") long generationClaimLeaseMs,
             @Value("${chatgpt.inference.generation-heartbeat-ms:20000}") long generationHeartbeatMs,
+            @Value("${chatgpt.inference.worker-history-messages:200}") int maxWorkerHistoryMessages,
             @Value("${chatgpt.tools.max-rounds:4}") int maxToolRounds,
             Supplier<UUID> ids, Clock clock) {
-        return new ProcessGenerationHandler(repository, turns, runningMessages, contextAssembler, modelGateway, events,
-                summaryRefresher, toolExecutor, telemetry, Duration.ofMillis(generationClaimLeaseMs),
-                Duration.ofMillis(generationHeartbeatMs), maxToolRounds, ids, clock);
+        return new ProcessGenerationHandler(repository, generationConversationStore, turns, runningMessages,
+                contextAssembler, modelGateway, events, summaryRefresher, toolExecutor, telemetry,
+                Duration.ofMillis(generationClaimLeaseMs), Duration.ofMillis(generationHeartbeatMs),
+                maxWorkerHistoryMessages, maxToolRounds, ids, clock);
     }
 }

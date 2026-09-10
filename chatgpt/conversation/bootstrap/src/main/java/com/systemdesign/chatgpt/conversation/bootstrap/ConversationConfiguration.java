@@ -72,11 +72,14 @@ public class ConversationConfiguration {
             @Value("${chatgpt.context.memory-priority:30}") int priority,
             @Value("${chatgpt.context.memory-limit:10}") int limit) { return new LongTermMemoryContextSource(store, priority, limit); }
     @Bean ContextAssembler contextAssembler(TokenEstimator estimator, List<ContextSource> sources,
+            ConversationTelemetry telemetry,
             @Value("${chatgpt.context.max-input-tokens:8192}") int maxInputTokens) {
-        return new BudgetedContextAssembler(estimator, maxInputTokens, sources);
+        return new BudgetedContextAssembler(estimator, maxInputTokens, sources, telemetry);
     }
     @Bean ModelEndpoint deterministicModelEndpoint() { return new DeterministicModelGateway(); }
-    @Bean ModelGateway modelGateway(List<ModelEndpoint> endpoints) { return new RoutingModelGateway(endpoints); }
+    @Bean ModelGateway modelGateway(List<ModelEndpoint> endpoints, ConversationTelemetry telemetry) {
+        return new RoutingModelGateway(endpoints, telemetry);
+    }
     @Bean Clock clock() { return Clock.systemUTC(); }
     @Bean Supplier<UUID> idGenerator() { return UUID::randomUUID; }
     @Bean CreateConversationHandler createConversationHandler(ConversationRepository repository, Supplier<UUID> ids, Clock clock) {

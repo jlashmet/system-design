@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClientBuilder;
 
 import java.net.URI;
 
@@ -43,7 +44,7 @@ public class StorageConfiguration {
         DynamoDbClient conversationDynamoDbClient(
                 @Value("${chatgpt.storage.dynamo.region:us-east-1}") String region,
                 @Value("${chatgpt.storage.dynamo.endpoint:}") String endpoint) {
-            DynamoDbClient.Builder builder = DynamoDbClient.builder()
+            DynamoDbClientBuilder builder = DynamoDbClient.builder()
                     .region(Region.of(region))
                     .credentialsProvider(DefaultCredentialsProvider.create());
             if (endpoint != null && !endpoint.isBlank()) {

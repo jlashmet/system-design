@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.GenerationEventStore;
 import com.systemdesign.chatgpt.conversation.domain.ReplayableGenerationEventBus;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
@@ -75,6 +76,20 @@ public final class DynamoGenerationEventStore implements GenerationEventStore {
                 .build());
 
         return response.items().stream().map(this::toRecordedEvent).toList();
+    }
+
+    @Override
+    public long latestSequence(UUID generationId) {
+        Objects.requireNonNull(generationId, "generationId");
+        var item = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(Map.of("pk", string(pk(generationId)), "sk", string(META_SK)))
+                .consistentRead(true)
+                .build()).item();
+        if (item == null || item.isEmpty() || !item.containsKey("nextSequence")) {
+            return 0L;
+        }
+        return Long.parseLong(item.get("nextSequence").n());
     }
 
     private long allocateSequence(UUID generationId) {

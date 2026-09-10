@@ -213,6 +213,7 @@ public class ConversationConfiguration {
             ContextAssembler contextAssembler,
             ModelGateway modelGateway,
             GenerationEventBus generationEventBus,
+            ConversationSummaryRefresher summaryRefresher,
             Supplier<UUID> idGenerator,
             Clock clock) {
         return new ProcessGenerationHandler(
@@ -221,6 +222,7 @@ public class ConversationConfiguration {
                 contextAssembler,
                 modelGateway,
                 generationEventBus,
+                summaryRefresher,
                 idGenerator,
                 clock);
     }

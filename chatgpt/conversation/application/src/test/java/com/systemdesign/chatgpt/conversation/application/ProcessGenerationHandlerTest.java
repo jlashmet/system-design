@@ -3,6 +3,8 @@ package com.systemdesign.chatgpt.conversation.application;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
+import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
+import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
@@ -30,7 +32,7 @@ class ProcessGenerationHandlerTest {
     private static final Instant NOW = Instant.parse("2026-09-10T12:00:00Z");
 
     @Test
-    void completesQueuedGenerationAndPublishesStreamEvents() {
+    void completesQueuedGenerationPublishesStreamEventsAndRefreshesSummary() {
         Fixture fixture = new Fixture(messages -> new ModelGateway.Completion("test-model", "assistant: hello"));
 
         fixture.handler.handle(fixture.generation.id());
@@ -47,6 +49,25 @@ class ProcessGenerationHandlerTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(GenerationEventBus.Type.DELTA, "assistant: hello"),
                         org.assertj.core.groups.Tuple.tuple(GenerationEventBus.Type.COMPLETED, ""));
+        assertThat(fixture.summaryStore.find(fixture.conversationId))
+                .get()
+                .extracting(ConversationSummaryStore.Summary::throughMessageId, ConversationSummaryStore.Summary::content)
+                .containsExactly(completed.assistantMessageId(), "summary");
+    }
+
+    @Test
+    void summaryRefreshFailureDoesNotCorruptCompletedGeneration() {
+        Fixture fixture = new Fixture(
+                messages -> new ModelGateway.Completion("test-model", "assistant: hello"),
+                (conversation, ignored) -> conversation.messages(),
+                (previous, delta) -> { throw new IllegalStateException("summary unavailable"); });
+
+        fixture.handler.handle(fixture.generation.id());
+
+        assertThat(fixture.store.findGenerationById(fixture.generation.id()).orElseThrow().status())
+                .isEqualTo(GenerationStatus.COMPLETED);
+        assertThat(fixture.store.findById(fixture.conversationId).orElseThrow().messages()).hasSize(2);
+        assertThat(fixture.eventBus.events.getLast()).isEqualTo(GenerationEventBus.Event.completed());
     }
 
     @Test
@@ -104,6 +125,7 @@ class ProcessGenerationHandlerTest {
         private final Generation generation;
         private final FakeStore store = new FakeStore();
         private final FakeEventBus eventBus = new FakeEventBus();
+        private final FakeSummaryStore summaryStore = new FakeSummaryStore();
         private final ProcessGenerationHandler handler;
 
         private Fixture(ModelGateway gateway) {
@@ -111,19 +133,48 @@ class ProcessGenerationHandlerTest {
         }
 
         private Fixture(ModelGateway gateway, ContextAssembler contextAssembler) {
+            this(gateway, contextAssembler, (previous, delta) -> "summary");
+        }
+
+        private Fixture(
+                ModelGateway gateway,
+                ContextAssembler contextAssembler,
+                ConversationSummarizer summarizer) {
             Conversation conversation = Conversation.start(conversationId, "user-1", NOW);
             conversation.append(new Message(userMessageId, MessageRole.USER, "hello", NOW.plusSeconds(1)));
             generation = Generation.pending(
                     UUID.randomUUID(), conversationId, "request-1", "hello", userMessageId, NOW.plusSeconds(1));
             store.begin(conversation, generation);
+            Clock clock = Clock.fixed(NOW.plusSeconds(2), ZoneOffset.UTC);
+            ConversationSummaryRefresher refresher = new ConversationSummaryRefresher(
+                    summaryStore,
+                    summarizer,
+                    1,
+                    UUID::randomUUID,
+                    clock);
             handler = new ProcessGenerationHandler(
                     store,
                     store,
                     contextAssembler,
                     gateway,
                     eventBus,
+                    refresher,
                     UUID::randomUUID,
-                    Clock.fixed(NOW.plusSeconds(2), ZoneOffset.UTC));
+                    clock);
+        }
+    }
+
+    private static final class FakeSummaryStore implements ConversationSummaryStore {
+        private final Map<UUID, Summary> summaries = new ConcurrentHashMap<>();
+
+        @Override
+        public Optional<Summary> find(UUID conversationId) {
+            return Optional.ofNullable(summaries.get(conversationId));
+        }
+
+        @Override
+        public void save(Summary summary) {
+            summaries.put(summary.conversationId(), summary);
         }
     }
 

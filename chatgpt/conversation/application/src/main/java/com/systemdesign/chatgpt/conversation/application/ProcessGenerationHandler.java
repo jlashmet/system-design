@@ -25,6 +25,7 @@ public final class ProcessGenerationHandler {
     private final ContextAssembler contextAssembler;
     private final ModelGateway modelGateway;
     private final GenerationEventBus eventBus;
+    private final ConversationSummaryRefresher summaryRefresher;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
 
@@ -34,6 +35,7 @@ public final class ProcessGenerationHandler {
             ContextAssembler contextAssembler,
             ModelGateway modelGateway,
             GenerationEventBus eventBus,
+            ConversationSummaryRefresher summaryRefresher,
             Supplier<UUID> idGenerator,
             Clock clock) {
         this.conversationRepository = Objects.requireNonNull(conversationRepository, "conversationRepository");
@@ -41,6 +43,7 @@ public final class ProcessGenerationHandler {
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.modelGateway = Objects.requireNonNull(modelGateway, "modelGateway");
         this.eventBus = Objects.requireNonNull(eventBus, "eventBus");
+        this.summaryRefresher = Objects.requireNonNull(summaryRefresher, "summaryRefresher");
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -80,6 +83,7 @@ public final class ProcessGenerationHandler {
             Generation finalState = turnRepository.findGenerationById(generation.id()).orElseThrow();
             if (finalState.status() == GenerationStatus.COMPLETED) {
                 eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
+                refreshSummaryBestEffort(conversation);
             }
         } catch (GenerationCancelledException ignored) {
             // Cancellation is a normal terminal outcome and is already published by the cancel use case.
@@ -89,6 +93,14 @@ public final class ProcessGenerationHandler {
                 eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
             }
             throw exception;
+        }
+    }
+
+    private void refreshSummaryBestEffort(Conversation conversation) {
+        try {
+            summaryRefresher.refreshIfNeeded(conversation);
+        } catch (RuntimeException ignored) {
+            // Summary freshness is auxiliary. A refresh outage must not corrupt an already-completed generation.
         }
     }
 

@@ -24,6 +24,8 @@
         <java.version>21</java.version>
         <maven.compiler.release>21</maven.compiler.release>
         <aws.sdk.version>2.54.2</aws.sdk.version>
+        <aws.lambda.java.core.version>1.4.0</aws.lambda.java.core.version>
+        <aws.lambda.java.events.version>3.16.1</aws.lambda.java.events.version>
         <floci.testcontainers.version>2.15.0</floci.testcontainers.version>
         <archunit.version>1.5.0</archunit.version>
     </properties>

@@ -76,8 +76,7 @@ public final class ProcessGenerationHandler {
             return;
         }
 
-        Conversation conversation = conversationRepository.findById(generation.conversationId())
-                .orElseThrow(() -> new NoSuchElementException("conversation not found: " + generation.conversationId()));
+        Conversation conversation = loadConversation(generation);
 
         try {
             List<ToolDefinition> tools = generation.requiredCapabilities().contains(ModelCapability.TOOL_CALLING)
@@ -109,7 +108,7 @@ public final class ProcessGenerationHandler {
                 if (!runningMessageStore.append(generation.id(), transcript)) {
                     return;
                 }
-                transcript.forEach(conversation::append);
+                conversation = loadConversation(generation);
             }
         } catch (GenerationCancelledException ignored) {
             // Cancellation is a normal terminal outcome and is already published by the cancel use case.
@@ -120,6 +119,11 @@ public final class ProcessGenerationHandler {
             }
             throw exception;
         }
+    }
+
+    private Conversation loadConversation(Generation generation) {
+        return conversationRepository.findById(generation.conversationId())
+                .orElseThrow(() -> new NoSuchElementException("conversation not found: " + generation.conversationId()));
     }
 
     private List<Message> executeToolRound(Conversation conversation, List<ToolCall> calls) {

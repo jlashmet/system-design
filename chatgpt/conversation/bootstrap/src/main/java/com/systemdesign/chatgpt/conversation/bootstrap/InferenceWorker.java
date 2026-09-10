@@ -29,9 +29,14 @@ public final class InferenceWorker {
     private void process(InferenceJobQueue.Delivery delivery) {
         InferenceJobQueue.Job job = delivery.job();
         try {
-            handler.handle(job.generationId());
+            ProcessGenerationHandler.ProcessResult result = handler.handle(job.generationId());
+            if (result == ProcessGenerationHandler.ProcessResult.BUSY) {
+                telemetry.inferenceDelivery(job.attempt(), "busy_unacked");
+                return;
+            }
             queue.acknowledge(delivery);
-            telemetry.inferenceDelivery(job.attempt(), "completed");
+            telemetry.inferenceDelivery(job.attempt(),
+                    result == ProcessGenerationHandler.ProcessResult.TERMINAL ? "terminal" : "completed");
         } catch (RuntimeException exception) {
             if (job.attempt() >= maxAttempts) {
                 queue.deadLetter(job, exception.getMessage());

@@ -29,19 +29,26 @@ public final class InferenceWorker {
         queue.poll().ifPresent(this::process);
     }
 
-    private void process(InferenceJobQueue.Job job) {
+    private void process(InferenceJobQueue.Delivery delivery) {
+        InferenceJobQueue.Job job = delivery.job();
         try {
             handler.handle(job.generationId());
+            queue.acknowledge(delivery);
         } catch (RuntimeException exception) {
             if (job.attempt() >= maxAttempts) {
                 queue.deadLetter(job, exception.getMessage());
+                queue.acknowledge(delivery);
                 return;
             }
 
             InferenceJobQueue.Job retry = job.nextAttempt();
-            if (!queue.tryEnqueue(retry)) {
-                queue.deadLetter(retry, "retry queue saturated: " + exception.getMessage());
+            if (queue.tryEnqueue(retry)) {
+                queue.acknowledge(delivery);
+                return;
             }
+
+            queue.deadLetter(retry, "retry queue saturated: " + exception.getMessage());
+            queue.acknowledge(delivery);
         }
     }
 }

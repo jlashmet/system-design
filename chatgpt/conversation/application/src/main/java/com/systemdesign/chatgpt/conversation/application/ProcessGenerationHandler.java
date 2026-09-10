@@ -3,7 +3,6 @@ package com.systemdesign.chatgpt.conversation.application;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
-import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
@@ -37,9 +36,12 @@ public final class ProcessGenerationHandler {
     }
 
     public void handle(UUID generationId) {
-        Generation generation = turnRepository.findById(generationId)
-                .orElseThrow(() -> new NoSuchElementException("generation not found: " + generationId));
-        if (generation.status() == GenerationStatus.COMPLETED) {
+        Instant startedAt = Instant.now(clock);
+        Generation generation = turnRepository.claim(generationId, startedAt).orElse(null);
+        if (generation == null) {
+            if (turnRepository.findById(generationId).isEmpty()) {
+                throw new NoSuchElementException("generation not found: " + generationId);
+            }
             return;
         }
 

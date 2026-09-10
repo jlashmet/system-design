@@ -101,8 +101,9 @@ public class StorageConfiguration {
         }
         @Bean DynamoOutboxTurnRepository outboxTurnRepository(DynamoGenerationLeaseTurnRepository leased,
                 DynamoDbClient conversationDynamoDbClient,
-                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoOutboxTurnRepository(leased, conversationDynamoDbClient, tableName);
+                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName,
+                @Value("${chatgpt.inference.outbox-shards:16}") int shardCount) {
+            return new DynamoOutboxTurnRepository(leased, conversationDynamoDbClient, tableName, shardCount);
         }
         @Bean TurnRepository turnRepository(DynamoOutboxTurnRepository store) { return store; }
         @Bean InferenceOutbox inferenceOutbox(DynamoOutboxTurnRepository store) { return store; }

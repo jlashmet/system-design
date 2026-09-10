@@ -66,7 +66,7 @@ Providers advertise supported capabilities, health, and cost through `ModelEndpo
 
 Message requests may include `requiredCapabilities` such as `vision` or `tool_calling`. Those requirements are persisted on `Generation`, included in idempotency equality, and carried through the asynchronous worker into model routing; retries therefore cannot silently change model requirements.
 
-New generations are admitted through an `InferenceQuota` port before durable turn creation. The development adapter provides an idempotency-aware fixed one-minute window keyed by user and request key (`chatgpt.inference.requests-per-minute`, default `60`). Quota exhaustion returns `429 Too Many Requests` with `Retry-After: 60`. Existing idempotent generations do not consume quota again.
+New generations are admitted through an `InferenceQuota` port before durable turn creation. Memory mode uses an idempotency-aware fixed one-minute window. Dynamo mode persists the same fixed-window semantics transactionally with a per-window counter plus per-idempotency admission record, so an accepted replay does not consume quota twice. The default limit is `chatgpt.inference.requests-per-minute=60`. Quota exhaustion returns `429 Too Many Requests` with `Retry-After: 60`.
 
 ### 8. Generation-scoped context assembly and token budgeting
 
@@ -91,7 +91,7 @@ Context persistence is split by responsibility:
 
 Successful generation completion triggers summary refresh only after the generation has been durably completed and the terminal SSE event has been published. Summary refresh is best-effort: a summary-store or summarizer outage cannot corrupt an already-completed generation.
 
-In-memory adapters keep local development runnable. `DynamoConversationSummaryStore` is the first production-style AWS adapter and uses a conditional write so a delayed/stale refresh cannot replace a newer summary.
+Memory mode keeps summaries and long-term memories in process. Dynamo mode persists long-term memories in the main composite-key conversation table and summaries in a separate partition-key-only summary table. `DynamoConversationSummaryStore` uses a conditional write so a delayed/stale refresh cannot replace a newer summary.
 
 ### 11. Durable DynamoDB conversation and turn storage
 
@@ -108,9 +108,10 @@ chatgpt.storage.mode=memory|dynamo
 chatgpt.storage.dynamo.region=us-east-1
 chatgpt.storage.dynamo.endpoint=
 chatgpt.storage.dynamo.table-name=chatgpt-conversations
+chatgpt.storage.dynamo.summary-table-name=chatgpt-conversation-summaries
 ```
 
-`memory` remains the default. Dynamo table provisioning stays external to application startup.
+`memory` remains the default. The main Dynamo table uses composite `pk`/`sk` keys. The summary table intentionally uses only partition key `pk`, matching the summary adapter's single-snapshot-per-conversation access pattern. Dynamo table provisioning stays external to application startup.
 
 ### 12. Durable SQS inference delivery
 
@@ -159,7 +160,7 @@ The testing layout intentionally follows Ticketmaster:
 - each integration test creates isolated emulated AWS resources and points AWS SDK clients at the `FlociContainer` endpoint;
 - `maven-failsafe-plugin` runs `integration-test` + `verify`, so `mvn verify` exercises the Floci tests in CI.
 
-`DynamoConversationSummaryStoreIT` verifies summary round-trip behavior and stale-summary fencing against Floci. `DynamoConversationTurnStoreIT` verifies atomic idempotent begin, retryable claim/failure, atomic assistant completion, and cancellation fencing. `SqsInferenceJobQueueIT` verifies SQS enqueue/poll/acknowledgement, visibility-timeout redelivery, and explicit dead-letter handoff. `DynamoGenerationEventStoreIT` verifies per-generation sequence allocation, cursor replay ordering, isolation, and paging limits. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
+The Floci suite covers summary stale-write fencing, durable quota replay/exhaustion, SQS acknowledgment/redelivery/dead-letter behavior, generation-event replay, transactional conversation/turn persistence, long-term-memory ordering/upsert behavior, and durable tool-invocation leases/fencing. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic Dynamo adapter validates retrieval semantics.
 
 ### HTTP endpoints
 
@@ -177,9 +178,9 @@ POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 
 ## Next implementation slices
 
-1. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-2. Add durable quota/context-memory adapters and cache/read models where they materially improve latency or recovery.
-3. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
+1. Add paginated/read-optimized conversation message access rather than hydrating unbounded history for client reads.
+2. Replace the development retrieval store only when a real search/vector backend is selected.
+3. Continue observability and production provider adapters where concrete runtime choices are available.
 
 ## Build
 

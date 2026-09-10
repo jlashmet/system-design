@@ -32,7 +32,6 @@ import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.ExtractiveConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicTokenEstimator;
-import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryRetrievalContextStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -46,7 +45,6 @@ import java.util.function.Supplier;
 @Configuration
 public class ConversationConfiguration {
     @Bean TokenEstimator tokenEstimator() { return new HeuristicTokenEstimator(); }
-    @Bean ConversationSummaryStore conversationSummaryStore() { return new InMemoryConversationSummaryStore(); }
     @Bean RetrievalContextStore retrievalContextStore() { return new InMemoryRetrievalContextStore(); }
     @Bean ConversationSummarizer conversationSummarizer(@Value("${chatgpt.context.summary-max-characters:2000}") int maxCharacters) {
         return new ExtractiveConversationSummarizer(maxCharacters);

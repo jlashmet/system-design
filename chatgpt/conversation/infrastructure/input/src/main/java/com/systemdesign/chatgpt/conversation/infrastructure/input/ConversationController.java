@@ -6,6 +6,7 @@ import com.systemdesign.chatgpt.conversation.api.CreateConversationResponse;
 import com.systemdesign.chatgpt.conversation.api.GenerationResponse;
 import com.systemdesign.chatgpt.conversation.api.MessageResponse;
 import com.systemdesign.chatgpt.conversation.api.SendMessageRequest;
+import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationCommand;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
@@ -38,6 +39,7 @@ public final class ConversationController {
     private final CreateConversationHandler createConversationHandler;
     private final GetConversationHandler getConversationHandler;
     private final GetGenerationHandler getGenerationHandler;
+    private final CancelGenerationHandler cancelGenerationHandler;
     private final SendMessageHandler sendMessageHandler;
     private final GenerationEventBus generationEventBus;
 
@@ -45,11 +47,13 @@ public final class ConversationController {
             CreateConversationHandler createConversationHandler,
             GetConversationHandler getConversationHandler,
             GetGenerationHandler getGenerationHandler,
+            CancelGenerationHandler cancelGenerationHandler,
             SendMessageHandler sendMessageHandler,
             GenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
         this.getConversationHandler = getConversationHandler;
         this.getGenerationHandler = getGenerationHandler;
+        this.cancelGenerationHandler = cancelGenerationHandler;
         this.sendMessageHandler = sendMessageHandler;
         this.generationEventBus = generationEventBus;
     }
@@ -83,6 +87,13 @@ public final class ConversationController {
         return toResponse(getGenerationHandler.handle(conversationId, generationId));
     }
 
+    @PostMapping("/{conversationId}/generations/{generationId}/cancel")
+    public GenerationResponse cancelGeneration(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID generationId) {
+        return toResponse(cancelGenerationHandler.handle(conversationId, generationId));
+    }
+
     @GetMapping(
             value = "/{conversationId}/generations/{generationId}/events",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -98,8 +109,7 @@ public final class ConversationController {
                 emitter.send(SseEmitter.event()
                         .name(event.type().name().toLowerCase())
                         .data(event.data()));
-                if (event.type() == GenerationEventBus.Type.COMPLETED
-                        || event.type() == GenerationEventBus.Type.FAILED) {
+                if (isTerminal(event.type())) {
                     close(subscriptionRef);
                     emitter.complete();
                 }
@@ -116,7 +126,7 @@ public final class ConversationController {
 
         try {
             emitter.send(SseEmitter.event().name("generation").data(toResponse(current)));
-            if (current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.FAILED) {
+            if (isTerminal(current.status())) {
                 close(subscriptionRef);
                 emitter.complete();
             }
@@ -125,6 +135,18 @@ public final class ConversationController {
             emitter.completeWithError(exception);
         }
         return emitter;
+    }
+
+    private boolean isTerminal(GenerationEventBus.Type type) {
+        return type == GenerationEventBus.Type.COMPLETED
+                || type == GenerationEventBus.Type.FAILED
+                || type == GenerationEventBus.Type.CANCELLED;
+    }
+
+    private boolean isTerminal(GenerationStatus status) {
+        return status == GenerationStatus.COMPLETED
+                || status == GenerationStatus.FAILED
+                || status == GenerationStatus.CANCELLED;
     }
 
     private void close(AtomicReference<GenerationEventBus.Subscription> subscriptionRef) {

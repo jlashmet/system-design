@@ -13,6 +13,8 @@ public interface TurnRepository {
 
     Optional<Generation> claim(UUID generationId, Instant startedAt);
 
+    Optional<Generation> cancel(UUID generationId, Instant cancelledAt);
+
     void complete(Conversation conversation, Generation generation);
 
     void fail(Generation generation);

@@ -93,4 +93,17 @@ public record Generation(
                 createdAt,
                 failedAt);
     }
+
+    public Generation cancelled(Instant cancelledAt) {
+        return new Generation(
+                id,
+                conversationId,
+                idempotencyKey,
+                requestContent,
+                userMessageId,
+                assistantMessageId,
+                GenerationStatus.CANCELLED,
+                createdAt,
+                cancelledAt);
+    }
 }

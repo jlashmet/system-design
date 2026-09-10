@@ -145,6 +145,17 @@ class SendMessageHandlerTest {
         }
 
         @Override
+        public synchronized Optional<Generation> cancel(UUID generationId, Instant cancelledAt) {
+            Generation current = generationsById.get(generationId);
+            if (current == null) {
+                return Optional.empty();
+            }
+            Generation cancelled = current.cancelled(cancelledAt);
+            put(cancelled);
+            return Optional.of(cancelled);
+        }
+
+        @Override
         public synchronized void complete(Conversation conversation, Generation generation) {
             conversations.put(conversation.id(), conversation);
             put(generation);

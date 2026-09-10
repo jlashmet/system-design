@@ -53,7 +53,10 @@ public final class InMemoryConversationRepository implements ConversationReposit
     @Override
     public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
         Generation current = generationsById.get(generationId);
-        if (current == null || current.status() == GenerationStatus.RUNNING || current.status() == GenerationStatus.COMPLETED) {
+        if (current == null
+                || current.status() == GenerationStatus.RUNNING
+                || current.status() == GenerationStatus.COMPLETED
+                || current.status() == GenerationStatus.CANCELLED) {
             return Optional.empty();
         }
         Generation running = current.running(startedAt);
@@ -62,13 +65,35 @@ public final class InMemoryConversationRepository implements ConversationReposit
     }
 
     @Override
+    public synchronized Optional<Generation> cancel(UUID generationId, Instant cancelledAt) {
+        Generation current = generationsById.get(generationId);
+        if (current == null) {
+            return Optional.empty();
+        }
+        if (current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) {
+            return Optional.of(current);
+        }
+        Generation cancelled = current.cancelled(cancelledAt);
+        putGeneration(cancelled);
+        return Optional.of(cancelled);
+    }
+
+    @Override
     public synchronized void complete(Conversation conversation, Generation generation) {
+        Generation current = generationsById.get(generation.id());
+        if (current != null && current.status() == GenerationStatus.CANCELLED) {
+            return;
+        }
         conversations.put(conversation.id(), copy(conversation));
         putGeneration(generation);
     }
 
     @Override
     public synchronized void fail(Generation generation) {
+        Generation current = generationsById.get(generation.id());
+        if (current != null && current.status() == GenerationStatus.CANCELLED) {
+            return;
+        }
         putGeneration(generation);
     }
 

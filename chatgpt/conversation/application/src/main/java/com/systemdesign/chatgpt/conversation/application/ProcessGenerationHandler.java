@@ -4,6 +4,7 @@ import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
+import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
@@ -55,7 +56,11 @@ public final class ProcessGenerationHandler {
         try {
             ModelGateway.Completion completion = modelGateway.stream(
                     conversation.messages(),
-                    delta -> eventBus.publish(generation.id(), GenerationEventBus.Event.delta(delta)));
+                    delta -> publishDeltaUnlessCancelled(generation.id(), delta));
+            if (isCancelled(generation.id())) {
+                return;
+            }
+
             Instant completedAt = Instant.now(clock);
             Message assistantMessage = new Message(
                     idGenerator.get(),
@@ -64,11 +69,36 @@ public final class ProcessGenerationHandler {
                     completedAt);
             conversation.append(assistantMessage);
             turnRepository.complete(conversation, generation.completed(assistantMessage.id(), completedAt));
-            eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
+
+            Generation finalState = turnRepository.findGenerationById(generation.id()).orElseThrow();
+            if (finalState.status() == GenerationStatus.COMPLETED) {
+                eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
+            }
+        } catch (GenerationCancelledException ignored) {
+            // Cancellation is a normal terminal outcome and is already published by the cancel use case.
         } catch (RuntimeException exception) {
             turnRepository.fail(generation.failed(Instant.now(clock)));
-            eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
+            if (!isCancelled(generation.id())) {
+                eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
+            }
             throw exception;
         }
+    }
+
+    private void publishDeltaUnlessCancelled(UUID generationId, String delta) {
+        if (isCancelled(generationId)) {
+            throw new GenerationCancelledException();
+        }
+        eventBus.publish(generationId, GenerationEventBus.Event.delta(delta));
+    }
+
+    private boolean isCancelled(UUID generationId) {
+        return turnRepository.findGenerationById(generationId)
+                .map(Generation::status)
+                .filter(status -> status == GenerationStatus.CANCELLED)
+                .isPresent();
+    }
+
+    private static final class GenerationCancelledException extends RuntimeException {
     }
 }

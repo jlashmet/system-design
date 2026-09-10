@@ -4,5 +4,6 @@ public enum GenerationStatus {
     PENDING,
     RUNNING,
     COMPLETED,
-    FAILED
+    FAILED,
+    CANCELLED
 }

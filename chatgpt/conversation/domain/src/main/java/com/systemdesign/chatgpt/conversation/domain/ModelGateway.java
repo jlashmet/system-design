@@ -14,7 +14,10 @@ public interface ModelGateway {
     }
 
     default Completion stream(List<Message> messages, Consumer<String> deltaConsumer) {
-        return stream(messages, Set.of(), deltaConsumer);
+        Objects.requireNonNull(deltaConsumer, "deltaConsumer");
+        Completion completion = complete(messages);
+        deltaConsumer.accept(completion.content());
+        return completion;
     }
 
     default Completion stream(
@@ -22,10 +25,7 @@ public interface ModelGateway {
             Set<ModelCapability> requiredCapabilities,
             Consumer<String> deltaConsumer) {
         Objects.requireNonNull(requiredCapabilities, "requiredCapabilities");
-        Objects.requireNonNull(deltaConsumer, "deltaConsumer");
-        Completion completion = complete(messages, requiredCapabilities);
-        deltaConsumer.accept(completion.content());
-        return completion;
+        return stream(messages, deltaConsumer);
     }
 
     record Completion(String model, String content) {

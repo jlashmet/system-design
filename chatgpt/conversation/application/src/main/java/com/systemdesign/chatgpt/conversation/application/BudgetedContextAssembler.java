@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
@@ -19,19 +20,27 @@ public final class BudgetedContextAssembler implements ContextAssembler {
     private final TokenEstimator tokenEstimator;
     private final int maxInputTokens;
     private final List<ContextSource> contextSources;
+    private final GenerationContinuationStore continuationStore;
     private final ConversationTelemetry telemetry;
 
     public BudgetedContextAssembler(TokenEstimator tokenEstimator, int maxInputTokens) {
-        this(tokenEstimator, maxInputTokens, List.of(), ConversationTelemetry.noop());
+        this(tokenEstimator, maxInputTokens, List.of(), GenerationContinuationStore.empty(), ConversationTelemetry.noop());
     }
 
     public BudgetedContextAssembler(TokenEstimator tokenEstimator, int maxInputTokens, List<ContextSource> contextSources) {
-        this(tokenEstimator, maxInputTokens, contextSources, ConversationTelemetry.noop());
+        this(tokenEstimator, maxInputTokens, contextSources, GenerationContinuationStore.empty(), ConversationTelemetry.noop());
     }
 
     public BudgetedContextAssembler(TokenEstimator tokenEstimator, int maxInputTokens,
             List<ContextSource> contextSources, ConversationTelemetry telemetry) {
+        this(tokenEstimator, maxInputTokens, contextSources, GenerationContinuationStore.empty(), telemetry);
+    }
+
+    public BudgetedContextAssembler(TokenEstimator tokenEstimator, int maxInputTokens,
+            List<ContextSource> contextSources, GenerationContinuationStore continuationStore,
+            ConversationTelemetry telemetry) {
         this.tokenEstimator = Objects.requireNonNull(tokenEstimator, "tokenEstimator");
+        this.continuationStore = Objects.requireNonNull(continuationStore, "continuationStore");
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
         if (maxInputTokens < 1) throw new IllegalArgumentException("maxInputTokens must be >= 1");
         this.maxInputTokens = maxInputTokens;
@@ -49,9 +58,7 @@ public final class BudgetedContextAssembler implements ContextAssembler {
         List<Message> messages = conversation.messages();
         int targetIndex = indexOf(messages, generation.userMessageId());
         List<Message> history = messages.subList(0, targetIndex + 1);
-        List<Message> continuation = messages.subList(targetIndex + 1, messages.size()).stream()
-                .filter(message -> message.belongsToGeneration(generation.id()))
-                .toList();
+        List<Message> continuation = continuationStore.list(generation.id());
 
         List<Message> systemMessages = history.stream()
                 .filter(message -> message.role() == MessageRole.SYSTEM)

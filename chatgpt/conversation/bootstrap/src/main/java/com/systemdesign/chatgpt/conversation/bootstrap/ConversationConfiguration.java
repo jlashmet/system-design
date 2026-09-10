@@ -141,17 +141,17 @@ public class ConversationConfiguration {
     ProcessGenerationHandler processGenerationHandler(
             ConversationRepository repository,
             TurnRepository turnRepository,
+            ContextAssembler contextAssembler,
             ModelGateway modelGateway,
             GenerationEventBus generationEventBus,
-            ContextAssembler contextAssembler,
             Supplier<UUID> idGenerator,
             Clock clock) {
         return new ProcessGenerationHandler(
                 repository,
                 turnRepository,
+                contextAssembler,
                 modelGateway,
                 generationEventBus,
-                contextAssembler,
                 idGenerator,
                 clock);
     }

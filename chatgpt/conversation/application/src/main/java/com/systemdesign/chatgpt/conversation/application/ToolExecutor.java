@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.application;
 
+import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.ToolAuthorization;
 import com.systemdesign.chatgpt.conversation.domain.ToolCall;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
@@ -32,48 +33,39 @@ public final class ToolExecutor {
     private final Map<String, ToolHandler> handlers;
     private final ToolAuthorization authorization;
     private final ToolInvocationStore invocationStore;
+    private final ConversationTelemetry telemetry;
     private final Clock clock;
     private final Duration timeout;
     private final Duration invocationLease;
     private final int maxResultCharacters;
 
-    public ToolExecutor(
-            List<ToolHandler> handlers,
-            ToolAuthorization authorization,
-            Duration timeout,
-            int maxResultCharacters) {
-        this(handlers, authorization, new ProcessLocalInvocationStore(), Clock.systemUTC(), timeout,
-                timeout.plusSeconds(5), maxResultCharacters);
+    public ToolExecutor(List<ToolHandler> handlers, ToolAuthorization authorization, Duration timeout, int maxResultCharacters) {
+        this(handlers, authorization, new ProcessLocalInvocationStore(), ConversationTelemetry.noop(), Clock.systemUTC(),
+                timeout, timeout.plusSeconds(5), maxResultCharacters);
     }
 
-    public ToolExecutor(
-            List<ToolHandler> handlers,
-            ToolAuthorization authorization,
-            ToolInvocationStore invocationStore,
-            Clock clock,
-            Duration timeout,
-            Duration invocationLease,
-            int maxResultCharacters) {
+    public ToolExecutor(List<ToolHandler> handlers, ToolAuthorization authorization, ToolInvocationStore invocationStore,
+            Clock clock, Duration timeout, Duration invocationLease, int maxResultCharacters) {
+        this(handlers, authorization, invocationStore, ConversationTelemetry.noop(), clock, timeout, invocationLease,
+                maxResultCharacters);
+    }
+
+    public ToolExecutor(List<ToolHandler> handlers, ToolAuthorization authorization, ToolInvocationStore invocationStore,
+            ConversationTelemetry telemetry, Clock clock, Duration timeout, Duration invocationLease, int maxResultCharacters) {
         Objects.requireNonNull(handlers, "handlers");
         this.authorization = Objects.requireNonNull(authorization, "authorization");
         this.invocationStore = Objects.requireNonNull(invocationStore, "invocationStore");
+        this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.timeout = positive(timeout, "timeout");
         this.invocationLease = positive(invocationLease, "invocationLease");
-        if (invocationLease.compareTo(timeout) < 0) {
-            throw new IllegalArgumentException("invocationLease must be >= timeout");
-        }
-        if (maxResultCharacters < 1) {
-            throw new IllegalArgumentException("maxResultCharacters must be >= 1");
-        }
+        if (invocationLease.compareTo(timeout) < 0) throw new IllegalArgumentException("invocationLease must be >= timeout");
+        if (maxResultCharacters < 1) throw new IllegalArgumentException("maxResultCharacters must be >= 1");
         this.maxResultCharacters = maxResultCharacters;
-
         Map<String, ToolHandler> indexed = new HashMap<>();
         for (ToolHandler handler : handlers) {
             ToolHandler previous = indexed.put(handler.definition().name(), handler);
-            if (previous != null) {
-                throw new IllegalArgumentException("duplicate tool name: " + handler.definition().name());
-            }
+            if (previous != null) throw new IllegalArgumentException("duplicate tool name: " + handler.definition().name());
         }
         this.handlers = Map.copyOf(indexed);
     }
@@ -81,9 +73,7 @@ public final class ToolExecutor {
     public List<ToolDefinition> definitionsFor(String userId, UUID conversationId) {
         return handlers.values().stream()
                 .filter(handler -> authorization.isAllowed(userId, conversationId, handler.definition().name()))
-                .map(ToolHandler::definition)
-                .sorted(Comparator.comparing(ToolDefinition::name))
-                .toList();
+                .map(ToolHandler::definition).sorted(Comparator.comparing(ToolDefinition::name)).toList();
     }
 
     public ToolResult execute(String userId, UUID conversationId, ToolCall call) {
@@ -91,94 +81,63 @@ public final class ToolExecutor {
     }
 
     public ToolResult execute(String userId, UUID conversationId, UUID generationId, ToolCall call) {
-        Objects.requireNonNull(generationId, "generationId");
-        Objects.requireNonNull(call, "call");
+        Objects.requireNonNull(generationId, "generationId"); Objects.requireNonNull(call, "call");
         ToolHandler handler = handlers.get(call.name());
-        if (handler == null) {
-            return new ToolResult(call.id(), ToolResult.Status.ERROR, "unknown tool: " + call.name());
-        }
-        if (!authorization.isAllowed(userId, conversationId, call.name())) {
+        if (handler == null) return new ToolResult(call.id(), ToolResult.Status.ERROR, "unknown tool: " + call.name());
+        if (!authorization.isAllowed(userId, conversationId, call.name()))
             return new ToolResult(call.id(), ToolResult.Status.DENIED, "tool is not authorized");
-        }
-
         String validationError = validate(handler.definition(), call);
-        if (validationError != null) {
-            return new ToolResult(call.id(), ToolResult.Status.ERROR, validationError);
-        }
+        if (validationError != null) return new ToolResult(call.id(), ToolResult.Status.ERROR, validationError);
 
         Instant now = Instant.now(clock);
-        ToolInvocationStore.Claim claim = invocationStore.claim(
-                generationId,
-                call.id(),
-                call.name(),
-                fingerprint(call),
-                now,
-                now.plus(invocationLease));
+        ToolInvocationStore.Claim claim = invocationStore.claim(generationId, call.id(), call.name(), fingerprint(call),
+                now, now.plus(invocationLease));
         if (claim.status() == ToolInvocationStore.ClaimStatus.COMPLETED) {
+            telemetry.toolInvocation(call.name(), Duration.ZERO, "replayed");
             return claim.completedResult();
         }
         if (claim.status() == ToolInvocationStore.ClaimStatus.BUSY) {
+            telemetry.toolInvocation(call.name(), Duration.ZERO, "busy");
             throw new ToolInvocationInProgressException(call.name());
         }
 
-        ToolExecutionContext context = new ToolExecutionContext(
-                generationId,
-                call.id(),
-                generationId + ":" + call.id(),
+        ToolExecutionContext context = new ToolExecutionContext(generationId, call.id(), generationId + ":" + call.id(),
                 now.plus(timeout));
+        Instant executionStarted = Instant.now(clock);
         ToolResult result = executeClaimed(handler, call, context);
         invocationStore.complete(generationId, call.id(), claim.claimToken(), result, Instant.now(clock));
+        telemetry.toolInvocation(call.name(), Duration.between(executionStarted, Instant.now(clock)),
+                result.status().name().toLowerCase());
         return result;
     }
 
     private ToolResult executeClaimed(ToolHandler handler, ToolCall call, ToolExecutionContext context) {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<ToolResult> future = executor.submit(() -> handler.execute(call, context));
-            try {
-                return normalize(call, future.get(timeout.toMillis(), TimeUnit.MILLISECONDS));
-            } catch (TimeoutException exception) {
-                future.cancel(true);
-                return new ToolResult(call.id(), ToolResult.Status.TIMED_OUT, "tool execution timed out");
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                future.cancel(true);
-                return new ToolResult(call.id(), ToolResult.Status.ERROR, "tool execution interrupted");
-            } catch (ExecutionException exception) {
+            try { return normalize(call, future.get(timeout.toMillis(), TimeUnit.MILLISECONDS)); }
+            catch (TimeoutException exception) { future.cancel(true); return new ToolResult(call.id(), ToolResult.Status.TIMED_OUT, "tool execution timed out"); }
+            catch (InterruptedException exception) { Thread.currentThread().interrupt(); future.cancel(true); return new ToolResult(call.id(), ToolResult.Status.ERROR, "tool execution interrupted"); }
+            catch (ExecutionException exception) {
                 Throwable cause = exception.getCause();
-                String message = cause == null || cause.getMessage() == null
-                        ? "tool execution failed"
-                        : cause.getMessage();
+                String message = cause == null || cause.getMessage() == null ? "tool execution failed" : cause.getMessage();
                 return new ToolResult(call.id(), ToolResult.Status.ERROR, truncate(message));
             }
         }
     }
 
     private ToolResult normalize(ToolCall call, ToolResult result) {
-        if (!call.id().equals(result.callId())) {
-            return new ToolResult(call.id(), ToolResult.Status.ERROR, "tool returned mismatched call id");
-        }
+        if (!call.id().equals(result.callId())) return new ToolResult(call.id(), ToolResult.Status.ERROR, "tool returned mismatched call id");
         return new ToolResult(result.callId(), result.status(), truncate(result.content()));
     }
 
     private String validate(ToolDefinition definition, ToolCall call) {
         Map<String, ToolDefinition.Parameter> parameters = definition.parameters().stream()
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition.Parameter::name, parameter -> parameter));
-        for (String argumentName : call.arguments().keySet()) {
-            if (!parameters.containsKey(argumentName)) {
-                return "unknown argument: " + argumentName;
-            }
-        }
+        for (String argumentName : call.arguments().keySet()) if (!parameters.containsKey(argumentName)) return "unknown argument: " + argumentName;
         for (ToolDefinition.Parameter parameter : definition.parameters()) {
             ToolCall.Value value = call.arguments().get(parameter.name());
-            if (value == null) {
-                if (parameter.required()) {
-                    return "missing required argument: " + parameter.name();
-                }
-                continue;
-            }
-            if (!matches(parameter.type(), value)) {
-                return "invalid type for argument: " + parameter.name();
-            }
+            if (value == null) { if (parameter.required()) return "missing required argument: " + parameter.name(); continue; }
+            if (!matches(parameter.type(), value)) return "invalid type for argument: " + parameter.name();
         }
         return null;
     }
@@ -193,16 +152,10 @@ public final class ToolExecutor {
     }
 
     private String fingerprint(ToolCall call) {
-        String canonical = call.name() + "|" + call.arguments().entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .map(entry -> entry.getKey() + "=" + valueText(entry.getValue()))
-                .collect(java.util.stream.Collectors.joining("&"));
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(canonical.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 unavailable", exception);
-        }
+        String canonical = call.name() + "|" + call.arguments().entrySet().stream().sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=" + valueText(entry.getValue())).collect(java.util.stream.Collectors.joining("&"));
+        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8))); }
+        catch (NoSuchAlgorithmException exception) { throw new IllegalStateException("SHA-256 unavailable", exception); }
     }
 
     private String valueText(ToolCall.Value value) {
@@ -213,54 +166,27 @@ public final class ToolExecutor {
         throw new IllegalArgumentException("unsupported tool value: " + value.getClass().getName());
     }
 
-    private String truncate(String value) {
-        if (value.length() <= maxResultCharacters) {
-            return value;
-        }
-        return value.substring(0, maxResultCharacters);
-    }
-
+    private String truncate(String value) { return value.length() <= maxResultCharacters ? value : value.substring(0, maxResultCharacters); }
     private static Duration positive(Duration duration, String name) {
-        Objects.requireNonNull(duration, name);
-        if (duration.isNegative() || duration.isZero()) {
-            throw new IllegalArgumentException(name + " must be > 0");
-        }
-        return duration;
+        Objects.requireNonNull(duration, name); if (duration.isNegative() || duration.isZero()) throw new IllegalArgumentException(name + " must be > 0"); return duration;
     }
 
     private static final class ProcessLocalInvocationStore implements ToolInvocationStore {
         private final Map<String, Entry> entries = new ConcurrentHashMap<>();
-
-        @Override
-        public synchronized Claim claim(UUID generationId, UUID callId, String toolName, String requestFingerprint,
-                Instant now, Instant leaseUntil) {
-            String key = generationId + ":" + callId;
-            Entry current = entries.get(key);
+        @Override public synchronized Claim claim(UUID generationId, UUID callId, String toolName, String requestFingerprint, Instant now, Instant leaseUntil) {
+            String key = generationId + ":" + callId; Entry current = entries.get(key);
             if (current != null) {
-                if (!current.toolName.equals(toolName) || !current.requestFingerprint.equals(requestFingerprint)) {
-                    throw new IllegalStateException("tool call id reused with different request");
-                }
+                if (!current.toolName.equals(toolName) || !current.requestFingerprint.equals(requestFingerprint)) throw new IllegalStateException("tool call id reused with different request");
                 if (current.result != null) return Claim.completed(current.result);
                 if (current.leaseUntil.isAfter(now)) return Claim.busy();
             }
-            UUID token = UUID.randomUUID();
-            entries.put(key, new Entry(toolName, requestFingerprint, token, leaseUntil, null));
-            return Claim.claimed(token);
+            UUID token = UUID.randomUUID(); entries.put(key, new Entry(toolName, requestFingerprint, token, leaseUntil, null)); return Claim.claimed(token);
         }
-
-        @Override
-        public synchronized void complete(UUID generationId, UUID callId, UUID claimToken, ToolResult result,
-                Instant completedAt) {
-            String key = generationId + ":" + callId;
-            Entry current = entries.get(key);
-            if (current == null || !current.claimToken.equals(claimToken)) {
-                throw new IllegalStateException("stale tool invocation claim");
-            }
-            entries.put(key, new Entry(current.toolName, current.requestFingerprint, current.claimToken,
-                    current.leaseUntil, result));
+        @Override public synchronized void complete(UUID generationId, UUID callId, UUID claimToken, ToolResult result, Instant completedAt) {
+            String key = generationId + ":" + callId; Entry current = entries.get(key);
+            if (current == null || !current.claimToken.equals(claimToken)) throw new IllegalStateException("stale tool invocation claim");
+            entries.put(key, new Entry(current.toolName, current.requestFingerprint, current.claimToken, current.leaseUntil, result));
         }
-
-        private record Entry(String toolName, String requestFingerprint, UUID claimToken, Instant leaseUntil,
-                ToolResult result) { }
+        private record Entry(String toolName, String requestFingerprint, UUID claimToken, Instant leaseUntil, ToolResult result) { }
     }
 }

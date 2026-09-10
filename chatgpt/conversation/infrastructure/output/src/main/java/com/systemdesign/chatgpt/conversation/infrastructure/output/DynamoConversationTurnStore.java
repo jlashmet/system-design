@@ -7,9 +7,11 @@ import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
+import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.ConditionCheck;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.Put;
@@ -33,7 +35,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-public final class DynamoConversationTurnStore implements ConversationRepository, TurnRepository {
+public final class DynamoConversationTurnStore implements ConversationRepository, TurnRepository, RunningMessageStore {
     private static final String META = "META";
 
     private final DynamoDbClient dynamoDb;
@@ -185,6 +187,46 @@ public final class DynamoConversationTurnStore implements ConversationRepository
             return Optional.of(cancelled);
         } catch (ConditionalCheckFailedException exception) {
             return findGenerationById(generationId);
+        }
+    }
+
+    @Override
+    public boolean append(UUID generationId, List<Message> messages) {
+        Objects.requireNonNull(generationId, "generationId");
+        messages = List.copyOf(Objects.requireNonNull(messages, "messages"));
+        if (messages.isEmpty()) {
+            return true;
+        }
+        if (messages.size() > 99) {
+            throw new IllegalArgumentException("a running transcript append may contain at most 99 messages");
+        }
+        Generation generation = findGenerationById(generationId).orElse(null);
+        if (generation == null || generation.status() != GenerationStatus.RUNNING) {
+            return false;
+        }
+
+        List<TransactWriteItem> writes = new ArrayList<>(messages.size() + 1);
+        writes.add(TransactWriteItem.builder()
+                .conditionCheck(ConditionCheck.builder()
+                        .tableName(tableName)
+                        .key(Map.of("pk", string(generationPk(generationId)), "sk", string(META)))
+                        .conditionExpression("#status = :running")
+                        .expressionAttributeNames(Map.of("#status", "status"))
+                        .expressionAttributeValues(Map.of(":running", string(GenerationStatus.RUNNING.name())))
+                        .build())
+                .build());
+        for (Message message : messages) {
+            writes.add(put(messageItem(generation.conversationId(), message), "attribute_not_exists(pk)"));
+        }
+        try {
+            dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
+            return true;
+        } catch (TransactionCanceledException exception) {
+            Generation current = findGenerationById(generationId).orElse(null);
+            if (current == null || current.status() != GenerationStatus.RUNNING) {
+                return false;
+            }
+            throw exception;
         }
     }
 

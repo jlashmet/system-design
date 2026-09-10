@@ -26,6 +26,7 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -112,6 +113,44 @@ class DynamoConversationTurnStoreIT {
         assertThat(running.status()).isEqualTo(GenerationStatus.RUNNING);
         assertThat(retried.status()).isEqualTo(GenerationStatus.RUNNING);
         assertThat(retried.updatedAt()).isEqualTo(NOW.plusSeconds(5));
+    }
+
+    @Test
+    void appendsRunningToolTranscriptAtomically() {
+        UUID conversationId = UUID.randomUUID();
+        Conversation conversation = conversationWithUserMessage(conversationId, "hello");
+        Generation generation = pending(conversationId, conversation.messages().getFirst(), "request-1", "hello");
+        store.save(Conversation.start(conversationId, "user-1", NOW));
+        store.begin(conversation, generation);
+        store.claim(generation.id(), NOW.plusSeconds(2)).orElseThrow();
+        Message toolRequest = new Message(UUID.randomUUID(), MessageRole.ASSISTANT, "Tool requests", NOW.plusSeconds(3));
+        Message toolResult = new Message(UUID.randomUUID(), MessageRole.TOOL, "result=value", NOW.plusSeconds(4));
+
+        assertThat(store.append(generation.id(), List.of(toolRequest, toolResult))).isTrue();
+
+        assertThat(store.findById(conversationId).orElseThrow().messages())
+                .extracting(Message::role, Message::content)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"),
+                        org.assertj.core.groups.Tuple.tuple(MessageRole.ASSISTANT, "Tool requests"),
+                        org.assertj.core.groups.Tuple.tuple(MessageRole.TOOL, "result=value"));
+    }
+
+    @Test
+    void cancellationPreventsToolTranscriptPersistence() {
+        UUID conversationId = UUID.randomUUID();
+        Conversation conversation = conversationWithUserMessage(conversationId, "hello");
+        Generation generation = pending(conversationId, conversation.messages().getFirst(), "request-1", "hello");
+        store.save(Conversation.start(conversationId, "user-1", NOW));
+        store.begin(conversation, generation);
+        store.claim(generation.id(), NOW.plusSeconds(2)).orElseThrow();
+        store.cancel(generation.id(), NOW.plusSeconds(3)).orElseThrow();
+        Message toolResult = new Message(UUID.randomUUID(), MessageRole.TOOL, "too late", NOW.plusSeconds(4));
+
+        assertThat(store.append(generation.id(), List.of(toolResult))).isFalse();
+        assertThat(store.findById(conversationId).orElseThrow().messages())
+                .extracting(Message::content)
+                .containsExactly("hello");
     }
 
     @Test

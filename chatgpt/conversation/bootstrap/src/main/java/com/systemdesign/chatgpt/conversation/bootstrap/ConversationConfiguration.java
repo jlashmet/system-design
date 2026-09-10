@@ -2,6 +2,7 @@ package com.systemdesign.chatgpt.conversation.bootstrap;
 
 import com.systemdesign.chatgpt.conversation.application.BudgetedContextAssembler;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.ConversationAccessGuard;
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryRefresher;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
@@ -86,6 +87,7 @@ public class ConversationConfiguration {
     @Bean CreateConversationHandler createConversationHandler(ConversationRepository repository, Supplier<UUID> ids, Clock clock) {
         return new CreateConversationHandler(repository, ids, clock);
     }
+    @Bean ConversationAccessGuard conversationAccessGuard(ConversationMetadataStore store) { return new ConversationAccessGuard(store); }
     @Bean GetConversationMetadataHandler getConversationMetadataHandler(ConversationMetadataStore store) {
         return new GetConversationMetadataHandler(store);
     }

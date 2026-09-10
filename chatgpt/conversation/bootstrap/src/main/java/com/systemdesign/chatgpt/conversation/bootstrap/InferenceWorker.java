@@ -29,7 +29,8 @@ public final class InferenceWorker {
     private void process(InferenceJobQueue.Delivery delivery) {
         InferenceJobQueue.Job job = delivery.job();
         try {
-            ProcessGenerationHandler.ProcessResult result = handler.handle(job.generationId());
+            ProcessGenerationHandler.ProcessResult result = handler.handle(
+                    job.generationId(), () -> queue.renew(delivery));
             if (result == ProcessGenerationHandler.ProcessResult.BUSY) {
                 telemetry.inferenceDelivery(job.attempt(), "busy_unacked");
                 return;

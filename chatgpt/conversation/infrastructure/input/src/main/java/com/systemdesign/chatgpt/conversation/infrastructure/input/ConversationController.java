@@ -14,6 +14,7 @@ import com.systemdesign.chatgpt.conversation.application.SendMessageCommand;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import org.springframework.http.HttpStatus;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 @RequestMapping("/v1/conversations")
@@ -37,16 +39,19 @@ public final class ConversationController {
     private final GetConversationHandler getConversationHandler;
     private final GetGenerationHandler getGenerationHandler;
     private final SendMessageHandler sendMessageHandler;
+    private final GenerationEventBus generationEventBus;
 
     public ConversationController(
             CreateConversationHandler createConversationHandler,
             GetConversationHandler getConversationHandler,
             GetGenerationHandler getGenerationHandler,
-            SendMessageHandler sendMessageHandler) {
+            SendMessageHandler sendMessageHandler,
+            GenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
         this.getConversationHandler = getConversationHandler;
         this.getGenerationHandler = getGenerationHandler;
         this.sendMessageHandler = sendMessageHandler;
+        this.generationEventBus = generationEventBus;
     }
 
     @PostMapping
@@ -84,31 +89,49 @@ public final class ConversationController {
     public SseEmitter streamGeneration(
             @PathVariable UUID conversationId,
             @PathVariable UUID generationId) {
+        Generation current = getGenerationHandler.handle(conversationId, generationId);
         SseEmitter emitter = new SseEmitter(30_000L);
-        Thread.ofVirtual().name("generation-sse-" + generationId).start(() -> {
+        AtomicReference<GenerationEventBus.Subscription> subscriptionRef = new AtomicReference<>();
+
+        GenerationEventBus.Subscription subscription = generationEventBus.subscribe(generationId, event -> {
             try {
-                Generation previous = null;
-                while (true) {
-                    Generation current = getGenerationHandler.handle(conversationId, generationId);
-                    if (!current.equals(previous)) {
-                        emitter.send(SseEmitter.event().name("generation").data(toResponse(current)));
-                        previous = current;
-                    }
-                    if (current.status() == GenerationStatus.COMPLETED
-                            || current.status() == GenerationStatus.FAILED) {
-                        emitter.complete();
-                        return;
-                    }
-                    Thread.sleep(25L);
+                emitter.send(SseEmitter.event()
+                        .name(event.type().name().toLowerCase())
+                        .data(event.data()));
+                if (event.type() == GenerationEventBus.Type.COMPLETED
+                        || event.type() == GenerationEventBus.Type.FAILED) {
+                    close(subscriptionRef);
+                    emitter.complete();
                 }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                emitter.completeWithError(exception);
             } catch (Exception exception) {
+                close(subscriptionRef);
                 emitter.completeWithError(exception);
             }
         });
+        subscriptionRef.set(subscription);
+
+        emitter.onCompletion(() -> close(subscriptionRef));
+        emitter.onTimeout(() -> close(subscriptionRef));
+        emitter.onError(ignored -> close(subscriptionRef));
+
+        try {
+            emitter.send(SseEmitter.event().name("generation").data(toResponse(current)));
+            if (current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.FAILED) {
+                close(subscriptionRef);
+                emitter.complete();
+            }
+        } catch (Exception exception) {
+            close(subscriptionRef);
+            emitter.completeWithError(exception);
+        }
         return emitter;
+    }
+
+    private void close(AtomicReference<GenerationEventBus.Subscription> subscriptionRef) {
+        GenerationEventBus.Subscription subscription = subscriptionRef.getAndSet(null);
+        if (subscription != null) {
+            subscription.close();
+        }
     }
 
     private ConversationResponse toResponse(Conversation conversation) {

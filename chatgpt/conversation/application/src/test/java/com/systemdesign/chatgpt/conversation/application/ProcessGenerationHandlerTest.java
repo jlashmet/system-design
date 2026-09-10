@@ -119,9 +119,9 @@ class ProcessGenerationHandlerTest {
             handler = new ProcessGenerationHandler(
                     store,
                     store,
+                    contextAssembler,
                     gateway,
                     eventBus,
-                    contextAssembler,
                     UUID::randomUUID,
                     Clock.fixed(NOW.plusSeconds(2), ZoneOffset.UTC));
         }

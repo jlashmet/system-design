@@ -45,9 +45,7 @@ public final class SendMessageHandler {
                 .orElse(null);
         if (generation != null) {
             validateReplay(generation, command.content());
-            if (generation.status() != GenerationStatus.COMPLETED) {
-                inferenceJobQueue.enqueue(generation.id());
-            }
+            enqueueIfUnfinished(generation);
             return new SendMessageResult(conversation, findMessage(conversation, generation.userMessageId()), generation);
         }
 
@@ -67,14 +65,25 @@ public final class SendMessageHandler {
         if (!begin.created()) {
             validateReplay(persisted, command.content());
             Conversation reloaded = loadConversation(command.conversationId());
-            if (persisted.status() != GenerationStatus.COMPLETED) {
-                inferenceJobQueue.enqueue(persisted.id());
-            }
+            enqueueIfUnfinished(persisted);
             return new SendMessageResult(reloaded, findMessage(reloaded, persisted.userMessageId()), persisted);
         }
 
-        inferenceJobQueue.enqueue(candidate.id());
+        enqueue(candidate);
         return new SendMessageResult(conversation, userMessage, candidate);
+    }
+
+    private void enqueueIfUnfinished(Generation generation) {
+        if (generation.status() != GenerationStatus.COMPLETED
+                && generation.status() != GenerationStatus.CANCELLED) {
+            enqueue(generation);
+        }
+    }
+
+    private void enqueue(Generation generation) {
+        if (!inferenceJobQueue.tryEnqueue(InferenceJobQueue.Job.firstAttempt(generation.id()))) {
+            throw new InferenceQueueSaturatedException();
+        }
     }
 
     private void validateReplay(Generation generation, String content) {

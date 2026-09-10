@@ -53,7 +53,7 @@ Retry semantics are intentionally explicit:
 
 ### 3. Asynchronous inference and token streaming
 
-Message submission no longer invokes the model in the HTTP request lifecycle. `POST /messages` persists the user message and generation, enqueues the generation ID through an `InferenceJobQueue` port, and returns `202 Accepted` immediately.
+Message submission no longer invokes the model in the HTTP request lifecycle. `POST /messages` persists the user message and generation, enqueues the generation through an `InferenceJobQueue` port, and returns `202 Accepted` immediately.
 
 A separate `ProcessGenerationHandler` owns provider inference. Workers atomically claim a generation (`PENDING`/`FAILED` -> `RUNNING`) before invoking the provider, so duplicate queue delivery cannot produce duplicate assistant messages.
 
@@ -62,6 +62,12 @@ The model gateway exposes a streaming callback. `ProcessGenerationHandler` publi
 ### 4. Generation cancellation
 
 `POST /v1/conversations/{conversationId}/generations/{generationId}/cancel` moves a non-terminal generation to `CANCELLED` and publishes a terminal SSE event. Cancellation is enforced in the persistence boundary: a provider response arriving after cancellation cannot persist an assistant message or overwrite the cancelled state. The worker also stops publishing further deltas once cancellation is observed.
+
+### 5. Queue admission, retries, and dead letters
+
+`InferenceJobQueue` carries an explicit job attempt and exposes non-blocking admission. The development queue is bounded (`chatgpt.inference.queue-capacity`, default `1024`). If admission is unavailable, the durable turn remains recorded and the HTTP edge returns `503 Service Unavailable` with `Retry-After: 1`; the client can safely retry the same idempotency key later.
+
+Provider failures leave the generation in `FAILED` and the worker re-enqueues the same generation with an incremented attempt. Retries stop at `chatgpt.inference.max-attempts` (default `3`), after which the job is sent to the queue's dead-letter sink. If even retry admission is saturated, that retry is dead-lettered rather than silently lost.
 
 ### HTTP endpoints
 
@@ -79,12 +85,11 @@ The development composition uses in-memory queue/event adapters and a determinis
 
 ## Next implementation slices
 
-1. Complete the async inference slice: queue admission control/backpressure and worker retry/dead-letter policy.
-2. Add model routing: model capability/cost policy, provider health, fallback policy, and per-tenant/user quotas.
-3. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
-4. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-5. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
-6. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, retries, cancellations, and end-to-end turn latency.
+1. Add model routing: model capability/cost policy, provider health, fallback policy, and per-tenant/user quotas.
+2. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
+3. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
+4. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
+5. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, retries, cancellations, and end-to-end turn latency.
 
 ## Build
 

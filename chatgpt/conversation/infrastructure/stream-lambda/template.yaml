@@ -46,8 +46,11 @@ Resources:
                   - dynamodb:DescribeStream
                   - dynamodb:GetRecords
                   - dynamodb:GetShardIterator
-                  - dynamodb:ListStreams
                 Resource: !Ref ConversationStreamArn
+              - Effect: Allow
+                Action:
+                  - dynamodb:ListStreams
+                Resource: '*'
               - Effect: Allow
                 Action:
                   - sqs:SendMessage

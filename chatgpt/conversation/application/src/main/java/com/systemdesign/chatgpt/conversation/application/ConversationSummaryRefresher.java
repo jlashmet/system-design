@@ -38,19 +38,21 @@ public final class ConversationSummaryRefresher {
     public boolean refreshIfNeeded(Conversation conversation) {
         Objects.requireNonNull(conversation, "conversation");
         List<Message> messages = conversation.messages();
-        if (messages.isEmpty()) {
-            return false;
-        }
+        if (messages.isEmpty()) return false;
 
         ConversationSummaryStore.Summary existing = store.find(conversation.id()).orElse(null);
-        int startIndex = existing == null ? 0 : indexAfter(messages, existing.throughMessageId());
-        if (startIndex < 0) {
-            startIndex = 0;
+        int startIndex = 0;
+        if (existing != null) {
+            startIndex = indexAfter(messages, existing.throughMessageId());
+            if (startIndex < 0) {
+                // The caller supplied a bounded/truncated history that does not prove continuity from
+                // the persisted summary. Restarting at zero would summarize already-covered history again.
+                return false;
+            }
         }
+
         List<Message> delta = messages.subList(startIndex, messages.size());
-        if (delta.size() < minUnsummarizedMessages) {
-            return false;
-        }
+        if (delta.size() < minUnsummarizedMessages) return false;
 
         String previousSummary = existing == null ? "" : existing.content();
         String content = summarizer.summarize(previousSummary, delta);
@@ -67,9 +69,7 @@ public final class ConversationSummaryRefresher {
 
     private int indexAfter(List<Message> messages, UUID messageId) {
         for (int index = 0; index < messages.size(); index++) {
-            if (messages.get(index).id().equals(messageId)) {
-                return index + 1;
-            }
+            if (messages.get(index).id().equals(messageId)) return index + 1;
         }
         return -1;
     }

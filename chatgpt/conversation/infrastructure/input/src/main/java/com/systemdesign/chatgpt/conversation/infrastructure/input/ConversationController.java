@@ -18,6 +18,7 @@ import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
+import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,8 +31,11 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/v1/conversations")
@@ -76,8 +80,11 @@ public final class ConversationController {
             @PathVariable UUID conversationId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody SendMessageRequest request) {
-        return toResponse(sendMessageHandler.handle(
-                new SendMessageCommand(conversationId, idempotencyKey, request.content())).generation());
+        return toResponse(sendMessageHandler.handle(new SendMessageCommand(
+                conversationId,
+                idempotencyKey,
+                request.content(),
+                parseCapabilities(request.requiredCapabilities()))).generation());
     }
 
     @GetMapping("/{conversationId}/generations/{generationId}")
@@ -94,21 +101,15 @@ public final class ConversationController {
         return toResponse(cancelGenerationHandler.handle(conversationId, generationId));
     }
 
-    @GetMapping(
-            value = "/{conversationId}/generations/{generationId}/events",
-            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamGeneration(
-            @PathVariable UUID conversationId,
-            @PathVariable UUID generationId) {
+    @GetMapping(value = "/{conversationId}/generations/{generationId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamGeneration(@PathVariable UUID conversationId, @PathVariable UUID generationId) {
         Generation current = getGenerationHandler.handle(conversationId, generationId);
         SseEmitter emitter = new SseEmitter(30_000L);
         AtomicReference<GenerationEventBus.Subscription> subscriptionRef = new AtomicReference<>();
 
         GenerationEventBus.Subscription subscription = generationEventBus.subscribe(generationId, event -> {
             try {
-                emitter.send(SseEmitter.event()
-                        .name(event.type().name().toLowerCase())
-                        .data(event.data()));
+                emitter.send(SseEmitter.event().name(event.type().name().toLowerCase()).data(event.data()));
                 if (isTerminal(event.type())) {
                     close(subscriptionRef);
                     emitter.complete();
@@ -119,7 +120,6 @@ public final class ConversationController {
             }
         });
         subscriptionRef.set(subscription);
-
         emitter.onCompletion(() -> close(subscriptionRef));
         emitter.onTimeout(() -> close(subscriptionRef));
         emitter.onError(ignored -> close(subscriptionRef));
@@ -135,6 +135,13 @@ public final class ConversationController {
             emitter.completeWithError(exception);
         }
         return emitter;
+    }
+
+    private Set<ModelCapability> parseCapabilities(java.util.List<String> values) {
+        return values.stream()
+                .map(value -> value.trim().replace('-', '_').toUpperCase(Locale.ROOT))
+                .map(ModelCapability::valueOf)
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private boolean isTerminal(GenerationEventBus.Type type) {
@@ -157,25 +164,19 @@ public final class ConversationController {
     }
 
     private ConversationResponse toResponse(Conversation conversation) {
-        return new ConversationResponse(
-                conversation.id(),
-                conversation.userId(),
-                conversation.createdAt(),
+        return new ConversationResponse(conversation.id(), conversation.userId(), conversation.createdAt(),
                 conversation.messages().stream().map(this::toResponse).toList());
     }
 
     private MessageResponse toResponse(Message message) {
-        return new MessageResponse(
-                message.id(),
-                message.role().name().toLowerCase(),
-                message.content(),
-                message.createdAt());
+        return new MessageResponse(message.id(), message.role().name().toLowerCase(), message.content(), message.createdAt());
     }
 
     private GenerationResponse toResponse(Generation generation) {
         return new GenerationResponse(
                 generation.id(),
                 generation.status().name().toLowerCase(),
+                generation.requiredCapabilities().stream().map(capability -> capability.name().toLowerCase()).sorted().toList(),
                 generation.userMessageId(),
                 generation.assistantMessageId(),
                 generation.createdAt(),

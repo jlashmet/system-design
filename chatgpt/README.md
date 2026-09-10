@@ -74,7 +74,13 @@ The worker no longer sends the whole conversation directly to the model. A `Cont
 
 `BudgetedContextAssembler` anchors the context at the generation's own durable user message, so a delayed asynchronous worker never sees messages submitted after that generation. It reserves system context first, then fills the remaining input budget with a contiguous suffix of the most recent eligible non-system messages. The current input budget is configurable with `chatgpt.context.max-input-tokens` (default `8192`). If required system context or the current user message alone cannot fit, context assembly fails explicitly instead of silently truncating required input.
 
-The development `HeuristicTokenEstimator` uses a deliberately simple estimate; a production model-family tokenizer can replace it behind the same port. This context seam is also where summaries, retrieval results, and long-term memory sources will be composed next.
+### 9. Prioritized summary, retrieval, and memory sources
+
+`ContextSource` is an explicit port for non-conversation context and identifies each source as `SUMMARY`, `RETRIEVAL`, or `LONG_TERM_MEMORY`, with a declared priority. Spring discovers context-source implementations and injects them into `BudgetedContextAssembler` without changing the worker or model-provider boundary.
+
+Required system context and the generation's current user turn remain non-droppable. The assembler then admits source messages in priority order within the remaining token budget before filling unused capacity with recent raw conversation history. This makes source precedence deterministic and gives future summary stores, vector retrieval, and memory services independent adapters rather than embedding those concerns in the model gateway.
+
+The development `HeuristicTokenEstimator` remains deliberately simple; production model-family tokenizers and production context-source adapters can replace the development implementations behind the same ports.
 
 ### HTTP endpoints
 
@@ -93,7 +99,7 @@ The development composition uses in-memory storage, quota, queue/event adapters,
 
 ## Next implementation slices
 
-1. Extend context assembly with summaries, retrieval, and long-term memory as explicit prioritized context sources.
+1. Add concrete summary/retrieval/memory persistence and refresh policies behind the context-source ports.
 2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
 3. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
 4. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.

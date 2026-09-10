@@ -6,6 +6,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
+import com.systemdesign.chatgpt.conversation.domain.InferenceOutbox;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
@@ -17,12 +18,13 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class InMemoryConversationRepository
-        implements ConversationRepository, ConversationMetadataStore, TurnRepository, RunningMessageStore, GenerationContinuationStore {
+public final class InMemoryConversationRepository implements ConversationRepository, ConversationMetadataStore,
+        TurnRepository, RunningMessageStore, GenerationContinuationStore, InferenceOutbox {
     private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
     private final Map<TurnKey, Generation> generations = new ConcurrentHashMap<>();
     private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
     private final Map<UUID, List<Message>> continuationByGeneration = new ConcurrentHashMap<>();
+    private final Map<UUID, OutboxState> outbox = new ConcurrentHashMap<>();
 
     @Override public Optional<Conversation> findById(UUID conversationId) {
         return Optional.ofNullable(conversations.get(conversationId)).map(this::copy);
@@ -44,44 +46,64 @@ public final class InMemoryConversationRepository
         if (existing != null) return new BeginResult(existing, false);
         conversations.put(conversation.id(), copy(conversation));
         putGeneration(generation);
+        outbox.put(generation.id(), OutboxState.pending(generation.id(), generation.createdAt()));
         return new BeginResult(generation, true);
+    }
+
+    @Override public synchronized Optional<InferenceOutbox.Entry> claimNext(Instant claimedAt, Instant leaseUntil) {
+        if (claimedAt == null || leaseUntil == null || !leaseUntil.isAfter(claimedAt))
+            throw new IllegalArgumentException("leaseUntil must be after claimedAt");
+        OutboxState candidate = outbox.values().stream()
+                .filter(state -> state.status == OutboxStatus.PENDING
+                        || (state.status == OutboxStatus.CLAIMED && !state.leaseUntil.isAfter(claimedAt)))
+                .sorted(java.util.Comparator.comparing(OutboxState::createdAt).thenComparing(OutboxState::generationId))
+                .findFirst().orElse(null);
+        if (candidate == null) return Optional.empty();
+        UUID token = UUID.randomUUID();
+        OutboxState claimed = candidate.claim(token, leaseUntil);
+        outbox.put(candidate.generationId, claimed);
+        return Optional.of(new InferenceOutbox.Entry(candidate.generationId, token, candidate.createdAt, leaseUntil));
+    }
+
+    @Override public synchronized boolean markDispatched(UUID generationId, UUID claimToken, Instant dispatchedAt) {
+        OutboxState current = outbox.get(generationId);
+        if (current == null || current.status != OutboxStatus.CLAIMED
+                || !java.util.Objects.equals(current.claimToken, claimToken)) return false;
+        outbox.put(generationId, current.dispatched(dispatchedAt));
+        return true;
+    }
+
+    @Override public synchronized boolean release(UUID generationId, UUID claimToken) {
+        OutboxState current = outbox.get(generationId);
+        if (current == null || current.status != OutboxStatus.CLAIMED
+                || !java.util.Objects.equals(current.claimToken, claimToken)) return false;
+        outbox.put(generationId, OutboxState.pending(generationId, current.createdAt));
+        return true;
     }
 
     @Override public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
         return claim(generationId, startedAt, startedAt.plusSeconds(60));
     }
-
     @Override public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt, Instant leaseUntil) {
         Generation current = generationsById.get(generationId);
-        if (current == null || current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) {
-            return Optional.empty();
-        }
+        if (current == null || current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) return Optional.empty();
         if (current.status() == GenerationStatus.RUNNING && !current.leaseExpiredAt(startedAt)) return Optional.empty();
         Generation running = current.running(startedAt, UUID.randomUUID(), leaseUntil);
-        putGeneration(running);
-        return Optional.of(running);
+        putGeneration(running); return Optional.of(running);
     }
-
-    @Override
-    public synchronized boolean renewClaim(UUID generationId, UUID claimToken, Instant renewedAt, Instant leaseUntil) {
+    @Override public synchronized boolean renewClaim(UUID generationId, UUID claimToken, Instant renewedAt, Instant leaseUntil) {
         Generation current = generationsById.get(generationId);
         if (current == null || current.status() != GenerationStatus.RUNNING
                 || !java.util.Objects.equals(current.claimToken(), claimToken)) return false;
         if (!leaseUntil.isAfter(renewedAt)) throw new IllegalArgumentException("leaseUntil must be after renewedAt");
-        Generation renewed = current.running(renewedAt, claimToken, leaseUntil);
-        putGeneration(renewed);
-        return true;
+        putGeneration(current.running(renewedAt, claimToken, leaseUntil)); return true;
     }
-
     @Override public synchronized Optional<Generation> cancel(UUID generationId, Instant cancelledAt) {
         Generation current = generationsById.get(generationId);
         if (current == null) return Optional.empty();
         if (current.status() == GenerationStatus.COMPLETED || current.status() == GenerationStatus.CANCELLED) return Optional.of(current);
-        Generation cancelled = current.cancelled(cancelledAt);
-        putGeneration(cancelled);
-        return Optional.of(cancelled);
+        Generation cancelled = current.cancelled(cancelledAt); putGeneration(cancelled); return Optional.of(cancelled);
     }
-
     @Override public synchronized boolean append(UUID generationId, List<Message> messages) {
         Generation current = generationsById.get(generationId);
         return current != null && append(generationId, current.claimToken(), messages);
@@ -92,32 +114,24 @@ public final class InMemoryConversationRepository
                 || !java.util.Objects.equals(generation.claimToken(), claimToken)) return false;
         Conversation conversation = conversations.get(generation.conversationId());
         if (conversation == null) throw new IllegalStateException("conversation not found for generation: " + generationId);
-        Conversation updated = copy(conversation);
-        messages.forEach(updated::append);
+        Conversation updated = copy(conversation); messages.forEach(updated::append);
         conversations.put(updated.id(), updated);
         continuationByGeneration.put(generationId, concat(continuationByGeneration.getOrDefault(generationId, List.of()), messages));
         return true;
     }
-
-    @Override public List<Message> list(UUID generationId) {
-        return List.copyOf(continuationByGeneration.getOrDefault(generationId, List.of()));
-    }
-
+    @Override public List<Message> list(UUID generationId) { return List.copyOf(continuationByGeneration.getOrDefault(generationId, List.of())); }
     @Override public synchronized void complete(Conversation conversation, Generation generation) {
         Generation current = generationsById.get(generation.id());
         if (current == null || current.status() == GenerationStatus.CANCELLED || current.status() == GenerationStatus.COMPLETED) return;
         if (current.status() != GenerationStatus.RUNNING || !java.util.Objects.equals(current.claimToken(), generation.claimToken())) return;
-        Message assistant = conversation.messages().stream()
-                .filter(message -> message.id().equals(generation.assistantMessageId()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("completed generation references missing assistant message"));
+        Message assistant = conversation.messages().stream().filter(message -> message.id().equals(generation.assistantMessageId()))
+                .findFirst().orElseThrow(() -> new IllegalStateException("completed generation references missing assistant message"));
         Conversation persisted = conversations.get(conversation.id());
         if (persisted == null) throw new IllegalStateException("conversation not found: " + conversation.id());
         java.util.ArrayList<Message> merged = new java.util.ArrayList<>(persisted.messages());
         if (merged.stream().noneMatch(message -> message.id().equals(assistant.id()))) merged.add(assistant);
         merged.sort(java.util.Comparator.comparing(Message::createdAt).thenComparing(Message::id));
-        conversations.put(conversation.id(), Conversation.rehydrate(
-                persisted.id(), persisted.userId(), persisted.createdAt(), merged));
+        conversations.put(conversation.id(), Conversation.rehydrate(persisted.id(), persisted.userId(), persisted.createdAt(), merged));
         putGeneration(generation);
     }
     @Override public synchronized void fail(Generation generation) {
@@ -139,4 +153,17 @@ public final class InMemoryConversationRepository
         return Conversation.rehydrate(conversation.id(), conversation.userId(), conversation.createdAt(), conversation.messages());
     }
     private record TurnKey(UUID conversationId, String idempotencyKey) { }
+    private enum OutboxStatus { PENDING, CLAIMED, DISPATCHED }
+    private record OutboxState(UUID generationId, Instant createdAt, OutboxStatus status, UUID claimToken,
+            Instant leaseUntil, Instant dispatchedAt) {
+        static OutboxState pending(UUID generationId, Instant createdAt) {
+            return new OutboxState(generationId, createdAt, OutboxStatus.PENDING, null, null, null);
+        }
+        OutboxState claim(UUID token, Instant leaseUntil) {
+            return new OutboxState(generationId, createdAt, OutboxStatus.CLAIMED, token, leaseUntil, null);
+        }
+        OutboxState dispatched(Instant at) {
+            return new OutboxState(generationId, createdAt, OutboxStatus.DISPATCHED, claimToken, leaseUntil, at);
+        }
+    }
 }

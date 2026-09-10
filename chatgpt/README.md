@@ -114,7 +114,7 @@ chatgpt.storage.dynamo.table-name=chatgpt-conversations
 
 ### 12. Durable SQS inference delivery
 
-`InferenceJobQueue` now models an explicit delivery receipt. Workers acknowledge a delivery only after inference succeeds, after a retry has been successfully re-enqueued, or after dead-letter handoff succeeds. A worker crash before acknowledgement therefore leaves the SQS message available for redelivery after its visibility timeout instead of losing the job.
+`InferenceJobQueue` models an explicit delivery receipt. Workers acknowledge a delivery only after inference succeeds, after a retry has been successfully re-enqueued, or after dead-letter handoff succeeds. A worker crash before acknowledgement therefore leaves the SQS message available for redelivery after its visibility timeout instead of losing the job.
 
 The queue runtime is selectable:
 
@@ -130,6 +130,25 @@ chatgpt.inference.sqs.wait-time-seconds=10
 
 `memory` remains the default. The SQS adapter uses long polling, explicit delete-on-ack, and a separate externally provisioned DLQ.
 
+### 13. Replayable generation event streaming
+
+`ReplayableGenerationEventBus` adds monotonic per-generation sequence IDs on top of the existing generation event publisher. SSE token/lifecycle events carry those IDs, and reconnecting clients may send the standard `Last-Event-ID` header. Only events with a sequence greater than that cursor are replayed before the subscription switches to live delivery.
+
+The in-memory event bus keeps a process-local sequenced history and atomically performs replay-then-subscribe so an event cannot fall into a gap between those phases. For multi-node/restart-safe replay, `DynamoGenerationEventStore` persists sequenced events under a per-generation partition, and `StoredGenerationEventBus` replays from that log then polls for new cross-node events. Sequence allocation uses an atomic per-generation Dynamo counter; sequence gaps are allowed if a writer fails after reserving an ID because the contract requires monotonic ordering rather than contiguity.
+
+Event runtime is selectable:
+
+```text
+chatgpt.events.mode=memory|dynamo
+chatgpt.events.dynamo.region=us-east-1
+chatgpt.events.dynamo.endpoint=
+chatgpt.events.dynamo.table-name=chatgpt-generation-events
+chatgpt.events.poll-interval-ms=25
+chatgpt.events.poll-batch-size=100
+```
+
+`memory` remains the default. Dynamo event-table provisioning remains external. Polling is the durable prototype fanout mechanism; a production deployment can replace the live-follow path with Redis Streams/Kinesis/etc. while retaining the same sequence/cursor contract.
+
 ## Testing
 
 The testing layout intentionally follows Ticketmaster:
@@ -140,7 +159,7 @@ The testing layout intentionally follows Ticketmaster:
 - each integration test creates isolated emulated AWS resources and points AWS SDK clients at the `FlociContainer` endpoint;
 - `maven-failsafe-plugin` runs `integration-test` + `verify`, so `mvn verify` exercises the Floci tests in CI.
 
-`DynamoConversationSummaryStoreIT` verifies summary round-trip behavior and stale-summary fencing against Floci. `DynamoConversationTurnStoreIT` verifies atomic idempotent begin, retryable claim/failure, atomic assistant completion, and cancellation fencing. `SqsInferenceJobQueueIT` verifies SQS enqueue/poll/acknowledgement, visibility-timeout redelivery, and explicit dead-letter handoff. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
+`DynamoConversationSummaryStoreIT` verifies summary round-trip behavior and stale-summary fencing against Floci. `DynamoConversationTurnStoreIT` verifies atomic idempotent begin, retryable claim/failure, atomic assistant completion, and cancellation fencing. `SqsInferenceJobQueueIT` verifies SQS enqueue/poll/acknowledgement, visibility-timeout redelivery, and explicit dead-letter handoff. `DynamoGenerationEventStoreIT` verifies per-generation sequence allocation, cursor replay ordering, isolation, and paging limits. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
 
 ### HTTP endpoints
 
@@ -152,15 +171,15 @@ POST /v1/conversations/{conversationId}/messages
      { "content": "...", "requiredCapabilities": ["vision", "tool_calling"] }
 GET  /v1/conversations/{conversationId}/generations/{generationId}
 GET  /v1/conversations/{conversationId}/generations/{generationId}/events
+     Last-Event-ID: <last received event sequence>   # optional on reconnect
 POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 ```
 
 ## Next implementation slices
 
-1. Add replayable generation event streaming so SSE reconnects can resume without losing token/lifecycle events.
-2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-3. Add durable quota/context-memory adapters and cache/read models where they materially improve latency or recovery.
-4. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
+1. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
+2. Add durable quota/context-memory adapters and cache/read models where they materially improve latency or recovery.
+3. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
 
 ## Build
 

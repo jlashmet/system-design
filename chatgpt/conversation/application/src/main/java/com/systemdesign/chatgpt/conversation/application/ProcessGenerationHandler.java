@@ -154,11 +154,13 @@ public final class ProcessGenerationHandler {
             return ProcessResult.BUSY;
         } catch (RuntimeException exception) {
             turnRepository.fail(generation.failed(Instant.now(clock)));
-            if (!isCancelled(generation.id()) && claimStillOwned(generation)) {
+            Generation persisted = turnRepository.findGenerationById(generation.id()).orElseThrow();
+            if (persisted.status() == GenerationStatus.FAILED
+                    && Objects.equals(persisted.claimToken(), generation.claimToken())) {
                 eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
             }
             telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)),
-                    isCancelled(generation.id()) ? "cancelled" : "failed");
+                    persisted.status() == GenerationStatus.CANCELLED ? "cancelled" : "failed");
             throw exception;
         }
     }

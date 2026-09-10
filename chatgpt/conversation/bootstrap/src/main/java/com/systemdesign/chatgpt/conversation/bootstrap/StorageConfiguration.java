@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
+import com.systemdesign.chatgpt.conversation.domain.GenerationConversationStore;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
@@ -15,6 +16,7 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConvers
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConversationTurnStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoFixedWindowInferenceQuota;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoGenerationConversationStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoGenerationLeaseTurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoLongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoRunningMessageStore;
@@ -23,6 +25,7 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConve
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationConversationStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryLongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryToolInvocationStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,6 +51,9 @@ public class StorageConfiguration {
         @Bean TurnRepository turnRepository(InMemoryConversationRepository store) { return store; }
         @Bean RunningMessageStore runningMessageStore(InMemoryConversationRepository store) { return store; }
         @Bean GenerationContinuationStore generationContinuationStore(InMemoryConversationRepository store) { return store; }
+        @Bean GenerationConversationStore generationConversationStore(ConversationRepository repository) {
+            return new InMemoryGenerationConversationStore(repository);
+        }
         @Bean ConversationMessagePageStore conversationMessagePageStore(ConversationRepository repository) {
             return new InMemoryConversationMessagePageStore(repository);
         }
@@ -81,6 +87,10 @@ public class StorageConfiguration {
         @Bean ConversationMetadataStore conversationMetadataStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoConversationMetadataStore(conversationDynamoDbClient, tableName);
+        }
+        @Bean GenerationConversationStore generationConversationStore(DynamoDbClient conversationDynamoDbClient,
+                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
+            return new DynamoGenerationConversationStore(conversationDynamoDbClient, tableName);
         }
         @Bean TurnRepository turnRepository(DynamoConversationTurnStore store, DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {

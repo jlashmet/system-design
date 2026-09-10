@@ -10,6 +10,7 @@ import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
@@ -26,22 +27,31 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class DynamoOutboxTurnRepository implements TurnRepository, InferenceOutbox {
     private static final String META = "META";
-    private static final String OUTBOX_PK = "OUTBOX#INFERENCE";
+    private static final int DEFAULT_SHARD_COUNT = 16;
+    private static final int PAGE_SIZE = 20;
 
     private final TurnRepository delegate;
     private final DynamoDbClient dynamoDb;
     private final String tableName;
+    private final int shardCount;
+    private final AtomicInteger nextShard = new AtomicInteger();
 
     public DynamoOutboxTurnRepository(TurnRepository delegate, DynamoDbClient dynamoDb, String tableName) {
+        this(delegate, dynamoDb, tableName, DEFAULT_SHARD_COUNT);
+    }
+
+    public DynamoOutboxTurnRepository(TurnRepository delegate, DynamoDbClient dynamoDb, String tableName, int shardCount) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.dynamoDb = Objects.requireNonNull(dynamoDb, "dynamoDb");
         if (tableName == null || tableName.isBlank()) throw new IllegalArgumentException("tableName must not be blank");
+        if (shardCount < 1 || shardCount > 256) throw new IllegalArgumentException("shardCount must be between 1 and 256");
         this.tableName = tableName;
+        this.shardCount = shardCount;
     }
 
     @Override public Optional<Generation> findGenerationById(UUID generationId) { return delegate.findGenerationById(generationId); }
@@ -86,41 +96,55 @@ public final class DynamoOutboxTurnRepository implements TurnRepository, Inferen
     public Optional<Entry> claimNext(Instant claimedAt, Instant leaseUntil) {
         Objects.requireNonNull(claimedAt, "claimedAt");
         if (leaseUntil == null || !leaseUntil.isAfter(claimedAt)) throw new IllegalArgumentException("leaseUntil must be after claimedAt");
-        var response = dynamoDb.query(QueryRequest.builder()
-                .tableName(tableName)
-                .consistentRead(true)
-                .keyConditionExpression("pk = :pk")
-                .expressionAttributeValues(Map.of(":pk", string(OUTBOX_PK)))
-                .scanIndexForward(true)
-                .limit(20)
-                .build());
-        for (Map<String, AttributeValue> current : response.items()) {
-            String status = current.get("status").s();
-            long lease = numberValue(current, "leaseUntil", 0L);
-            if ("DISPATCHED".equals(status) || ("CLAIMED".equals(status) && lease > claimedAt.toEpochMilli())) continue;
-            UUID generationId = UUID.fromString(current.get("generationId").s());
-            UUID claimToken = UUID.randomUUID();
-            Map<String, AttributeValue> claimed = new HashMap<>(current);
-            claimed.put("status", string("CLAIMED"));
-            claimed.put("claimToken", string(claimToken.toString()));
-            claimed.put("leaseUntil", number(leaseUntil.toEpochMilli()));
-            try {
-                dynamoDb.putItem(PutItemRequest.builder()
-                        .tableName(tableName)
-                        .item(claimed)
-                        .conditionExpression("#status = :pending OR (#status = :claimed AND leaseUntil <= :now)")
-                        .expressionAttributeNames(Map.of("#status", "status"))
-                        .expressionAttributeValues(Map.of(
-                                ":pending", string("PENDING"),
-                                ":claimed", string("CLAIMED"),
-                                ":now", number(claimedAt.toEpochMilli())))
-                        .build());
-                return Optional.of(new Entry(generationId, claimToken,
-                        Instant.ofEpochMilli(Long.parseLong(current.get("createdAt").n())), leaseUntil));
-            } catch (ConditionalCheckFailedException ignored) {
-                // Another dispatcher won this entry; try another candidate from the same bounded page.
-            }
+        int start = Math.floorMod(nextShard.getAndIncrement(), shardCount);
+        for (int offset = 0; offset < shardCount; offset++) {
+            Optional<Entry> claimed = claimFromShard((start + offset) % shardCount, claimedAt, leaseUntil);
+            if (claimed.isPresent()) return claimed;
         }
+        return Optional.empty();
+    }
+
+    private Optional<Entry> claimFromShard(int shard, Instant claimedAt, Instant leaseUntil) {
+        Map<String, AttributeValue> exclusiveStartKey = null;
+        do {
+            QueryRequest.Builder request = QueryRequest.builder()
+                    .tableName(tableName)
+                    .consistentRead(true)
+                    .keyConditionExpression("pk = :pk")
+                    .expressionAttributeValues(Map.of(":pk", string(outboxPk(shard))))
+                    .scanIndexForward(true)
+                    .limit(PAGE_SIZE);
+            if (exclusiveStartKey != null && !exclusiveStartKey.isEmpty()) request.exclusiveStartKey(exclusiveStartKey);
+            var response = dynamoDb.query(request.build());
+            for (Map<String, AttributeValue> current : response.items()) {
+                String status = current.get("status").s();
+                long lease = numberValue(current, "leaseUntil", 0L);
+                if ("CLAIMED".equals(status) && lease > claimedAt.toEpochMilli()) continue;
+                UUID generationId = UUID.fromString(current.get("generationId").s());
+                UUID claimToken = UUID.randomUUID();
+                Map<String, AttributeValue> claimed = new HashMap<>(current);
+                claimed.put("status", string("CLAIMED"));
+                claimed.put("claimToken", string(claimToken.toString()));
+                claimed.put("leaseUntil", number(leaseUntil.toEpochMilli()));
+                try {
+                    dynamoDb.putItem(PutItemRequest.builder()
+                            .tableName(tableName)
+                            .item(claimed)
+                            .conditionExpression("#status = :pending OR (#status = :claimed AND leaseUntil <= :now)")
+                            .expressionAttributeNames(Map.of("#status", "status"))
+                            .expressionAttributeValues(Map.of(
+                                    ":pending", string("PENDING"),
+                                    ":claimed", string("CLAIMED"),
+                                    ":now", number(claimedAt.toEpochMilli())))
+                            .build());
+                    return Optional.of(new Entry(generationId, claimToken,
+                            Instant.ofEpochMilli(Long.parseLong(current.get("createdAt").n())), leaseUntil));
+                } catch (ConditionalCheckFailedException ignored) {
+                    // Another dispatcher won this row. Continue through this page and subsequent pages.
+                }
+            }
+            exclusiveStartKey = response.lastEvaluatedKey();
+        } while (exclusiveStartKey != null && !exclusiveStartKey.isEmpty());
         return Optional.empty();
     }
 
@@ -128,17 +152,17 @@ public final class DynamoOutboxTurnRepository implements TurnRepository, Inferen
     public boolean markDispatched(UUID generationId, UUID claimToken, Instant dispatchedAt) {
         Generation generation = findGenerationById(generationId).orElse(null);
         if (generation == null) return false;
+        String pk = outboxPk(generationId);
         String sk = outboxSk(generation.createdAt(), generation.id());
-        Map<String, AttributeValue> current = outboxByKey(sk);
-        if (current.isEmpty()) return false;
-        Map<String, AttributeValue> dispatched = new HashMap<>(current);
-        dispatched.put("status", string("DISPATCHED"));
-        dispatched.put("dispatchedAt", number(dispatchedAt.toEpochMilli()));
         try {
-            dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(dispatched)
+            dynamoDb.deleteItem(DeleteItemRequest.builder()
+                    .tableName(tableName)
+                    .key(Map.of("pk", string(pk), "sk", string(sk)))
                     .conditionExpression("#status = :claimed AND claimToken = :token")
                     .expressionAttributeNames(Map.of("#status", "status"))
-                    .expressionAttributeValues(Map.of(":claimed", string("CLAIMED"), ":token", string(claimToken.toString())))
+                    .expressionAttributeValues(Map.of(
+                            ":claimed", string("CLAIMED"),
+                            ":token", string(claimToken.toString())))
                     .build());
             return true;
         } catch (ConditionalCheckFailedException exception) { return false; }
@@ -148,8 +172,9 @@ public final class DynamoOutboxTurnRepository implements TurnRepository, Inferen
     public boolean release(UUID generationId, UUID claimToken) {
         Generation generation = findGenerationById(generationId).orElse(null);
         if (generation == null) return false;
+        String pk = outboxPk(generationId);
         String sk = outboxSk(generation.createdAt(), generation.id());
-        Map<String, AttributeValue> current = outboxByKey(sk);
+        Map<String, AttributeValue> current = outboxByKey(pk, sk);
         if (current.isEmpty()) return false;
         Map<String, AttributeValue> released = new HashMap<>(current);
         released.put("status", string("PENDING"));
@@ -159,26 +184,33 @@ public final class DynamoOutboxTurnRepository implements TurnRepository, Inferen
             dynamoDb.putItem(PutItemRequest.builder().tableName(tableName).item(released)
                     .conditionExpression("#status = :claimed AND claimToken = :token")
                     .expressionAttributeNames(Map.of("#status", "status"))
-                    .expressionAttributeValues(Map.of(":claimed", string("CLAIMED"), ":token", string(claimToken.toString())))
+                    .expressionAttributeValues(Map.of(
+                            ":claimed", string("CLAIMED"),
+                            ":token", string(claimToken.toString())))
                     .build());
             return true;
         } catch (ConditionalCheckFailedException exception) { return false; }
     }
 
-    private Map<String, AttributeValue> outboxByKey(String sk) {
+    private Map<String, AttributeValue> outboxByKey(String pk, String sk) {
         return dynamoDb.getItem(builder -> builder.tableName(tableName).consistentRead(true)
-                .key(Map.of("pk", string(OUTBOX_PK), "sk", string(sk)))).item();
+                .key(Map.of("pk", string(pk), "sk", string(sk)))).item();
     }
 
     private Map<String, AttributeValue> outboxItem(Generation generation) {
         return Map.of(
-                "pk", string(OUTBOX_PK),
+                "pk", string(outboxPk(generation.id())),
                 "sk", string(outboxSk(generation.createdAt(), generation.id())),
                 "entityType", string("INFERENCE_OUTBOX"),
                 "generationId", string(generation.id().toString()),
                 "status", string("PENDING"),
                 "createdAt", number(generation.createdAt().toEpochMilli()));
     }
+
+    private String outboxPk(UUID generationId) {
+        return outboxPk(Math.floorMod(generationId.hashCode(), shardCount));
+    }
+    private static String outboxPk(int shard) { return "OUTBOX#INFERENCE#%03d".formatted(shard); }
 
     private Map<String, AttributeValue> messageItem(UUID conversationId, Message message) {
         return Map.of("pk", string("CONV#" + conversationId), "sk", string(messageSk(message)),

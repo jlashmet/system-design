@@ -39,7 +39,7 @@ public final class ProcessGenerationHandler {
         Instant startedAt = Instant.now(clock);
         Generation generation = turnRepository.claim(generationId, startedAt).orElse(null);
         if (generation == null) {
-            if (turnRepository.findById(generationId).isEmpty()) {
+            if (turnRepository.findGenerationById(generationId).isEmpty()) {
                 throw new NoSuchElementException("generation not found: " + generationId);
             }
             return;

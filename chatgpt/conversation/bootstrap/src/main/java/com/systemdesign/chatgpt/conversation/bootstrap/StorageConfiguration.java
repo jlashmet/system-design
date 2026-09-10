@@ -1,8 +1,10 @@
 package com.systemdesign.chatgpt.conversation.bootstrap;
 
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
+import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConversationTurnStore;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoRunningMessageStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -33,6 +35,11 @@ public class StorageConfiguration {
 
         @Bean
         TurnRepository turnRepository(InMemoryConversationRepository store) {
+            return store;
+        }
+
+        @Bean
+        RunningMessageStore runningMessageStore(InMemoryConversationRepository store) {
             return store;
         }
     }
@@ -68,6 +75,13 @@ public class StorageConfiguration {
         @Bean
         TurnRepository turnRepository(DynamoConversationTurnStore store) {
             return store;
+        }
+
+        @Bean
+        RunningMessageStore runningMessageStore(
+                DynamoDbClient conversationDynamoDbClient,
+                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
+            return new DynamoRunningMessageStore(conversationDynamoDbClient, tableName);
         }
     }
 }

@@ -6,6 +6,7 @@ import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -29,10 +30,15 @@ public final class RoutingModelGateway implements ModelGateway {
 
     @Override
     public Completion complete(List<Message> messages) {
+        return complete(messages, Set.of());
+    }
+
+    @Override
+    public Completion complete(List<Message> messages, Set<ModelCapability> requiredCapabilities) {
         RuntimeException lastFailure = null;
-        for (ModelEndpoint endpoint : candidates(COMPLETE_CAPABILITIES)) {
+        for (ModelEndpoint endpoint : candidates(withBase(COMPLETE_CAPABILITIES, requiredCapabilities))) {
             try {
-                return endpoint.complete(messages);
+                return endpoint.complete(messages, requiredCapabilities);
             } catch (RuntimeException exception) {
                 lastFailure = exception;
             }
@@ -42,12 +48,20 @@ public final class RoutingModelGateway implements ModelGateway {
 
     @Override
     public Completion stream(List<Message> messages, Consumer<String> deltaConsumer) {
+        return stream(messages, Set.of(), deltaConsumer);
+    }
+
+    @Override
+    public Completion stream(
+            List<Message> messages,
+            Set<ModelCapability> requiredCapabilities,
+            Consumer<String> deltaConsumer) {
         Objects.requireNonNull(deltaConsumer, "deltaConsumer");
         RuntimeException lastFailure = null;
-        for (ModelEndpoint endpoint : candidates(STREAM_CAPABILITIES)) {
+        for (ModelEndpoint endpoint : candidates(withBase(STREAM_CAPABILITIES, requiredCapabilities))) {
             AtomicBoolean emitted = new AtomicBoolean();
             try {
-                return endpoint.stream(messages, delta -> {
+                return endpoint.stream(messages, requiredCapabilities, delta -> {
                     emitted.set(true);
                     deltaConsumer.accept(delta);
                 });
@@ -59,6 +73,15 @@ public final class RoutingModelGateway implements ModelGateway {
             }
         }
         throw unavailable(lastFailure);
+    }
+
+    private Set<ModelCapability> withBase(
+            Set<ModelCapability> base,
+            Set<ModelCapability> requiredCapabilities) {
+        Objects.requireNonNull(requiredCapabilities, "requiredCapabilities");
+        Set<ModelCapability> required = new HashSet<>(base);
+        required.addAll(requiredCapabilities);
+        return Set.copyOf(required);
     }
 
     private List<ModelEndpoint> candidates(Set<ModelCapability> requiredCapabilities) {

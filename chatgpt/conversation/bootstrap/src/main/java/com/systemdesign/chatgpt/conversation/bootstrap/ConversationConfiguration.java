@@ -12,6 +12,7 @@ import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandle
 import com.systemdesign.chatgpt.conversation.application.RetrievalContextSource;
 import com.systemdesign.chatgpt.conversation.application.RoutingModelGateway;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
+import com.systemdesign.chatgpt.conversation.application.ToolExecutor;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
@@ -24,6 +25,7 @@ import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.RetrievalContextStore;
+import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
@@ -181,19 +183,25 @@ public class ConversationConfiguration {
     ProcessGenerationHandler processGenerationHandler(
             ConversationRepository repository,
             TurnRepository turnRepository,
+            RunningMessageStore runningMessageStore,
             ContextAssembler contextAssembler,
             ModelGateway modelGateway,
             GenerationEventBus generationEventBus,
             ConversationSummaryRefresher summaryRefresher,
+            ToolExecutor toolExecutor,
+            @Value("${chatgpt.tools.max-rounds:4}") int maxToolRounds,
             Supplier<UUID> idGenerator,
             Clock clock) {
         return new ProcessGenerationHandler(
                 repository,
                 turnRepository,
+                runningMessageStore,
                 contextAssembler,
                 modelGateway,
                 generationEventBus,
                 summaryRefresher,
+                toolExecutor,
+                maxToolRounds,
                 idGenerator,
                 clock);
     }

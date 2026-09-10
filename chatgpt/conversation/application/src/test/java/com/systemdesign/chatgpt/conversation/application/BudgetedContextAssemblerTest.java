@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.application;
 
+import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.Message;
@@ -19,6 +20,7 @@ class BudgetedContextAssemblerTest {
         case "system" -> 2;
         case "old-user", "old-assistant" -> 4;
         case "recent-user", "recent-assistant", "target", "later-user" -> 3;
+        case "summary", "retrieval", "memory" -> 2;
         default -> 1;
     };
 
@@ -59,6 +61,52 @@ class BudgetedContextAssemblerTest {
         List<Message> context = assembler.assemble(conversation, generation);
 
         assertThat(context).extracting(Message::content).containsExactly("target");
+    }
+
+    @Test
+    void higherPrioritySourcesWinBudgetBeforeLowerPrioritySourcesAndHistory() {
+        UUID conversationId = UUID.randomUUID();
+        Conversation conversation = Conversation.start(conversationId, "user-1", NOW);
+        Message recentUser = message(MessageRole.USER, "recent-user", 1);
+        Message target = message(MessageRole.USER, "target", 2);
+        conversation.append(recentUser);
+        conversation.append(target);
+        Generation generation = Generation.pending(
+                UUID.randomUUID(), conversationId, "request-1", "target", target.id(), target.createdAt());
+
+        ContextSource memory = source(ContextSource.Kind.LONG_TERM_MEMORY, 30, "memory");
+        ContextSource retrieval = source(ContextSource.Kind.RETRIEVAL, 20, "retrieval");
+        ContextSource summary = source(ContextSource.Kind.SUMMARY, 10, "summary");
+        BudgetedContextAssembler assembler = new BudgetedContextAssembler(
+                estimator,
+                9,
+                List.of(memory, retrieval, summary));
+
+        List<Message> context = assembler.assemble(conversation, generation);
+
+        assertThat(context)
+                .extracting(Message::content)
+                .containsExactly("summary", "retrieval", "memory", "target");
+    }
+
+    private ContextSource source(ContextSource.Kind kind, int priority, String content) {
+        Message sourceMessage = message(MessageRole.SYSTEM, content, 0);
+        return new ContextSource() {
+            @Override
+            public Kind kind() {
+                return kind;
+            }
+
+            @Override
+            public int priority() {
+                return priority;
+            }
+
+            @Override
+            public List<Message> load(Conversation conversation, Generation generation) {
+                return List.of(sourceMessage);
+            }
+        };
     }
 
     private Message message(MessageRole role, String content, long seconds) {

@@ -31,7 +31,7 @@ class ProcessGenerationHandlerTest {
 
         fixture.handler.handle(fixture.generation.id());
 
-        Generation completed = fixture.store.findById(fixture.generation.id()).orElseThrow();
+        Generation completed = fixture.store.findGenerationById(fixture.generation.id()).orElseThrow();
         assertThat(completed.status()).isEqualTo(GenerationStatus.COMPLETED);
         assertThat(fixture.store.findById(fixture.conversationId).orElseThrow().messages())
                 .extracting(Message::role, Message::content)
@@ -64,7 +64,7 @@ class ProcessGenerationHandlerTest {
         assertThatThrownBy(() -> fixture.handler.handle(fixture.generation.id()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("provider unavailable");
-        assertThat(fixture.store.findById(fixture.generation.id()).orElseThrow().status())
+        assertThat(fixture.store.findGenerationById(fixture.generation.id()).orElseThrow().status())
                 .isEqualTo(GenerationStatus.FAILED);
     }
 
@@ -106,7 +106,7 @@ class ProcessGenerationHandlerTest {
         }
 
         @Override
-        public Optional<Generation> findById(UUID generationId) {
+        public Optional<Generation> findGenerationById(UUID generationId) {
             return Optional.ofNullable(generations.get(generationId));
         }
 

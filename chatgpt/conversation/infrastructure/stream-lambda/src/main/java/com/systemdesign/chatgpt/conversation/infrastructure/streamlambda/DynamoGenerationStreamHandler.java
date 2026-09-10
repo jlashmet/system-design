@@ -25,24 +25,39 @@ import java.util.UUID;
 public final class DynamoGenerationStreamHandler implements RequestHandler<DynamodbEvent, Void> {
     static final String QUEUE_URL_ENV = "INFERENCE_QUEUE_URL";
 
-    private final SqsClient sqs;
-    private final String queueUrl;
+    @FunctionalInterface
+    interface JobSink {
+        void send(InferenceJobQueue.Job job);
+    }
+
+    private final JobSink jobSink;
 
     public DynamoGenerationStreamHandler() {
-        this(SqsClient.create(), requireQueueUrl(System.getenv(QUEUE_URL_ENV)));
+        SqsClient sqs = SqsClient.create();
+        String queueUrl = requireQueueUrl(System.getenv(QUEUE_URL_ENV));
+        this.jobSink = job -> sqs.sendMessage(SendMessageRequest.builder()
+                .queueUrl(queueUrl)
+                .messageBody(InferenceJobCodec.encode(job))
+                .build());
     }
 
     public DynamoGenerationStreamHandler(SqsClient sqs, String queueUrl) {
-        this.sqs = Objects.requireNonNull(sqs, "sqs");
-        this.queueUrl = requireQueueUrl(queueUrl);
+        Objects.requireNonNull(sqs, "sqs");
+        String requiredQueueUrl = requireQueueUrl(queueUrl);
+        this.jobSink = job -> sqs.sendMessage(SendMessageRequest.builder()
+                .queueUrl(requiredQueueUrl)
+                .messageBody(InferenceJobCodec.encode(job))
+                .build());
+    }
+
+    DynamoGenerationStreamHandler(JobSink jobSink) {
+        this.jobSink = Objects.requireNonNull(jobSink, "jobSink");
     }
 
     @Override
     public Void handleRequest(DynamodbEvent event, Context context) {
         Objects.requireNonNull(event, "event");
-        if (event.getRecords() == null) {
-            return null;
-        }
+        if (event.getRecords() == null) return null;
         for (DynamodbStreamRecord record : event.getRecords()) {
             enqueueIfPendingGenerationInsert(record);
         }
@@ -62,11 +77,7 @@ public final class DynamoGenerationStreamHandler implements RequestHandler<Dynam
             throw new IllegalArgumentException("generation stream record is missing generationId");
         }
 
-        InferenceJobQueue.Job job = InferenceJobQueue.Job.firstAttempt(UUID.fromString(generationId));
-        sqs.sendMessage(SendMessageRequest.builder()
-                .queueUrl(queueUrl)
-                .messageBody(InferenceJobCodec.encode(job))
-                .build());
+        jobSink.send(InferenceJobQueue.Job.firstAttempt(UUID.fromString(generationId)));
         return true;
     }
 

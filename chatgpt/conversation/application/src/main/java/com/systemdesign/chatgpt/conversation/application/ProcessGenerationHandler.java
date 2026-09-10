@@ -29,6 +29,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public final class ProcessGenerationHandler {
+    public enum ProcessResult { PROCESSED, BUSY, TERMINAL }
+
     private final ConversationRepository conversationRepository;
     private final TurnRepository turnRepository;
     private final RunningMessageStore runningMessageStore;
@@ -38,6 +40,7 @@ public final class ProcessGenerationHandler {
     private final ConversationSummaryRefresher summaryRefresher;
     private final ToolExecutor toolExecutor;
     private final ConversationTelemetry telemetry;
+    private final Duration generationClaimLease;
     private final int maxToolRounds;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
@@ -47,13 +50,23 @@ public final class ProcessGenerationHandler {
             GenerationEventBus eventBus, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
             int maxToolRounds, Supplier<UUID> idGenerator, Clock clock) {
         this(conversationRepository, turnRepository, runningMessageStore, contextAssembler, modelGateway, eventBus,
-                summaryRefresher, toolExecutor, ConversationTelemetry.noop(), maxToolRounds, idGenerator, clock);
+                summaryRefresher, toolExecutor, ConversationTelemetry.noop(), Duration.ofSeconds(60),
+                maxToolRounds, idGenerator, clock);
     }
 
     public ProcessGenerationHandler(ConversationRepository conversationRepository, TurnRepository turnRepository,
             RunningMessageStore runningMessageStore, ContextAssembler contextAssembler, ModelGateway modelGateway,
             GenerationEventBus eventBus, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
             ConversationTelemetry telemetry, int maxToolRounds, Supplier<UUID> idGenerator, Clock clock) {
+        this(conversationRepository, turnRepository, runningMessageStore, contextAssembler, modelGateway, eventBus,
+                summaryRefresher, toolExecutor, telemetry, Duration.ofSeconds(60), maxToolRounds, idGenerator, clock);
+    }
+
+    public ProcessGenerationHandler(ConversationRepository conversationRepository, TurnRepository turnRepository,
+            RunningMessageStore runningMessageStore, ContextAssembler contextAssembler, ModelGateway modelGateway,
+            GenerationEventBus eventBus, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
+            ConversationTelemetry telemetry, Duration generationClaimLease, int maxToolRounds,
+            Supplier<UUID> idGenerator, Clock clock) {
         this.conversationRepository = Objects.requireNonNull(conversationRepository, "conversationRepository");
         this.turnRepository = Objects.requireNonNull(turnRepository, "turnRepository");
         this.runningMessageStore = Objects.requireNonNull(runningMessageStore, "runningMessageStore");
@@ -63,18 +76,27 @@ public final class ProcessGenerationHandler {
         this.summaryRefresher = Objects.requireNonNull(summaryRefresher, "summaryRefresher");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor");
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
+        this.generationClaimLease = Objects.requireNonNull(generationClaimLease, "generationClaimLease");
+        if (generationClaimLease.isZero() || generationClaimLease.isNegative()) {
+            throw new IllegalArgumentException("generationClaimLease must be > 0");
+        }
         if (maxToolRounds < 0) throw new IllegalArgumentException("maxToolRounds must be >= 0");
         this.maxToolRounds = maxToolRounds;
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    public void handle(UUID generationId) {
+    public ProcessResult handle(UUID generationId) {
         Instant claimedAt = Instant.now(clock);
-        Generation generation = turnRepository.claim(generationId, claimedAt).orElse(null);
+        Generation generation = turnRepository.claim(
+                generationId, claimedAt, claimedAt.plus(generationClaimLease)).orElse(null);
         if (generation == null) {
-            if (turnRepository.findGenerationById(generationId).isEmpty()) throw new NoSuchElementException("generation not found: " + generationId);
-            return;
+            Generation current = turnRepository.findGenerationById(generationId)
+                    .orElseThrow(() -> new NoSuchElementException("generation not found: " + generationId));
+            return switch (current.status()) {
+                case COMPLETED, CANCELLED -> ProcessResult.TERMINAL;
+                case PENDING, RUNNING, FAILED -> ProcessResult.BUSY;
+            };
         }
         telemetry.generationStarted(Duration.between(generation.createdAt(), claimedAt));
         AtomicBoolean firstToken = new AtomicBoolean();
@@ -83,16 +105,22 @@ public final class ProcessGenerationHandler {
             List<ToolDefinition> tools = generation.requiredCapabilities().contains(ModelCapability.TOOL_CALLING)
                     ? toolExecutor.definitionsFor(conversation.userId(), conversation.id()) : List.of();
             for (int round = 0; ; round++) {
+                assertClaimStillOwned(generation);
                 List<Message> context = contextAssembler.assemble(conversation, generation);
                 Instant modelStarted = Instant.now(clock);
                 ModelGateway.TurnResult turn;
                 try {
                     turn = modelGateway.streamTurn(context, generation.requiredCapabilities(), tools, delta -> {
-                        if (firstToken.compareAndSet(false, true)) telemetry.firstToken(Duration.between(claimedAt, Instant.now(clock)));
-                        publishDeltaUnlessCancelled(generation.id(), delta);
+                        if (firstToken.compareAndSet(false, true)) {
+                            telemetry.firstToken(Duration.between(claimedAt, Instant.now(clock)));
+                        }
+                        publishDeltaUnlessClaimLost(generation, delta);
                     });
                     telemetry.modelRound(Duration.between(modelStarted, Instant.now(clock)),
                             turn instanceof ModelGateway.FinalResponse ? "final" : "tool_requests");
+                } catch (GenerationClaimLostException exception) {
+                    telemetry.modelRound(Duration.between(modelStarted, Instant.now(clock)), "claim_lost");
+                    throw exception;
                 } catch (RuntimeException exception) {
                     telemetry.modelRound(Duration.between(modelStarted, Instant.now(clock)), "failed");
                     throw exception;
@@ -100,25 +128,35 @@ public final class ProcessGenerationHandler {
                 if (turn instanceof ModelGateway.FinalResponse finalResponse) {
                     completeGeneration(conversation, generation, finalResponse.completion());
                     GenerationStatus persisted = turnRepository.findGenerationById(generation.id()).orElseThrow().status();
+                    if (persisted == GenerationStatus.RUNNING) return ProcessResult.BUSY;
                     telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)),
                             persisted.name().toLowerCase());
-                    return;
+                    return ProcessResult.PROCESSED;
                 }
                 ModelGateway.ToolRequests requests = (ModelGateway.ToolRequests) turn;
                 if (tools.isEmpty()) throw new IllegalStateException("model requested tools when no authorized tools were available");
                 if (round >= maxToolRounds) throw new ToolRoundLimitExceededException(maxToolRounds);
                 List<Message> transcript = executeToolRound(conversation, generation.id(), requests.calls());
-                if (!runningMessageStore.append(generation.id(), transcript)) {
-                    telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)), "cancelled");
-                    return;
+                if (!runningMessageStore.append(generation.id(), generation.claimToken(), transcript)) {
+                    Generation current = turnRepository.findGenerationById(generation.id()).orElseThrow();
+                    if (current.status() == GenerationStatus.CANCELLED) {
+                        telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)), "cancelled");
+                        return ProcessResult.PROCESSED;
+                    }
+                    return ProcessResult.BUSY;
                 }
                 conversation = loadConversation(generation);
             }
         } catch (GenerationCancelledException ignored) {
             telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)), "cancelled");
+            return ProcessResult.PROCESSED;
+        } catch (GenerationClaimLostException ignored) {
+            return ProcessResult.BUSY;
         } catch (RuntimeException exception) {
             turnRepository.fail(generation.failed(Instant.now(clock)));
-            if (!isCancelled(generation.id())) eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
+            if (!isCancelled(generation.id()) && claimStillOwned(generation)) {
+                eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
+            }
             telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)),
                     isCancelled(generation.id()) ? "cancelled" : "failed");
             throw exception;
@@ -157,6 +195,7 @@ public final class ProcessGenerationHandler {
 
     private void completeGeneration(Conversation conversation, Generation generation, ModelGateway.Completion completion) {
         if (isCancelled(generation.id())) return;
+        assertClaimStillOwned(generation);
         Instant completedAt = nextMessageTime(conversation);
         Message assistantMessage = new Message(
                 idGenerator.get(), MessageRole.ASSISTANT, completion.content(), completedAt, generation.id());
@@ -181,9 +220,25 @@ public final class ProcessGenerationHandler {
         try { summaryRefresher.refreshIfNeeded(conversation); } catch (RuntimeException ignored) { }
     }
 
-    private void publishDeltaUnlessCancelled(UUID generationId, String delta) {
-        if (isCancelled(generationId)) throw new GenerationCancelledException();
-        eventBus.publish(generationId, GenerationEventBus.Event.delta(delta));
+    private void publishDeltaUnlessClaimLost(Generation generation, String delta) {
+        Generation current = turnRepository.findGenerationById(generation.id()).orElseThrow();
+        if (current.status() == GenerationStatus.CANCELLED) throw new GenerationCancelledException();
+        if (current.status() != GenerationStatus.RUNNING
+                || !Objects.equals(current.claimToken(), generation.claimToken())) {
+            throw new GenerationClaimLostException();
+        }
+        eventBus.publish(generation.id(), GenerationEventBus.Event.delta(delta));
+    }
+
+    private void assertClaimStillOwned(Generation generation) {
+        if (!claimStillOwned(generation)) throw new GenerationClaimLostException();
+    }
+
+    private boolean claimStillOwned(Generation generation) {
+        return turnRepository.findGenerationById(generation.id())
+                .filter(current -> current.status() == GenerationStatus.RUNNING)
+                .filter(current -> Objects.equals(current.claimToken(), generation.claimToken()))
+                .isPresent();
     }
 
     private boolean isCancelled(UUID generationId) {
@@ -192,4 +247,5 @@ public final class ProcessGenerationHandler {
     }
 
     private static final class GenerationCancelledException extends RuntimeException { }
+    private static final class GenerationClaimLostException extends RuntimeException { }
 }

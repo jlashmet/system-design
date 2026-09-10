@@ -4,6 +4,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface TurnRepository {
+    Optional<Generation> findById(UUID generationId);
+
     Optional<Generation> findByIdempotencyKey(UUID conversationId, String idempotencyKey);
 
     BeginResult begin(Conversation conversation, Generation generation);

@@ -7,4 +7,6 @@ public interface GenerationEventStore {
     ReplayableGenerationEventBus.RecordedEvent append(UUID generationId, GenerationEventBus.Event event);
 
     List<ReplayableGenerationEventBus.RecordedEvent> listAfter(UUID generationId, long afterSequence, int limit);
+
+    long latestSequence(UUID generationId);
 }

@@ -1,13 +1,13 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.input;
 
 import com.systemdesign.chatgpt.conversation.api.ConversationResponse;
-import com.systemdesign.chatgpt.conversation.api.CreateConversationRequest;
 import com.systemdesign.chatgpt.conversation.api.CreateConversationResponse;
 import com.systemdesign.chatgpt.conversation.api.GenerationResponse;
 import com.systemdesign.chatgpt.conversation.api.MessagePageResponse;
 import com.systemdesign.chatgpt.conversation.api.MessageResponse;
 import com.systemdesign.chatgpt.conversation.api.SendMessageRequest;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.ConversationAccessGuard;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationCommand;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
@@ -36,6 +36,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.security.Principal;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -47,6 +48,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/v1/conversations")
 public final class ConversationController {
     private final CreateConversationHandler createConversationHandler;
+    private final ConversationAccessGuard accessGuard;
     private final GetConversationMetadataHandler getConversationMetadataHandler;
     private final GetConversationMessagesHandler getConversationMessagesHandler;
     private final GetGenerationHandler getGenerationHandler;
@@ -56,6 +58,7 @@ public final class ConversationController {
 
     public ConversationController(
             CreateConversationHandler createConversationHandler,
+            ConversationAccessGuard accessGuard,
             GetConversationMetadataHandler getConversationMetadataHandler,
             GetConversationMessagesHandler getConversationMessagesHandler,
             GetGenerationHandler getGenerationHandler,
@@ -63,6 +66,7 @@ public final class ConversationController {
             SendMessageHandler sendMessageHandler,
             ReplayableGenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
+        this.accessGuard = accessGuard;
         this.getConversationMetadataHandler = getConversationMetadataHandler;
         this.getConversationMessagesHandler = getConversationMessagesHandler;
         this.getGenerationHandler = getGenerationHandler;
@@ -73,13 +77,14 @@ public final class ConversationController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public CreateConversationResponse create(@RequestBody CreateConversationRequest request) {
-        Conversation conversation = createConversationHandler.handle(new CreateConversationCommand(request.userId()));
+    public CreateConversationResponse create(Principal principal) {
+        Conversation conversation = createConversationHandler.handle(new CreateConversationCommand(subject(principal)));
         return new CreateConversationResponse(conversation.id());
     }
 
     @GetMapping("/{conversationId}")
-    public ConversationResponse get(@PathVariable UUID conversationId) {
+    public ConversationResponse get(@PathVariable UUID conversationId, Principal principal) {
+        requireOwner(conversationId, principal);
         return toResponse(getConversationMetadataHandler.handle(conversationId));
     }
 
@@ -87,7 +92,9 @@ public final class ConversationController {
     public MessagePageResponse getMessages(
             @PathVariable UUID conversationId,
             @RequestParam(defaultValue = "50") int limit,
-            @RequestParam(required = false) String cursor) {
+            @RequestParam(required = false) String cursor,
+            Principal principal) {
+        requireOwner(conversationId, principal);
         var page = getConversationMessagesHandler.handle(conversationId, limit, cursor);
         return new MessagePageResponse(page.messages().stream().map(this::toResponse).toList(), page.nextCursor());
     }
@@ -97,7 +104,9 @@ public final class ConversationController {
     public GenerationResponse sendMessage(
             @PathVariable UUID conversationId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @RequestBody SendMessageRequest request) {
+            @RequestBody SendMessageRequest request,
+            Principal principal) {
+        requireOwner(conversationId, principal);
         return toResponse(sendMessageHandler.handle(new SendMessageCommand(
                 conversationId,
                 idempotencyKey,
@@ -108,14 +117,18 @@ public final class ConversationController {
     @GetMapping("/{conversationId}/generations/{generationId}")
     public GenerationResponse getGeneration(
             @PathVariable UUID conversationId,
-            @PathVariable UUID generationId) {
+            @PathVariable UUID generationId,
+            Principal principal) {
+        requireOwner(conversationId, principal);
         return toResponse(getGenerationHandler.handle(conversationId, generationId));
     }
 
     @PostMapping("/{conversationId}/generations/{generationId}/cancel")
     public GenerationResponse cancelGeneration(
             @PathVariable UUID conversationId,
-            @PathVariable UUID generationId) {
+            @PathVariable UUID generationId,
+            Principal principal) {
+        requireOwner(conversationId, principal);
         return toResponse(cancelGenerationHandler.handle(conversationId, generationId));
     }
 
@@ -123,7 +136,9 @@ public final class ConversationController {
     public SseEmitter streamGeneration(
             @PathVariable UUID conversationId,
             @PathVariable UUID generationId,
-            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
+            Principal principal) {
+        requireOwner(conversationId, principal);
         Generation current = getGenerationHandler.handle(conversationId, generationId);
         long afterSequence = parseLastEventId(lastEventId);
         SseEmitter emitter = new SseEmitter(30_000L);
@@ -170,6 +185,17 @@ public final class ConversationController {
             emitter.complete();
         }
         return emitter;
+    }
+
+    private void requireOwner(UUID conversationId, Principal principal) {
+        accessGuard.requireOwner(conversationId, subject(principal));
+    }
+
+    private String subject(Principal principal) {
+        if (principal == null || principal.getName() == null || principal.getName().isBlank()) {
+            throw new IllegalStateException("authenticated principal is required");
+        }
+        return principal.getName();
     }
 
     private long parseLastEventId(String lastEventId) {

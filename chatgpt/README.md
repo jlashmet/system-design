@@ -85,11 +85,21 @@ Required system context and the generation's current user turn remain non-droppa
 Context persistence is split by responsibility:
 
 - `ConversationSummaryStore` keeps the latest summary snapshot and its `throughMessageId`.
-- `RetrievalStore` returns user-scoped snippets ranked for the current query.
+- `RetrievalContextStore` returns user-scoped snippets ranked for the current query.
 - `LongTermMemoryStore` owns user-scoped durable memories.
 - `ConversationSummaryRefresher` incrementally advances a summary only after enough unsummarized messages accumulate.
 
+Successful generation completion triggers summary refresh only after the generation has been durably completed and the terminal SSE event has been published. Summary refresh is best-effort: a summary-store or summarizer outage cannot corrupt an already-completed generation.
+
 In-memory adapters keep local development runnable. `DynamoConversationSummaryStore` is the first production-style AWS adapter and uses a conditional write so a delayed/stale refresh cannot replace a newer summary.
+
+### 11. Durable DynamoDB conversation and turn storage
+
+`DynamoConversationTurnStore` implements both `ConversationRepository` and `TurnRepository` without storing the entire conversation in one DynamoDB item. Conversation metadata and messages share a conversation partition (`pk`/`sk`), while generation and idempotency records remain directly addressable.
+
+Turn creation uses a DynamoDB transaction to commit the user message, generation, and idempotency mapping atomically. Generation claim/failure/cancellation use conditional state transitions. Completion transactionally writes the assistant message and moves the generation from `RUNNING` to `COMPLETED`; if cancellation wins the race, the transaction cannot leave a late assistant message behind.
+
+Idempotency keys are represented by a SHA-256-derived storage key while the original key is retained in the mapping record. This keeps Dynamo partition keys bounded without weakening the application-level idempotency contract.
 
 ## Testing
 
@@ -101,7 +111,7 @@ The testing layout intentionally follows Ticketmaster:
 - each integration test creates isolated emulated AWS resources and points AWS SDK clients at the `FlociContainer` endpoint;
 - `maven-failsafe-plugin` runs `integration-test` + `verify`, so `mvn verify` exercises the Floci tests in CI.
 
-`DynamoConversationSummaryStoreIT` currently verifies real DynamoDB round-trip behavior and stale-summary fencing against Floci. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
+`DynamoConversationSummaryStoreIT` verifies summary round-trip behavior and stale-summary fencing against Floci. `DynamoConversationTurnStoreIT` verifies atomic idempotent begin, retryable claim/failure, atomic assistant completion, and cancellation fencing. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
 
 ### HTTP endpoints
 
@@ -118,9 +128,9 @@ POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 
 ## Next implementation slices
 
-1. Wire concrete context refresh/update flows and add production adapters only where the backing technology is defined.
+1. Make the DynamoDB conversation/turn adapter selectable in runtime composition and add table/bootstrap configuration.
 2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-3. Replace the development conversation/turn store with durable persistence plus cache/read models where they materially improve latency.
+3. Add durable queue/event adapters and cache/read models where they materially improve latency or recovery.
 4. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
 
 ## Build

@@ -55,6 +55,19 @@ public record Generation(
                 createdAt);
     }
 
+    public Generation running(Instant startedAt) {
+        return new Generation(
+                id,
+                conversationId,
+                idempotencyKey,
+                requestContent,
+                userMessageId,
+                assistantMessageId,
+                GenerationStatus.RUNNING,
+                createdAt,
+                startedAt);
+    }
+
     public Generation completed(UUID assistantMessageId, Instant completedAt) {
         return new Generation(
                 id,

@@ -2,12 +2,16 @@ package com.systemdesign.chatgpt.conversation.bootstrap;
 
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
+import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
+import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryInferenceJobQueue;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -30,6 +34,11 @@ public class ConversationConfiguration {
     @Bean
     TurnRepository turnRepository(InMemoryConversationRepository store) {
         return store;
+    }
+
+    @Bean
+    InferenceJobQueue inferenceJobQueue() {
+        return new InMemoryInferenceJobQueue();
     }
 
     @Bean
@@ -61,12 +70,27 @@ public class ConversationConfiguration {
     }
 
     @Bean
+    GetGenerationHandler getGenerationHandler(TurnRepository turnRepository) {
+        return new GetGenerationHandler(turnRepository);
+    }
+
+    @Bean
     SendMessageHandler sendMessageHandler(
+            ConversationRepository repository,
+            TurnRepository turnRepository,
+            InferenceJobQueue inferenceJobQueue,
+            Supplier<UUID> idGenerator,
+            Clock clock) {
+        return new SendMessageHandler(repository, turnRepository, inferenceJobQueue, idGenerator, clock);
+    }
+
+    @Bean
+    ProcessGenerationHandler processGenerationHandler(
             ConversationRepository repository,
             TurnRepository turnRepository,
             ModelGateway modelGateway,
             Supplier<UUID> idGenerator,
             Clock clock) {
-        return new SendMessageHandler(repository, turnRepository, modelGateway, idGenerator, clock);
+        return new ProcessGenerationHandler(repository, turnRepository, modelGateway, idGenerator, clock);
     }
 }

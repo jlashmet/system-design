@@ -42,16 +42,30 @@ The conversation service owns durable conversational truth. Model providers, ret
 
 ### 2. Durable, retry-safe turns
 
-`POST /messages` now requires an `Idempotency-Key` header. The application creates a durable `Generation` with an explicit `PENDING`, `COMPLETED`, or `FAILED` state and persists the user message plus pending generation through one atomic `TurnRepository.begin(...)` boundary before invoking the model.
+`POST /messages` requires an `Idempotency-Key` header. The application creates a durable `Generation` and persists the user message plus pending generation through one atomic `TurnRepository.begin(...)` boundary before inference work can start.
 
 Retry semantics are intentionally explicit:
 
-- Repeating a completed request with the same key and content returns the original logical turn without another model call.
+- Repeating a completed request with the same key and content returns the original logical generation.
 - Reusing a key with different content returns a conflict.
 - If the provider fails, the user message remains durable and the generation becomes `FAILED`; retrying the same key reuses that user message rather than appending another one.
-- A retry of an unresolved `PENDING` generation may invoke the provider again. This is deliberate at-least-once inference behavior: durable conversational state is idempotent, while exactly-once external inference would require provider-side idempotency or a stronger provider protocol.
+- Durable conversational state is idempotent while external inference remains at-least-once unless the provider itself supplies stronger idempotency guarantees.
 
-The in-memory adapter demonstrates the transaction/outbox seam by implementing `ConversationRepository` and `TurnRepository` over the same store. A production adapter can map `begin(...)` and `complete(...)` to a database transaction plus outbox row without changing the application or domain API.
+### 3. Asynchronous inference boundary and generation events
+
+Message submission no longer invokes the model in the HTTP request lifecycle. `POST /messages` persists the user message and generation, enqueues the generation ID through an `InferenceJobQueue` port, and returns `202 Accepted` immediately.
+
+A separate `ProcessGenerationHandler` owns provider inference. Workers atomically claim a generation (`PENDING`/`FAILED` -> `RUNNING`) before invoking the provider, so duplicate queue delivery cannot produce duplicate assistant messages. The development composition uses an in-memory queue and a scheduled worker; a production adapter can replace these with Kafka/SQS/Pulsar or another durable queue without changing the use cases.
+
+Clients can inspect or follow generation state independently of the original request:
+
+```text
+GET /v1/conversations/{conversationId}/generations/{generationId}
+GET /v1/conversations/{conversationId}/generations/{generationId}/events
+    Accept: text/event-stream
+```
+
+The SSE endpoint currently emits generation lifecycle changes (`pending`, `running`, `completed`, `failed`). Token-delta streaming is the next increment and will sit on the same generation resource.
 
 ### HTTP endpoints
 
@@ -60,17 +74,19 @@ POST /v1/conversations
 GET  /v1/conversations/{conversationId}
 POST /v1/conversations/{conversationId}/messages
      Idempotency-Key: <client-generated-key>
+GET  /v1/conversations/{conversationId}/generations/{generationId}
+GET  /v1/conversations/{conversationId}/generations/{generationId}/events
 ```
 
-Inference is still executed synchronously after the durable handoff. The model adapter is intentionally deterministic so the vertical slice is runnable without external credentials.
+The model adapter is intentionally deterministic so the vertical slices remain runnable without external credentials.
 
 ## Why these slices first
 
-The key boundary is not a particular LLM vendor or datastore. It is the contract between conversational state and inference. Establishing durable turn identity before introducing queues and streaming prevents request retries, worker retries, and provider failures from creating duplicate conversational state.
+The key boundary is not a particular LLM vendor or datastore. It is the contract between conversational state and inference. Durable turn identity plus an independent generation lifecycle means request retries, worker retries, provider failures, and streaming transports can evolve without duplicating conversational truth.
 
 ## Next implementation slices
 
-1. Split inference from the request lifecycle: inference jobs, admission control/backpressure, cancellation, and token streaming over SSE.
+1. Complete the async inference slice: token-delta streaming, cancellation, queue admission control/backpressure, and worker retry/dead-letter policy.
 2. Add model routing: model capability/cost policy, provider health, fallback policy, and per-tenant/user quotas.
 3. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
 4. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.

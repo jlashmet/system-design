@@ -5,7 +5,6 @@ import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryRefresher;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
-import com.systemdesign.chatgpt.conversation.application.DispatchInferenceOutboxHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
@@ -26,8 +25,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationConversationStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
-import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
-import com.systemdesign.chatgpt.conversation.domain.InferenceOutbox;
+import com.systemdesign.chatgpt.conversation.domain.InferenceDispatch;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
@@ -96,12 +94,8 @@ public class ConversationConfiguration {
         return new CancelGenerationHandler(repository, events, clock);
     }
     @Bean SendMessageHandler sendMessageHandler(ConversationRepository repository, TurnRepository turns,
-            InferenceQuota quota, Supplier<UUID> ids, Clock clock) {
-        return new SendMessageHandler(repository, turns, quota, ids, clock);
-    }
-    @Bean DispatchInferenceOutboxHandler dispatchInferenceOutboxHandler(InferenceOutbox outbox, InferenceJobQueue queue,
-            @Value("${chatgpt.inference.outbox-claim-lease-ms:30000}") long claimLeaseMs, Clock clock) {
-        return new DispatchInferenceOutboxHandler(outbox, queue, Duration.ofMillis(claimLeaseMs), clock);
+            InferenceDispatch dispatch, InferenceQuota quota, Supplier<UUID> ids, Clock clock) {
+        return new SendMessageHandler(repository, turns, dispatch, quota, ids, clock);
     }
     @Bean ProcessGenerationHandler processGenerationHandler(ConversationRepository repository,
             GenerationConversationStore generationConversationStore, TurnRepository turns,

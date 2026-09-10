@@ -41,6 +41,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
@@ -55,7 +56,7 @@ public class StorageConfiguration {
     @ConditionalOnProperty(name = "chatgpt.storage.mode", havingValue = "memory", matchIfMissing = true)
     static class InMemoryStorageConfiguration {
         @Bean InMemoryConversationRepository conversationStore() { return new InMemoryConversationRepository(); }
-        @Bean ConversationRepository conversationRepository(InMemoryConversationRepository store) { return store; }
+        @Bean @Primary ConversationRepository conversationRepository(InMemoryConversationRepository store) { return store; }
         @Bean ConversationMetadataStore conversationMetadataStore(InMemoryConversationRepository store) { return store; }
         @Bean ConversationListStore conversationListStore(InMemoryConversationRepository store) { return store; }
         @Bean TurnRepository turnRepository(InMemoryConversationRepository store) { return store; }
@@ -101,7 +102,7 @@ public class StorageConfiguration {
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoIndexedConversationRepository(store, conversationDynamoDbClient, tableName);
         }
-        @Bean ConversationRepository conversationRepository(DynamoIndexedConversationRepository store) { return store; }
+        @Bean @Primary ConversationRepository conversationRepository(DynamoIndexedConversationRepository store) { return store; }
         @Bean ConversationMetadataStore conversationMetadataStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
             return new DynamoConversationMetadataStore(conversationDynamoDbClient, tableName);

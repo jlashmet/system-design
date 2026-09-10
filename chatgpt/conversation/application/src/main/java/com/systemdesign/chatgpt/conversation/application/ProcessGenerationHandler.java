@@ -123,7 +123,7 @@ public final class ProcessGenerationHandler {
     }
 
     private List<Message> executeToolRound(Conversation conversation, List<ToolCall> calls) {
-        Instant base = Instant.now(clock);
+        Instant base = nextMessageTime(conversation);
         List<Message> messages = new ArrayList<>(calls.size() + 1);
         messages.add(new Message(
                 idGenerator.get(),
@@ -163,7 +163,7 @@ public final class ProcessGenerationHandler {
             return;
         }
 
-        Instant completedAt = Instant.now(clock);
+        Instant completedAt = nextMessageTime(conversation);
         Message assistantMessage = new Message(
                 idGenerator.get(),
                 MessageRole.ASSISTANT,
@@ -177,6 +177,16 @@ public final class ProcessGenerationHandler {
             eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
             refreshSummaryBestEffort(conversation);
         }
+    }
+
+    private Instant nextMessageTime(Conversation conversation) {
+        Instant now = Instant.now(clock);
+        List<Message> messages = conversation.messages();
+        if (messages.isEmpty()) {
+            return now;
+        }
+        Instant last = messages.getLast().createdAt();
+        return now.isAfter(last) ? now : last.plusNanos(1);
     }
 
     private void refreshSummaryBestEffort(Conversation conversation) {

@@ -112,7 +112,7 @@ class SendMessageHandlerTest {
         }
 
         @Override
-        public Optional<Generation> findById(UUID generationId) {
+        public Optional<Generation> findGenerationById(UUID generationId) {
             return Optional.ofNullable(generationsById.get(generationId));
         }
 

@@ -2,28 +2,40 @@ package com.systemdesign.chatgpt.conversation.bootstrap;
 
 import com.systemdesign.chatgpt.conversation.application.BudgetedContextAssembler;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.ConversationSummaryContextSource;
+import com.systemdesign.chatgpt.conversation.application.ConversationSummaryRefresher;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.LongTermMemoryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.RetrievalContextSource;
 import com.systemdesign.chatgpt.conversation.application.RoutingModelGateway;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
+import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
+import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
+import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.RetrievalContextStore;
 import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.ExtractiveConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicTokenEstimator;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryInferenceJobQueue;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryLongTermMemoryStore;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryRetrievalContextStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -71,6 +83,61 @@ public class ConversationConfiguration {
     @Bean
     TokenEstimator tokenEstimator() {
         return new HeuristicTokenEstimator();
+    }
+
+    @Bean
+    ConversationSummaryStore conversationSummaryStore() {
+        return new InMemoryConversationSummaryStore();
+    }
+
+    @Bean
+    RetrievalContextStore retrievalContextStore() {
+        return new InMemoryRetrievalContextStore();
+    }
+
+    @Bean
+    LongTermMemoryStore longTermMemoryStore() {
+        return new InMemoryLongTermMemoryStore();
+    }
+
+    @Bean
+    ConversationSummarizer conversationSummarizer(
+            @Value("${chatgpt.context.summary-max-characters:2000}") int maxCharacters) {
+        return new ExtractiveConversationSummarizer(maxCharacters);
+    }
+
+    @Bean
+    ConversationSummaryRefresher conversationSummaryRefresher(
+            ConversationSummaryStore store,
+            ConversationSummarizer summarizer,
+            @Value("${chatgpt.context.summary-refresh-messages:6}") int minUnsummarizedMessages,
+            Supplier<UUID> idGenerator,
+            Clock clock) {
+        return new ConversationSummaryRefresher(
+                store, summarizer, minUnsummarizedMessages, idGenerator, clock);
+    }
+
+    @Bean
+    ContextSource conversationSummaryContextSource(
+            ConversationSummaryStore store,
+            @Value("${chatgpt.context.summary-priority:10}") int priority) {
+        return new ConversationSummaryContextSource(store, priority);
+    }
+
+    @Bean
+    ContextSource retrievalContextSource(
+            RetrievalContextStore store,
+            @Value("${chatgpt.context.retrieval-priority:20}") int priority,
+            @Value("${chatgpt.context.retrieval-limit:5}") int limit) {
+        return new RetrievalContextSource(store, priority, limit);
+    }
+
+    @Bean
+    ContextSource longTermMemoryContextSource(
+            LongTermMemoryStore store,
+            @Value("${chatgpt.context.memory-priority:30}") int priority,
+            @Value("${chatgpt.context.memory-limit:10}") int limit) {
+        return new LongTermMemoryContextSource(store, priority, limit);
     }
 
     @Bean

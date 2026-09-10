@@ -15,7 +15,7 @@ public final class GetGenerationHandler {
     }
 
     public Generation handle(UUID conversationId, UUID generationId) {
-        Generation generation = turnRepository.findById(generationId)
+        Generation generation = turnRepository.findGenerationById(generationId)
                 .orElseThrow(() -> new NoSuchElementException("generation not found: " + generationId));
         if (!generation.conversationId().equals(conversationId)) {
             throw new NoSuchElementException("generation not found: " + generationId);

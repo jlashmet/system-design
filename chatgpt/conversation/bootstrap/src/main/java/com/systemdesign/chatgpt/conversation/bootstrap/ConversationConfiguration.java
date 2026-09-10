@@ -5,7 +5,7 @@ import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryRefresher;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
-import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
+import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.LongTermMemoryContextSource;
@@ -17,6 +17,7 @@ import com.systemdesign.chatgpt.conversation.application.ToolExecutor;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMessagePageStore;
+import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
@@ -79,7 +80,9 @@ public class ConversationConfiguration {
     @Bean CreateConversationHandler createConversationHandler(ConversationRepository repository, Supplier<UUID> ids, Clock clock) {
         return new CreateConversationHandler(repository, ids, clock);
     }
-    @Bean GetConversationHandler getConversationHandler(ConversationRepository repository) { return new GetConversationHandler(repository); }
+    @Bean GetConversationMetadataHandler getConversationMetadataHandler(ConversationMetadataStore store) {
+        return new GetConversationMetadataHandler(store);
+    }
     @Bean GetConversationMessagesHandler getConversationMessagesHandler(ConversationMessagePageStore store,
             @Value("${chatgpt.api.max-message-page-size:200}") int maxPageSize) {
         return new GetConversationMessagesHandler(store, maxPageSize);

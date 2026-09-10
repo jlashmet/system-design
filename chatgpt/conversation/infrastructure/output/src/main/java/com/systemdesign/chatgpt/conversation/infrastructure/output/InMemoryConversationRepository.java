@@ -1,6 +1,7 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.output;
 
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
+import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
@@ -17,7 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class InMemoryConversationRepository
-        implements ConversationRepository, TurnRepository, RunningMessageStore, GenerationContinuationStore {
+        implements ConversationRepository, ConversationMetadataStore, TurnRepository, RunningMessageStore, GenerationContinuationStore {
     private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
     private final Map<TurnKey, Generation> generations = new ConcurrentHashMap<>();
     private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
@@ -26,6 +27,14 @@ public final class InMemoryConversationRepository
     @Override
     public Optional<Conversation> findById(UUID conversationId) {
         return Optional.ofNullable(conversations.get(conversationId)).map(this::copy);
+    }
+
+    @Override
+    public Optional<Metadata> find(UUID conversationId) {
+        Conversation conversation = conversations.get(conversationId);
+        return conversation == null
+                ? Optional.empty()
+                : Optional.of(new Metadata(conversation.id(), conversation.userId(), conversation.createdAt()));
     }
 
     @Override

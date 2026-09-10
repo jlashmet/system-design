@@ -10,12 +10,13 @@ import com.systemdesign.chatgpt.conversation.api.SendMessageRequest;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationCommand;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
-import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
+import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageCommand;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
+import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
@@ -46,7 +47,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/v1/conversations")
 public final class ConversationController {
     private final CreateConversationHandler createConversationHandler;
-    private final GetConversationHandler getConversationHandler;
+    private final GetConversationMetadataHandler getConversationMetadataHandler;
     private final GetConversationMessagesHandler getConversationMessagesHandler;
     private final GetGenerationHandler getGenerationHandler;
     private final CancelGenerationHandler cancelGenerationHandler;
@@ -55,14 +56,14 @@ public final class ConversationController {
 
     public ConversationController(
             CreateConversationHandler createConversationHandler,
-            GetConversationHandler getConversationHandler,
+            GetConversationMetadataHandler getConversationMetadataHandler,
             GetConversationMessagesHandler getConversationMessagesHandler,
             GetGenerationHandler getGenerationHandler,
             CancelGenerationHandler cancelGenerationHandler,
             SendMessageHandler sendMessageHandler,
             ReplayableGenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
-        this.getConversationHandler = getConversationHandler;
+        this.getConversationMetadataHandler = getConversationMetadataHandler;
         this.getConversationMessagesHandler = getConversationMessagesHandler;
         this.getGenerationHandler = getGenerationHandler;
         this.cancelGenerationHandler = cancelGenerationHandler;
@@ -79,7 +80,7 @@ public final class ConversationController {
 
     @GetMapping("/{conversationId}")
     public ConversationResponse get(@PathVariable UUID conversationId) {
-        return toResponse(getConversationHandler.handle(conversationId));
+        return toResponse(getConversationMetadataHandler.handle(conversationId));
     }
 
     @GetMapping("/{conversationId}/messages")
@@ -202,9 +203,8 @@ public final class ConversationController {
         if (subscription != null) subscription.close();
     }
 
-    private ConversationResponse toResponse(Conversation conversation) {
-        return new ConversationResponse(conversation.id(), conversation.userId(), conversation.createdAt(),
-                conversation.messages().stream().map(this::toResponse).toList());
+    private ConversationResponse toResponse(ConversationMetadataStore.Metadata metadata) {
+        return new ConversationResponse(metadata.conversationId(), metadata.userId(), metadata.createdAt());
     }
 
     private MessageResponse toResponse(Message message) {

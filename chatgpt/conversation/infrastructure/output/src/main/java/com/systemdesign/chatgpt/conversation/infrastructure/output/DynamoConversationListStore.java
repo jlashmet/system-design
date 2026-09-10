@@ -38,22 +38,23 @@ public final class DynamoConversationListStore implements ConversationListStore 
                         ":pk", string("USER#" + subjectId),
                         ":prefix", string(CONVERSATION_PREFIX)))
                 .scanIndexForward(false)
-                .limit(limit);
+                .limit(limit + 1);
         String startSk = decode(cursor);
         if (startSk != null) {
             request.exclusiveStartKey(Map.of(
                     "pk", string("USER#" + subjectId),
                     "sk", string(startSk)));
         }
-        var response = dynamoDb.query(request.build());
-        List<ConversationMetadataStore.Metadata> conversations = response.items().stream()
+        List<Map<String, AttributeValue>> items = dynamoDb.query(request.build()).items();
+        boolean hasMore = items.size() > limit;
+        List<Map<String, AttributeValue>> pageItems = items.stream().limit(limit).toList();
+        List<ConversationMetadataStore.Metadata> conversations = pageItems.stream()
                 .map(item -> new ConversationMetadataStore.Metadata(
                         UUID.fromString(item.get("conversationId").s()),
                         item.get("userId").s(),
                         Instant.ofEpochMilli(Long.parseLong(item.get("createdAt").n()))))
                 .toList();
-        Map<String, AttributeValue> lastKey = response.lastEvaluatedKey();
-        String next = lastKey == null || lastKey.isEmpty() ? null : encode(lastKey.get("sk").s());
+        String next = hasMore && !pageItems.isEmpty() ? encode(pageItems.getLast().get("sk").s()) : null;
         return new Page(conversations, next);
     }
 

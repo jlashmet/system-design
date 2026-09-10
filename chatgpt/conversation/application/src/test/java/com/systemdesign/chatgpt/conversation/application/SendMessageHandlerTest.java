@@ -13,6 +13,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -36,7 +38,7 @@ class SendMessageHandlerTest {
                 .extracting(Message::role, Message::content)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"));
         assertThat(result.generation().status().name()).isEqualTo("PENDING");
-        assertThat(fixture.queue.poll()).contains(result.generation().id());
+        assertThat(fixture.queue.poll()).contains(InferenceJobQueue.Job.firstAttempt(result.generation().id()));
     }
 
     @Test
@@ -51,7 +53,27 @@ class SendMessageHandlerTest {
         assertThat(replay.userMessage().id()).isEqualTo(first.userMessage().id());
         assertThat(replay.generation().id()).isEqualTo(first.generation().id());
         assertThat(replay.conversation().messages()).hasSize(1);
-        assertThat(fixture.queue.poll()).contains(first.generation().id());
+        assertThat(fixture.queue.poll()).contains(InferenceJobQueue.Job.firstAttempt(first.generation().id()));
+    }
+
+    @Test
+    void queueSaturationLeavesDurableTurnForIdempotentRetry() {
+        Fixture fixture = new Fixture();
+        fixture.queue.accepting = false;
+        SendMessageCommand command = new SendMessageCommand(fixture.conversationId, "request-1", "hello");
+
+        assertThatThrownBy(() -> fixture.handler.handle(command))
+                .isInstanceOf(InferenceQueueSaturatedException.class);
+
+        Generation persisted = fixture.store.findByIdempotencyKey(fixture.conversationId, "request-1").orElseThrow();
+        assertThat(fixture.store.findById(fixture.conversationId).orElseThrow().messages()).hasSize(1);
+
+        fixture.queue.accepting = true;
+        SendMessageResult retry = fixture.handler.handle(command);
+
+        assertThat(retry.generation().id()).isEqualTo(persisted.id());
+        assertThat(fixture.queue.poll()).contains(InferenceJobQueue.Job.firstAttempt(persisted.id()));
+        assertThat(fixture.store.findById(fixture.conversationId).orElseThrow().messages()).hasSize(1);
     }
 
     @Test
@@ -83,16 +105,27 @@ class SendMessageHandlerTest {
     }
 
     private static final class FakeQueue implements InferenceJobQueue {
-        private final Queue<UUID> jobs = new ArrayDeque<>();
+        private final Queue<Job> jobs = new ArrayDeque<>();
+        private final List<Job> deadLetters = new ArrayList<>();
+        private boolean accepting = true;
 
         @Override
-        public void enqueue(UUID generationId) {
-            jobs.add(generationId);
+        public boolean tryEnqueue(Job job) {
+            if (!accepting) {
+                return false;
+            }
+            jobs.add(job);
+            return true;
         }
 
         @Override
-        public Optional<UUID> poll() {
+        public Optional<Job> poll() {
             return Optional.ofNullable(jobs.poll());
+        }
+
+        @Override
+        public void deadLetter(Job job, String reason) {
+            deadLetters.add(job);
         }
     }
 

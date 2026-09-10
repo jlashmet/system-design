@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.bootstrap;
 
+import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
@@ -79,6 +80,14 @@ public class ConversationConfiguration {
     @Bean
     GetGenerationHandler getGenerationHandler(TurnRepository turnRepository) {
         return new GetGenerationHandler(turnRepository);
+    }
+
+    @Bean
+    CancelGenerationHandler cancelGenerationHandler(
+            TurnRepository turnRepository,
+            GenerationEventBus generationEventBus,
+            Clock clock) {
+        return new CancelGenerationHandler(turnRepository, generationEventBus, clock);
     }
 
     @Bean

@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
+import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 
 import java.time.Instant;
@@ -14,7 +15,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class InMemoryConversationRepository implements ConversationRepository, TurnRepository {
+public final class InMemoryConversationRepository implements ConversationRepository, TurnRepository, RunningMessageStore {
     private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
     private final Map<TurnKey, Generation> generations = new ConcurrentHashMap<>();
     private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
@@ -81,7 +82,7 @@ public final class InMemoryConversationRepository implements ConversationReposit
     }
 
     @Override
-    public synchronized boolean appendRunningMessages(UUID generationId, List<Message> messages) {
+    public synchronized boolean append(UUID generationId, List<Message> messages) {
         Generation generation = generationsById.get(generationId);
         if (generation == null || generation.status() != GenerationStatus.RUNNING) {
             return false;

@@ -41,6 +41,7 @@ public final class ProcessGenerationHandler {
     private final ToolExecutor toolExecutor;
     private final ConversationTelemetry telemetry;
     private final Duration generationClaimLease;
+    private final Duration heartbeatInterval;
     private final int maxToolRounds;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
@@ -51,7 +52,7 @@ public final class ProcessGenerationHandler {
             int maxToolRounds, Supplier<UUID> idGenerator, Clock clock) {
         this(conversationRepository, turnRepository, runningMessageStore, contextAssembler, modelGateway, eventBus,
                 summaryRefresher, toolExecutor, ConversationTelemetry.noop(), Duration.ofSeconds(60),
-                maxToolRounds, idGenerator, clock);
+                Duration.ofSeconds(20), maxToolRounds, idGenerator, clock);
     }
 
     public ProcessGenerationHandler(ConversationRepository conversationRepository, TurnRepository turnRepository,
@@ -59,7 +60,8 @@ public final class ProcessGenerationHandler {
             GenerationEventBus eventBus, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
             ConversationTelemetry telemetry, int maxToolRounds, Supplier<UUID> idGenerator, Clock clock) {
         this(conversationRepository, turnRepository, runningMessageStore, contextAssembler, modelGateway, eventBus,
-                summaryRefresher, toolExecutor, telemetry, Duration.ofSeconds(60), maxToolRounds, idGenerator, clock);
+                summaryRefresher, toolExecutor, telemetry, Duration.ofSeconds(60), Duration.ofSeconds(20),
+                maxToolRounds, idGenerator, clock);
     }
 
     public ProcessGenerationHandler(ConversationRepository conversationRepository, TurnRepository turnRepository,
@@ -67,6 +69,16 @@ public final class ProcessGenerationHandler {
             GenerationEventBus eventBus, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
             ConversationTelemetry telemetry, Duration generationClaimLease, int maxToolRounds,
             Supplier<UUID> idGenerator, Clock clock) {
+        this(conversationRepository, turnRepository, runningMessageStore, contextAssembler, modelGateway, eventBus,
+                summaryRefresher, toolExecutor, telemetry, generationClaimLease,
+                defaultHeartbeat(generationClaimLease), maxToolRounds, idGenerator, clock);
+    }
+
+    public ProcessGenerationHandler(ConversationRepository conversationRepository, TurnRepository turnRepository,
+            RunningMessageStore runningMessageStore, ContextAssembler contextAssembler, ModelGateway modelGateway,
+            GenerationEventBus eventBus, ConversationSummaryRefresher summaryRefresher, ToolExecutor toolExecutor,
+            ConversationTelemetry telemetry, Duration generationClaimLease, Duration heartbeatInterval,
+            int maxToolRounds, Supplier<UUID> idGenerator, Clock clock) {
         this.conversationRepository = Objects.requireNonNull(conversationRepository, "conversationRepository");
         this.turnRepository = Objects.requireNonNull(turnRepository, "turnRepository");
         this.runningMessageStore = Objects.requireNonNull(runningMessageStore, "runningMessageStore");
@@ -76,9 +88,10 @@ public final class ProcessGenerationHandler {
         this.summaryRefresher = Objects.requireNonNull(summaryRefresher, "summaryRefresher");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor");
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
-        this.generationClaimLease = Objects.requireNonNull(generationClaimLease, "generationClaimLease");
-        if (generationClaimLease.isZero() || generationClaimLease.isNegative()) {
-            throw new IllegalArgumentException("generationClaimLease must be > 0");
+        this.generationClaimLease = positive(generationClaimLease, "generationClaimLease");
+        this.heartbeatInterval = positive(heartbeatInterval, "heartbeatInterval");
+        if (heartbeatInterval.compareTo(generationClaimLease) >= 0) {
+            throw new IllegalArgumentException("heartbeatInterval must be shorter than generationClaimLease");
         }
         if (maxToolRounds < 0) throw new IllegalArgumentException("maxToolRounds must be >= 0");
         this.maxToolRounds = maxToolRounds;
@@ -87,6 +100,11 @@ public final class ProcessGenerationHandler {
     }
 
     public ProcessResult handle(UUID generationId) {
+        return handle(generationId, () -> { });
+    }
+
+    public ProcessResult handle(UUID generationId, Runnable deliveryHeartbeat) {
+        Objects.requireNonNull(deliveryHeartbeat, "deliveryHeartbeat");
         Instant claimedAt = Instant.now(clock);
         Generation generation = turnRepository.claim(
                 generationId, claimedAt, claimedAt.plus(generationClaimLease)).orElse(null);
@@ -98,6 +116,19 @@ public final class ProcessGenerationHandler {
                 case PENDING, RUNNING, FAILED -> ProcessResult.BUSY;
             };
         }
+
+        AtomicBoolean stopHeartbeat = new AtomicBoolean();
+        Thread heartbeat = Thread.ofVirtual().name("generation-heartbeat-" + generation.id()).start(
+                () -> heartbeat(generation, deliveryHeartbeat, stopHeartbeat));
+        try {
+            return processClaimed(generation, claimedAt);
+        } finally {
+            stopHeartbeat.set(true);
+            heartbeat.interrupt();
+        }
+    }
+
+    private ProcessResult processClaimed(Generation generation, Instant claimedAt) {
         telemetry.generationStarted(Duration.between(generation.createdAt(), claimedAt));
         AtomicBoolean firstToken = new AtomicBoolean();
         Conversation conversation = loadConversation(generation);
@@ -162,6 +193,28 @@ public final class ProcessGenerationHandler {
             telemetry.generationFinished(Duration.between(generation.createdAt(), Instant.now(clock)),
                     persisted.status() == GenerationStatus.CANCELLED ? "cancelled" : "failed");
             throw exception;
+        }
+    }
+
+    private void heartbeat(Generation generation, Runnable deliveryHeartbeat, AtomicBoolean stopped) {
+        while (!stopped.get()) {
+            try {
+                Thread.sleep(heartbeatInterval);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (stopped.get()) return;
+            Instant now = Instant.now(clock);
+            boolean renewed = turnRepository.renewClaim(
+                    generation.id(), generation.claimToken(), now, now.plus(generationClaimLease));
+            if (!renewed) return;
+            try {
+                deliveryHeartbeat.run();
+            } catch (RuntimeException ignored) {
+                // The generation lease remains fenced. If queue visibility renewal fails, redelivery may occur;
+                // the active generation claim prevents concurrent writes and a later heartbeat can retry.
+            }
         }
     }
 
@@ -246,6 +299,20 @@ public final class ProcessGenerationHandler {
     private boolean isCancelled(UUID generationId) {
         return turnRepository.findGenerationById(generationId).map(Generation::status)
                 .filter(status -> status == GenerationStatus.CANCELLED).isPresent();
+    }
+
+    private static Duration defaultHeartbeat(Duration lease) {
+        Objects.requireNonNull(lease, "lease");
+        Duration heartbeat = lease.dividedBy(3);
+        return heartbeat.isZero() ? Duration.ofMillis(1) : heartbeat;
+    }
+
+    private static Duration positive(Duration duration, String name) {
+        Objects.requireNonNull(duration, name);
+        if (duration.isZero() || duration.isNegative()) {
+            throw new IllegalArgumentException(name + " must be > 0");
+        }
+        return duration;
     }
 
     private static final class GenerationCancelledException extends RuntimeException { }

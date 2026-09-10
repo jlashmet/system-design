@@ -8,11 +8,17 @@ import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
+import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
+import com.systemdesign.chatgpt.conversation.domain.ToolCall;
+import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
+import com.systemdesign.chatgpt.conversation.domain.ToolResult;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -22,28 +28,40 @@ import java.util.function.Supplier;
 public final class ProcessGenerationHandler {
     private final ConversationRepository conversationRepository;
     private final TurnRepository turnRepository;
+    private final RunningMessageStore runningMessageStore;
     private final ContextAssembler contextAssembler;
     private final ModelGateway modelGateway;
     private final GenerationEventBus eventBus;
     private final ConversationSummaryRefresher summaryRefresher;
+    private final ToolExecutor toolExecutor;
+    private final int maxToolRounds;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
 
     public ProcessGenerationHandler(
             ConversationRepository conversationRepository,
             TurnRepository turnRepository,
+            RunningMessageStore runningMessageStore,
             ContextAssembler contextAssembler,
             ModelGateway modelGateway,
             GenerationEventBus eventBus,
             ConversationSummaryRefresher summaryRefresher,
+            ToolExecutor toolExecutor,
+            int maxToolRounds,
             Supplier<UUID> idGenerator,
             Clock clock) {
         this.conversationRepository = Objects.requireNonNull(conversationRepository, "conversationRepository");
         this.turnRepository = Objects.requireNonNull(turnRepository, "turnRepository");
+        this.runningMessageStore = Objects.requireNonNull(runningMessageStore, "runningMessageStore");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.modelGateway = Objects.requireNonNull(modelGateway, "modelGateway");
         this.eventBus = Objects.requireNonNull(eventBus, "eventBus");
         this.summaryRefresher = Objects.requireNonNull(summaryRefresher, "summaryRefresher");
+        this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor");
+        if (maxToolRounds < 0) {
+            throw new IllegalArgumentException("maxToolRounds must be >= 0");
+        }
+        this.maxToolRounds = maxToolRounds;
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -62,28 +80,36 @@ public final class ProcessGenerationHandler {
                 .orElseThrow(() -> new NoSuchElementException("conversation not found: " + generation.conversationId()));
 
         try {
-            List<Message> context = contextAssembler.assemble(conversation, generation);
-            ModelGateway.Completion completion = modelGateway.stream(
-                    context,
-                    generation.requiredCapabilities(),
-                    delta -> publishDeltaUnlessCancelled(generation.id(), delta));
-            if (isCancelled(generation.id())) {
-                return;
-            }
+            List<ToolDefinition> tools = generation.requiredCapabilities().contains(ModelCapability.TOOL_CALLING)
+                    ? toolExecutor.definitionsFor(conversation.userId(), conversation.id())
+                    : List.of();
 
-            Instant completedAt = Instant.now(clock);
-            Message assistantMessage = new Message(
-                    idGenerator.get(),
-                    MessageRole.ASSISTANT,
-                    completion.content(),
-                    completedAt);
-            conversation.append(assistantMessage);
-            turnRepository.complete(conversation, generation.completed(assistantMessage.id(), completedAt));
+            for (int round = 0; ; round++) {
+                List<Message> context = contextAssembler.assemble(conversation, generation);
+                ModelGateway.TurnResult turn = modelGateway.streamTurn(
+                        context,
+                        generation.requiredCapabilities(),
+                        tools,
+                        delta -> publishDeltaUnlessCancelled(generation.id(), delta));
 
-            Generation finalState = turnRepository.findGenerationById(generation.id()).orElseThrow();
-            if (finalState.status() == GenerationStatus.COMPLETED) {
-                eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
-                refreshSummaryBestEffort(conversation);
+                if (turn instanceof ModelGateway.FinalResponse finalResponse) {
+                    completeGeneration(conversation, generation, finalResponse.completion());
+                    return;
+                }
+
+                ModelGateway.ToolRequests requests = (ModelGateway.ToolRequests) turn;
+                if (tools.isEmpty()) {
+                    throw new IllegalStateException("model requested tools when no authorized tools were available");
+                }
+                if (round >= maxToolRounds) {
+                    throw new ToolRoundLimitExceededException(maxToolRounds);
+                }
+
+                List<Message> transcript = executeToolRound(conversation, requests.calls());
+                if (!runningMessageStore.append(generation.id(), transcript)) {
+                    return;
+                }
+                transcript.forEach(conversation::append);
             }
         } catch (GenerationCancelledException ignored) {
             // Cancellation is a normal terminal outcome and is already published by the cancel use case.
@@ -93,6 +119,63 @@ public final class ProcessGenerationHandler {
                 eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
             }
             throw exception;
+        }
+    }
+
+    private List<Message> executeToolRound(Conversation conversation, List<ToolCall> calls) {
+        Instant base = Instant.now(clock);
+        List<Message> messages = new ArrayList<>(calls.size() + 1);
+        messages.add(new Message(
+                idGenerator.get(),
+                MessageRole.ASSISTANT,
+                formatToolRequests(calls),
+                base));
+        int index = 1;
+        for (ToolCall call : calls) {
+            ToolResult result = toolExecutor.execute(conversation.userId(), conversation.id(), call);
+            messages.add(new Message(
+                    idGenerator.get(),
+                    MessageRole.TOOL,
+                    formatToolResult(call, result),
+                    base.plusNanos(index++)));
+        }
+        return List.copyOf(messages);
+    }
+
+    private String formatToolRequests(List<ToolCall> calls) {
+        return "Tool requests:\n" + calls.stream()
+                .map(call -> call.id() + ":" + call.name())
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private String formatToolResult(ToolCall call, ToolResult result) {
+        return "tool_call_id=" + call.id()
+                + "\ntool=" + call.name()
+                + "\nstatus=" + result.status().name().toLowerCase()
+                + "\nresult=" + result.content();
+    }
+
+    private void completeGeneration(
+            Conversation conversation,
+            Generation generation,
+            ModelGateway.Completion completion) {
+        if (isCancelled(generation.id())) {
+            return;
+        }
+
+        Instant completedAt = Instant.now(clock);
+        Message assistantMessage = new Message(
+                idGenerator.get(),
+                MessageRole.ASSISTANT,
+                completion.content(),
+                completedAt);
+        conversation.append(assistantMessage);
+        turnRepository.complete(conversation, generation.completed(assistantMessage.id(), completedAt));
+
+        Generation finalState = turnRepository.findGenerationById(generation.id()).orElseThrow();
+        if (finalState.status() == GenerationStatus.COMPLETED) {
+            eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
+            refreshSummaryBestEffort(conversation);
         }
     }
 

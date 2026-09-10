@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -54,8 +55,10 @@ public final class ConversationController {
     @PostMapping("/{conversationId}/messages")
     public ConversationResponse sendMessage(
             @PathVariable UUID conversationId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody SendMessageRequest request) {
-        return toResponse(sendMessageHandler.handle(new SendMessageCommand(conversationId, request.content())).conversation());
+        return toResponse(sendMessageHandler.handle(
+                new SendMessageCommand(conversationId, idempotencyKey, request.content())).conversation());
     }
 
     private ConversationResponse toResponse(Conversation conversation) {

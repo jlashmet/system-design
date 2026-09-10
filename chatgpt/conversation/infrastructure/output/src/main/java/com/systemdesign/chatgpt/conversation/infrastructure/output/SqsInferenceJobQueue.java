@@ -1,6 +1,7 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.output;
 
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
+import com.systemdesign.chatgpt.conversation.infrastructure.common.InferenceJobCodec;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.ChangeMessageVisibilityRequest;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
@@ -11,11 +12,8 @@ import software.amazon.awssdk.services.sqs.model.SqsException;
 
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
 
 public final class SqsInferenceJobQueue implements InferenceJobQueue {
-    private static final String SEPARATOR = ":";
-
     private final SqsClient sqs;
     private final String queueUrl;
     private final String deadLetterQueueUrl;
@@ -42,7 +40,8 @@ public final class SqsInferenceJobQueue implements InferenceJobQueue {
     public boolean tryEnqueue(Job job) {
         Objects.requireNonNull(job, "job");
         try {
-            sqs.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl).messageBody(encode(job)).build());
+            sqs.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl)
+                    .messageBody(InferenceJobCodec.encode(job)).build());
             return true;
         } catch (SqsException exception) {
             return false;
@@ -56,7 +55,7 @@ public final class SqsInferenceJobQueue implements InferenceJobQueue {
                 .visibilityTimeout(visibilityTimeoutSeconds).waitTimeSeconds(waitTimeSeconds).build());
         if (response.messages().isEmpty()) return Optional.empty();
         Message message = response.messages().getFirst();
-        return Optional.of(new Delivery(decode(message.body()), message.receiptHandle()));
+        return Optional.of(new Delivery(InferenceJobCodec.decode(message.body()), message.receiptHandle()));
     }
 
     @Override
@@ -82,19 +81,10 @@ public final class SqsInferenceJobQueue implements InferenceJobQueue {
         String normalizedReason = reason == null ? "" : reason;
         sqs.sendMessage(SendMessageRequest.builder()
                 .queueUrl(deadLetterQueueUrl)
-                .messageBody(encode(job) + "\n" + normalizedReason)
+                .messageBody(InferenceJobCodec.encode(job) + "\n" + normalizedReason)
                 .build());
     }
 
-    private static String encode(Job job) { return job.generationId() + SEPARATOR + job.attempt(); }
-    private static Job decode(String body) {
-        String firstLine = Objects.requireNonNull(body, "body").lines().findFirst().orElse("");
-        int separator = firstLine.lastIndexOf(SEPARATOR);
-        if (separator <= 0 || separator == firstLine.length() - 1)
-            throw new IllegalArgumentException("invalid inference job payload");
-        return new Job(UUID.fromString(firstLine.substring(0, separator)),
-                Integer.parseInt(firstLine.substring(separator + 1)));
-    }
     private static String requireText(String value, String name) {
         if (value == null || value.isBlank()) throw new IllegalArgumentException(name + " must not be blank");
         return value;

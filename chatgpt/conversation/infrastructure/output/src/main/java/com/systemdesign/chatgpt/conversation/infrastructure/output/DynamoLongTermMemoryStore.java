@@ -61,12 +61,16 @@ public final class DynamoLongTermMemoryStore implements LongTermMemoryStore {
         if (!existing.isEmpty()) {
             String oldUserId = existing.get("userId").s();
             Instant oldUpdatedAt = Instant.ofEpochMilli(Long.parseLong(existing.get("updatedAt").n()));
-            writes.add(TransactWriteItem.builder().delete(Delete.builder()
-                    .tableName(tableName)
-                    .key(Map.of(
-                            "pk", string(userPk(oldUserId)),
-                            "sk", string(indexSk(oldUpdatedAt, memory.id()))))
-                    .build()).build());
+            String oldPk = userPk(oldUserId);
+            String oldSk = indexSk(oldUpdatedAt, memory.id());
+            String newPk = userPk(memory.userId());
+            String newSk = indexSk(memory.updatedAt(), memory.id());
+            if (!oldPk.equals(newPk) || !oldSk.equals(newSk)) {
+                writes.add(TransactWriteItem.builder().delete(Delete.builder()
+                        .tableName(tableName)
+                        .key(Map.of("pk", string(oldPk), "sk", string(oldSk)))
+                        .build()).build());
+            }
         }
         writes.add(TransactWriteItem.builder().put(Put.builder()
                 .tableName(tableName)

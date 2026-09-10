@@ -11,31 +11,25 @@ public interface InferenceJobQueue {
 
     void acknowledge(Delivery delivery);
 
+    default void renew(Delivery delivery) {
+    }
+
     void deadLetter(Job job, String reason);
 
     record Job(UUID generationId, int attempt) {
         public Job {
             Objects.requireNonNull(generationId, "generationId");
-            if (attempt < 1) {
-                throw new IllegalArgumentException("attempt must be >= 1");
-            }
+            if (attempt < 1) throw new IllegalArgumentException("attempt must be >= 1");
         }
 
-        public static Job firstAttempt(UUID generationId) {
-            return new Job(generationId, 1);
-        }
-
-        public Job nextAttempt() {
-            return new Job(generationId, attempt + 1);
-        }
+        public static Job firstAttempt(UUID generationId) { return new Job(generationId, 1); }
+        public Job nextAttempt() { return new Job(generationId, attempt + 1); }
     }
 
     record Delivery(Job job, String receipt) {
         public Delivery {
             Objects.requireNonNull(job, "job");
-            if (receipt == null || receipt.isBlank()) {
-                throw new IllegalArgumentException("receipt must not be blank");
-            }
+            if (receipt == null || receipt.isBlank()) throw new IllegalArgumentException("receipt must not be blank");
         }
     }
 }

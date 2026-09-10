@@ -9,6 +9,7 @@ import com.systemdesign.chatgpt.conversation.application.CreateConversationHandl
 import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.ListConversationsHandler;
 import com.systemdesign.chatgpt.conversation.application.LongTermMemoryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.RetrievalContextSource;
@@ -17,6 +18,7 @@ import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.application.ToolExecutor;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.ContextSource;
+import com.systemdesign.chatgpt.conversation.domain.ConversationListStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMessagePageStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
@@ -86,6 +88,10 @@ public class ConversationConfiguration {
     @Bean Supplier<UUID> idGenerator() { return UUID::randomUUID; }
     @Bean CreateConversationHandler createConversationHandler(ConversationRepository repository, Supplier<UUID> ids, Clock clock) {
         return new CreateConversationHandler(repository, ids, clock);
+    }
+    @Bean ListConversationsHandler listConversationsHandler(ConversationListStore store,
+            @Value("${chatgpt.api.max-conversation-page-size:100}") int maxPageSize) {
+        return new ListConversationsHandler(store, maxPageSize);
     }
     @Bean ConversationAccessGuard conversationAccessGuard(ConversationMetadataStore store) { return new ConversationAccessGuard(store); }
     @Bean GetConversationMetadataHandler getConversationMetadataHandler(ConversationMetadataStore store) {

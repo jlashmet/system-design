@@ -26,7 +26,7 @@ public interface ConversationSummaryDeltaStore {
         @Override
         public int compareTo(Position other) {
             int time = createdAt.compareTo(other.createdAt);
-            return time != 0 ? time : messageId.compareTo(other.messageId);
+            return time != 0 ? time : messageId.toString().compareTo(other.messageId.toString());
         }
     }
 }

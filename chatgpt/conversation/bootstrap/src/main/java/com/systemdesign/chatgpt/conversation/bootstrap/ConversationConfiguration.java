@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.bootstrap;
 
+import com.systemdesign.chatgpt.conversation.application.BudgetedContextAssembler;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
@@ -7,14 +8,17 @@ import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.RoutingModelGateway;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
+import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicTokenEstimator;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
@@ -61,6 +65,18 @@ public class ConversationConfiguration {
     @Bean
     GenerationEventBus generationEventBus() {
         return new InMemoryGenerationEventBus();
+    }
+
+    @Bean
+    TokenEstimator tokenEstimator() {
+        return new HeuristicTokenEstimator();
+    }
+
+    @Bean
+    ContextAssembler contextAssembler(
+            TokenEstimator tokenEstimator,
+            @Value("${chatgpt.context.max-input-tokens:8192}") int maxInputTokens) {
+        return new BudgetedContextAssembler(tokenEstimator, maxInputTokens);
     }
 
     @Bean
@@ -125,11 +141,18 @@ public class ConversationConfiguration {
     ProcessGenerationHandler processGenerationHandler(
             ConversationRepository repository,
             TurnRepository turnRepository,
+            ContextAssembler contextAssembler,
             ModelGateway modelGateway,
             GenerationEventBus generationEventBus,
             Supplier<UUID> idGenerator,
             Clock clock) {
         return new ProcessGenerationHandler(
-                repository, turnRepository, modelGateway, generationEventBus, idGenerator, clock);
+                repository,
+                turnRepository,
+                contextAssembler,
+                modelGateway,
+                generationEventBus,
+                idGenerator,
+                clock);
     }
 }

@@ -68,6 +68,14 @@ Message requests may include `requiredCapabilities` such as `vision` or `tool_ca
 
 New generations are admitted through an `InferenceQuota` port before durable turn creation. The development adapter provides an idempotency-aware fixed one-minute window keyed by user and request key (`chatgpt.inference.requests-per-minute`, default `60`). Quota exhaustion returns `429 Too Many Requests` with `Retry-After: 60`. Existing idempotent generations do not consume quota again.
 
+### 8. Generation-scoped context assembly and token budgeting
+
+The worker no longer sends the whole conversation directly to the model. A `ContextAssembler` owns the inference context, with a `TokenEstimator` port separating model-token accounting from context policy.
+
+`BudgetedContextAssembler` anchors the context at the generation's own durable user message, so a delayed asynchronous worker never sees messages submitted after that generation. It reserves system context first, then fills the remaining input budget with a contiguous suffix of the most recent eligible non-system messages. The current input budget is configurable with `chatgpt.context.max-input-tokens` (default `8192`). If required system context or the current user message alone cannot fit, context assembly fails explicitly instead of silently truncating required input.
+
+The development `HeuristicTokenEstimator` uses a deliberately simple estimate; a production model-family tokenizer can replace it behind the same port. This context seam is also where summaries, retrieval results, and long-term memory sources will be composed next.
+
 ### HTTP endpoints
 
 ```text
@@ -81,14 +89,14 @@ GET  /v1/conversations/{conversationId}/generations/{generationId}/events
 POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 ```
 
-The development composition uses in-memory storage, quota, queue/event adapters, and a deterministic model so the vertical slices remain runnable without external credentials.
+The development composition uses in-memory storage, quota, queue/event adapters, a heuristic token estimator, and a deterministic model so the vertical slices remain runnable without external credentials.
 
 ## Next implementation slices
 
-1. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
+1. Extend context assembly with summaries, retrieval, and long-term memory as explicit prioritized context sources.
 2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
 3. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
-4. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
+4. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
 
 ## Build
 

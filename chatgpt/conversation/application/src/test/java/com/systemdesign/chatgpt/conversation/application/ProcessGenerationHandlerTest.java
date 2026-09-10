@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,6 +38,21 @@ class ProcessGenerationHandlerTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"),
                         org.assertj.core.groups.Tuple.tuple(MessageRole.ASSISTANT, "assistant: hello"));
+    }
+
+    @Test
+    void duplicateDeliveryDoesNotInvokeProviderTwice() {
+        AtomicInteger calls = new AtomicInteger();
+        Fixture fixture = new Fixture(messages -> {
+            calls.incrementAndGet();
+            return new ModelGateway.Completion("test-model", "assistant: hello");
+        });
+
+        fixture.handler.handle(fixture.generation.id());
+        fixture.handler.handle(fixture.generation.id());
+
+        assertThat(calls).hasValue(1);
+        assertThat(fixture.store.findById(fixture.conversationId).orElseThrow().messages()).hasSize(2);
     }
 
     @Test
@@ -101,7 +117,7 @@ class ProcessGenerationHandlerTest {
         }
 
         @Override
-        public BeginResult begin(Conversation conversation, Generation generation) {
+        public synchronized BeginResult begin(Conversation conversation, Generation generation) {
             String key = generation.conversationId() + ":" + generation.idempotencyKey();
             UUID existingId = keys.putIfAbsent(key, generation.id());
             if (existingId != null) {
@@ -110,6 +126,17 @@ class ProcessGenerationHandlerTest {
             conversations.put(conversation.id(), conversation);
             generations.put(generation.id(), generation);
             return new BeginResult(generation, true);
+        }
+
+        @Override
+        public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
+            Generation current = generations.get(generationId);
+            if (current == null || current.status() == GenerationStatus.RUNNING || current.status() == GenerationStatus.COMPLETED) {
+                return Optional.empty();
+            }
+            Generation running = current.running(startedAt);
+            generations.put(generationId, running);
+            return Optional.of(running);
         }
 
         @Override

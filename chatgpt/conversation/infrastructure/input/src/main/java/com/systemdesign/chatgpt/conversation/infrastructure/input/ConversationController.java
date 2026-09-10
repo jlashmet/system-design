@@ -19,6 +19,7 @@ import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
+import com.systemdesign.chatgpt.conversation.domain.ReplayableGenerationEventBus;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,6 +35,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -45,7 +47,7 @@ public final class ConversationController {
     private final GetGenerationHandler getGenerationHandler;
     private final CancelGenerationHandler cancelGenerationHandler;
     private final SendMessageHandler sendMessageHandler;
-    private final GenerationEventBus generationEventBus;
+    private final ReplayableGenerationEventBus generationEventBus;
 
     public ConversationController(
             CreateConversationHandler createConversationHandler,
@@ -53,7 +55,7 @@ public final class ConversationController {
             GetGenerationHandler getGenerationHandler,
             CancelGenerationHandler cancelGenerationHandler,
             SendMessageHandler sendMessageHandler,
-            GenerationEventBus generationEventBus) {
+            ReplayableGenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
         this.getConversationHandler = getConversationHandler;
         this.getGenerationHandler = getGenerationHandler;
@@ -102,39 +104,67 @@ public final class ConversationController {
     }
 
     @GetMapping(value = "/{conversationId}/generations/{generationId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamGeneration(@PathVariable UUID conversationId, @PathVariable UUID generationId) {
+    public SseEmitter streamGeneration(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID generationId,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         Generation current = getGenerationHandler.handle(conversationId, generationId);
+        long afterSequence = parseLastEventId(lastEventId);
         SseEmitter emitter = new SseEmitter(30_000L);
         AtomicReference<GenerationEventBus.Subscription> subscriptionRef = new AtomicReference<>();
+        AtomicBoolean terminalDelivered = new AtomicBoolean(false);
 
-        GenerationEventBus.Subscription subscription = generationEventBus.subscribe(generationId, event -> {
-            try {
-                emitter.send(SseEmitter.event().name(event.type().name().toLowerCase()).data(event.data()));
-                if (isTerminal(event.type())) {
-                    close(subscriptionRef);
-                    emitter.complete();
-                }
-            } catch (Exception exception) {
-                close(subscriptionRef);
-                emitter.completeWithError(exception);
-            }
-        });
+        try {
+            emitter.send(SseEmitter.event().name("generation").data(toResponse(current)));
+        } catch (Exception exception) {
+            emitter.completeWithError(exception);
+            return emitter;
+        }
+
+        GenerationEventBus.Subscription subscription = generationEventBus.subscribe(
+                generationId,
+                afterSequence,
+                recorded -> {
+                    try {
+                        GenerationEventBus.Event event = recorded.event();
+                        emitter.send(SseEmitter.event()
+                                .id(Long.toString(recorded.sequence()))
+                                .name(event.type().name().toLowerCase())
+                                .data(event.data()));
+                        if (isTerminal(event.type())) {
+                            terminalDelivered.set(true);
+                            close(subscriptionRef);
+                            emitter.complete();
+                        }
+                    } catch (Exception exception) {
+                        close(subscriptionRef);
+                        emitter.completeWithError(exception);
+                    }
+                });
         subscriptionRef.set(subscription);
+
         emitter.onCompletion(() -> close(subscriptionRef));
         emitter.onTimeout(() -> close(subscriptionRef));
         emitter.onError(ignored -> close(subscriptionRef));
 
-        try {
-            emitter.send(SseEmitter.event().name("generation").data(toResponse(current)));
-            if (isTerminal(current.status())) {
-                close(subscriptionRef);
-                emitter.complete();
-            }
-        } catch (Exception exception) {
+        if (terminalDelivered.get()) {
             close(subscriptionRef);
-            emitter.completeWithError(exception);
+        } else if (isTerminal(current.status())) {
+            close(subscriptionRef);
+            emitter.complete();
         }
         return emitter;
+    }
+
+    private long parseLastEventId(String lastEventId) {
+        if (lastEventId == null || lastEventId.isBlank()) {
+            return 0L;
+        }
+        long value = Long.parseLong(lastEventId);
+        if (value < 0) {
+            throw new IllegalArgumentException("Last-Event-ID must be >= 0");
+        }
+        return value;
     }
 
     private Set<ModelCapability> parseCapabilities(java.util.List<String> values) {

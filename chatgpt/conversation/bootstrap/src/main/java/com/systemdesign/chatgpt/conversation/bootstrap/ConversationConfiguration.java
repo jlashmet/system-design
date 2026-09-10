@@ -31,7 +31,6 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.ExtractiveCon
 import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicTokenEstimator;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
-import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryLongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryRetrievalContextStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,11 +49,6 @@ public class ConversationConfiguration {
     InferenceQuota inferenceQuota(
             @Value("${chatgpt.inference.requests-per-minute:60}") int maxRequests) {
         return new InMemoryFixedWindowInferenceQuota(maxRequests, Duration.ofMinutes(1));
-    }
-
-    @Bean
-    GenerationEventBus generationEventBus() {
-        return new InMemoryGenerationEventBus();
     }
 
     @Bean

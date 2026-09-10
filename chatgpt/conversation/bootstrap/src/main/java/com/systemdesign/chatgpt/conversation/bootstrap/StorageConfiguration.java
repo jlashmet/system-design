@@ -2,10 +2,13 @@ package com.systemdesign.chatgpt.conversation.bootstrap;
 
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
+import com.systemdesign.chatgpt.conversation.domain.ToolInvocationStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoConversationTurnStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoRunningMessageStore;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.DynamoToolInvocationStore;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryToolInvocationStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -19,29 +22,14 @@ import java.net.URI;
 
 @Configuration(proxyBeanMethods = false)
 public class StorageConfiguration {
-
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnProperty(name = "chatgpt.storage.mode", havingValue = "memory", matchIfMissing = true)
     static class InMemoryStorageConfiguration {
-        @Bean
-        InMemoryConversationRepository conversationStore() {
-            return new InMemoryConversationRepository();
-        }
-
-        @Bean
-        ConversationRepository conversationRepository(InMemoryConversationRepository store) {
-            return store;
-        }
-
-        @Bean
-        TurnRepository turnRepository(InMemoryConversationRepository store) {
-            return store;
-        }
-
-        @Bean
-        RunningMessageStore runningMessageStore(InMemoryConversationRepository store) {
-            return store;
-        }
+        @Bean InMemoryConversationRepository conversationStore() { return new InMemoryConversationRepository(); }
+        @Bean ConversationRepository conversationRepository(InMemoryConversationRepository store) { return store; }
+        @Bean TurnRepository turnRepository(InMemoryConversationRepository store) { return store; }
+        @Bean RunningMessageStore runningMessageStore(InMemoryConversationRepository store) { return store; }
+        @Bean ToolInvocationStore toolInvocationStore() { return new InMemoryToolInvocationStore(); }
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -52,36 +40,25 @@ public class StorageConfiguration {
                 @Value("${chatgpt.storage.dynamo.region:us-east-1}") String region,
                 @Value("${chatgpt.storage.dynamo.endpoint:}") String endpoint) {
             DynamoDbClientBuilder builder = DynamoDbClient.builder()
-                    .region(Region.of(region))
-                    .credentialsProvider(DefaultCredentialsProvider.create());
-            if (endpoint != null && !endpoint.isBlank()) {
-                builder.endpointOverride(URI.create(endpoint));
-            }
+                    .region(Region.of(region)).credentialsProvider(DefaultCredentialsProvider.create());
+            if (endpoint != null && !endpoint.isBlank()) builder.endpointOverride(URI.create(endpoint));
             return builder.build();
         }
 
         @Bean
-        DynamoConversationTurnStore conversationStore(
-                DynamoDbClient conversationDynamoDbClient,
+        DynamoConversationTurnStore conversationStore(DynamoDbClient client,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoConversationTurnStore(conversationDynamoDbClient, tableName);
+            return new DynamoConversationTurnStore(client, tableName);
         }
-
-        @Bean
-        ConversationRepository conversationRepository(DynamoConversationTurnStore store) {
-            return store;
-        }
-
-        @Bean
-        TurnRepository turnRepository(DynamoConversationTurnStore store) {
-            return store;
-        }
-
-        @Bean
-        RunningMessageStore runningMessageStore(
-                DynamoDbClient conversationDynamoDbClient,
+        @Bean ConversationRepository conversationRepository(DynamoConversationTurnStore store) { return store; }
+        @Bean TurnRepository turnRepository(DynamoConversationTurnStore store) { return store; }
+        @Bean RunningMessageStore runningMessageStore(DynamoDbClient client,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoRunningMessageStore(conversationDynamoDbClient, tableName);
+            return new DynamoRunningMessageStore(client, tableName);
+        }
+        @Bean ToolInvocationStore toolInvocationStore(DynamoDbClient client,
+                @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
+            return new DynamoToolInvocationStore(client, tableName);
         }
     }
 }

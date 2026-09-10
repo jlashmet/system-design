@@ -69,6 +69,12 @@ The model gateway exposes a streaming callback. `ProcessGenerationHandler` publi
 
 Provider failures leave the generation in `FAILED` and the worker re-enqueues the same generation with an incremented attempt. Retries stop at `chatgpt.inference.max-attempts` (default `3`), after which the job is sent to the queue's dead-letter sink. If even retry admission is saturated, that retry is dead-lettered rather than silently lost.
 
+### 6. Health- and cost-aware model routing
+
+Model providers implement `ModelEndpoint` and advertise a `ModelProfile`: supported capabilities plus input/output cost metadata. `RoutingModelGateway` filters out unhealthy or incapable providers, then chooses the lowest-cost eligible endpoint and falls back when a provider fails before producing output.
+
+Streaming fallback has a stricter correctness rule: the router may switch providers only before the first delta is emitted. Once partial output has reached the client, a provider failure is propagated instead of mixing two providers' answers in one stream. The current deterministic development endpoint advertises text-generation and streaming capabilities; real provider adapters can be added without changing conversation or worker code.
+
 ### HTTP endpoints
 
 ```text
@@ -85,11 +91,11 @@ The development composition uses in-memory queue/event adapters and a determinis
 
 ## Next implementation slices
 
-1. Add model routing: model capability/cost policy, provider health, fallback policy, and per-tenant/user quotas.
+1. Add per-tenant/user quotas and explicit routing requirements per generation.
 2. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
 3. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
 4. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
-5. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, retries, cancellations, and end-to-end turn latency.
+5. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, routing/fallback decisions, retries, cancellations, and end-to-end turn latency.
 
 ## Build
 

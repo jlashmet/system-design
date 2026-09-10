@@ -15,6 +15,7 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.Deterministic
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryInferenceJobQueue;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -40,8 +41,9 @@ public class ConversationConfiguration {
     }
 
     @Bean
-    InferenceJobQueue inferenceJobQueue() {
-        return new InMemoryInferenceJobQueue();
+    InferenceJobQueue inferenceJobQueue(
+            @Value("${chatgpt.inference.queue-capacity:1024}") int capacity) {
+        return new InMemoryInferenceJobQueue(capacity);
     }
 
     @Bean

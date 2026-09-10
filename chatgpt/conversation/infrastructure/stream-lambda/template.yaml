@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ChatGPT inference handoff from DynamoDB Streams through Lambda to SQS.
+
+Parameters:
+  ConversationStreamArn:
+    Type: String
+    Description: Stream ARN for the conversation DynamoDB table. Enable Streams with NEW_IMAGE.
+  InferenceQueueUrl:
+    Type: String
+    Description: URL of the existing inference SQS queue.
+  InferenceQueueArn:
+    Type: String
+    Description: ARN of the existing inference SQS queue.
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing the shaded stream-lambda artifact.
+  LambdaCodeKey:
+    Type: String
+    Description: S3 key for conversation-infrastructure-stream-lambda-*-lambda.jar.
+  StartingPosition:
+    Type: String
+    Default: TRIM_HORIZON
+    AllowedValues: [TRIM_HORIZON, LATEST]
+    Description: DynamoDB Streams starting position. TRIM_HORIZON is safer for a newly attached consumer within stream retention.
+
+Resources:
+  InferenceStreamLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ReadConversationStreamAndSendInference
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeStream
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:ListStreams
+                Resource: !Ref ConversationStreamArn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !Ref InferenceQueueArn
+
+  InferenceStreamLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: java21
+      Handler: com.systemdesign.chatgpt.conversation.infrastructure.streamlambda.DynamoGenerationStreamHandler::handleRequest
+      Role: !GetAtt InferenceStreamLambdaRole.Arn
+      MemorySize: 512
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Environment:
+        Variables:
+          INFERENCE_QUEUE_URL: !Ref InferenceQueueUrl
+
+  InferenceStreamMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !Ref ConversationStreamArn
+      FunctionName: !Ref InferenceStreamLambda
+      StartingPosition: !Ref StartingPosition
+      BatchSize: 100
+      MaximumBatchingWindowInSeconds: 1
+      BisectBatchOnFunctionError: true
+      MaximumRecordAgeInSeconds: 86400
+      MaximumRetryAttempts: -1
+      FilterCriteria:
+        Filters:
+          - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"entityType":{"S":["GENERATION"]},"status":{"S":["PENDING"]}}}}'
+
+Outputs:
+  InferenceStreamLambdaArn:
+    Value: !GetAtt InferenceStreamLambda.Arn

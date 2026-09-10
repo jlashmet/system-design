@@ -69,7 +69,7 @@ class ToolExecutorTest {
     @Test
     void timesOutSlowToolAndBoundsLargeResults() {
         ToolHandler slow = new ToolHandler() {
-            @Override public ToolDefinition definition() { return definition("slow", List.of()); }
+            @Override public ToolDefinition definition() { return toolDefinition("slow", List.of()); }
             @Override public ToolResult execute(ToolCall call) {
                 try {
                     Thread.sleep(Duration.ofSeconds(5));
@@ -80,7 +80,7 @@ class ToolExecutorTest {
             }
         };
         ToolHandler large = new ToolHandler() {
-            @Override public ToolDefinition definition() { return definition("large", List.of()); }
+            @Override public ToolDefinition definition() { return toolDefinition("large", List.of()); }
             @Override public ToolResult execute(ToolCall call) {
                 return new ToolResult(call.id(), ToolResult.Status.SUCCESS, "1234567890");
             }
@@ -98,7 +98,7 @@ class ToolExecutorTest {
     private ToolHandler echoHandler() {
         return new ToolHandler() {
             @Override public ToolDefinition definition() {
-                return definition("echo", List.of(
+                return toolDefinition("echo", List.of(
                         new ToolDefinition.Parameter("text", ToolDefinition.Type.STRING, true, "Text to echo"),
                         new ToolDefinition.Parameter("count", ToolDefinition.Type.INTEGER, false, "Repeat count")));
             }
@@ -116,7 +116,7 @@ class ToolExecutorTest {
         return (userId, id, toolName) -> true;
     }
 
-    private ToolDefinition definition(String name, List<ToolDefinition.Parameter> parameters) {
+    private ToolDefinition toolDefinition(String name, List<ToolDefinition.Parameter> parameters) {
         return new ToolDefinition(name, name + " tool", parameters);
     }
 
@@ -124,7 +124,7 @@ class ToolExecutorTest {
         private int calls;
 
         @Override public ToolDefinition definition() {
-            return definition("echo", List.of(
+            return toolDefinition("echo", List.of(
                     new ToolDefinition.Parameter("text", ToolDefinition.Type.STRING, true, "Text to echo")));
         }
 

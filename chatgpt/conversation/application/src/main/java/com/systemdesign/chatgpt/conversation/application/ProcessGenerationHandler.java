@@ -56,6 +56,7 @@ public final class ProcessGenerationHandler {
         try {
             ModelGateway.Completion completion = modelGateway.stream(
                     conversation.messages(),
+                    generation.requiredCapabilities(),
                     delta -> publishDeltaUnlessCancelled(generation.id(), delta));
             if (isCancelled(generation.id())) {
                 return;

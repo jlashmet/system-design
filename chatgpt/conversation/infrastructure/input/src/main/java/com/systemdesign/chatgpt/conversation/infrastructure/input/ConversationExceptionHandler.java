@@ -1,6 +1,7 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.input;
 
 import com.systemdesign.chatgpt.conversation.application.InferenceQueueSaturatedException;
+import com.systemdesign.chatgpt.conversation.application.InferenceQuotaExceededException;
 import com.systemdesign.chatgpt.conversation.application.TurnConflictException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +21,13 @@ public final class ConversationExceptionHandler {
     @ExceptionHandler(TurnConflictException.class)
     public ResponseEntity<Map<String, String>> conflict(TurnConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(InferenceQuotaExceededException.class)
+    public ResponseEntity<Map<String, String>> quotaExceeded(InferenceQuotaExceededException exception) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", "60")
+                .body(Map.of("error", exception.getMessage()));
     }
 
     @ExceptionHandler(InferenceQueueSaturatedException.class)

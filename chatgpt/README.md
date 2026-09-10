@@ -44,36 +44,29 @@ The conversation service owns durable conversational truth. Model providers, ret
 
 `POST /messages` requires an `Idempotency-Key` header. The application creates a durable `Generation` and persists the user message plus pending generation through one atomic `TurnRepository.begin(...)` boundary before inference work can start.
 
-Retry semantics are intentionally explicit:
-
-- Repeating a completed request with the same key and content returns the original logical generation.
-- Reusing a key with different content returns a conflict.
-- If the provider fails, the user message remains durable and the generation becomes `FAILED`; retrying the same key reuses that user message rather than appending another one.
-- Durable conversational state is idempotent while external inference remains at-least-once unless the provider itself supplies stronger idempotency guarantees.
+Retry semantics are intentionally explicit: completed replays return the same logical generation, key reuse with different request parameters is rejected, failed provider attempts preserve the user turn, and durable conversational state remains idempotent even though external inference is at-least-once unless a provider offers stronger guarantees.
 
 ### 3. Asynchronous inference and token streaming
 
-Message submission no longer invokes the model in the HTTP request lifecycle. `POST /messages` persists the user message and generation, enqueues the generation through an `InferenceJobQueue` port, and returns `202 Accepted` immediately.
-
-A separate `ProcessGenerationHandler` owns provider inference. Workers atomically claim a generation (`PENDING`/`FAILED` -> `RUNNING`) before invoking the provider, so duplicate queue delivery cannot produce duplicate assistant messages.
-
-The model gateway exposes a streaming callback. `ProcessGenerationHandler` publishes model deltas through a `GenerationEventBus`, and the SSE endpoint subscribes directly to `delta`, `completed`, `failed`, and `cancelled` events.
+Message submission no longer invokes the model in the HTTP request lifecycle. `POST /messages` persists the user message and generation, enqueues the generation through an `InferenceJobQueue` port, and returns `202 Accepted` immediately. A separate worker atomically claims generations and publishes model deltas through `GenerationEventBus` to SSE subscribers.
 
 ### 4. Generation cancellation
 
-`POST /v1/conversations/{conversationId}/generations/{generationId}/cancel` moves a non-terminal generation to `CANCELLED` and publishes a terminal SSE event. Cancellation is enforced in the persistence boundary: a provider response arriving after cancellation cannot persist an assistant message or overwrite the cancelled state. The worker also stops publishing further deltas once cancellation is observed.
+`POST /v1/conversations/{conversationId}/generations/{generationId}/cancel` moves a non-terminal generation to `CANCELLED` and publishes a terminal SSE event. Late provider completion cannot persist an assistant message or overwrite cancellation.
 
 ### 5. Queue admission, retries, and dead letters
 
-`InferenceJobQueue` carries an explicit job attempt and exposes non-blocking admission. The development queue is bounded (`chatgpt.inference.queue-capacity`, default `1024`). If admission is unavailable, the durable turn remains recorded and the HTTP edge returns `503 Service Unavailable` with `Retry-After: 1`; the client can safely retry the same idempotency key later.
-
-Provider failures leave the generation in `FAILED` and the worker re-enqueues the same generation with an incremented attempt. Retries stop at `chatgpt.inference.max-attempts` (default `3`), after which the job is sent to the queue's dead-letter sink. If even retry admission is saturated, that retry is dead-lettered rather than silently lost.
+The development inference queue is bounded (`chatgpt.inference.queue-capacity`, default `1024`). Saturation returns retryable `503 Service Unavailable` while preserving a durable idempotent turn. Provider failures retry up to `chatgpt.inference.max-attempts` (default `3`), then move to the queue's dead-letter sink.
 
 ### 6. Health- and cost-aware model routing
 
-Model providers implement `ModelEndpoint` and advertise a `ModelProfile`: supported capabilities plus input/output cost metadata. `RoutingModelGateway` filters out unhealthy or incapable providers, then chooses the lowest-cost eligible endpoint and falls back when a provider fails before producing output.
+Providers advertise supported capabilities, health, and cost through `ModelEndpoint` / `ModelProfile`. The router chooses the lowest-cost healthy eligible endpoint and can fall back before output begins. Once a stream has emitted a token delta, the router will not splice another provider's answer into the same stream.
 
-Streaming fallback has a stricter correctness rule: the router may switch providers only before the first delta is emitted. Once partial output has reached the client, a provider failure is propagated instead of mixing two providers' answers in one stream. The current deterministic development endpoint advertises text-generation and streaming capabilities; real provider adapters can be added without changing conversation or worker code.
+### 7. Durable routing requirements and per-user quotas
+
+Message requests may include `requiredCapabilities` such as `vision` or `tool_calling`. Those requirements are persisted on `Generation`, included in idempotency equality, and carried through the asynchronous worker into model routing; retries therefore cannot silently change model requirements.
+
+New generations are admitted through an `InferenceQuota` port before durable turn creation. The development adapter provides an idempotency-aware fixed one-minute window keyed by user and request key (`chatgpt.inference.requests-per-minute`, default `60`). Quota exhaustion returns `429 Too Many Requests` with `Retry-After: 60`. Existing idempotent generations do not consume quota again.
 
 ### HTTP endpoints
 
@@ -82,20 +75,20 @@ POST /v1/conversations
 GET  /v1/conversations/{conversationId}
 POST /v1/conversations/{conversationId}/messages
      Idempotency-Key: <client-generated-key>
+     { "content": "...", "requiredCapabilities": ["vision", "tool_calling"] }
 GET  /v1/conversations/{conversationId}/generations/{generationId}
 GET  /v1/conversations/{conversationId}/generations/{generationId}/events
 POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 ```
 
-The development composition uses in-memory queue/event adapters and a deterministic model so the vertical slices remain runnable without external credentials.
+The development composition uses in-memory storage, quota, queue/event adapters, and a deterministic model so the vertical slices remain runnable without external credentials.
 
 ## Next implementation slices
 
-1. Add per-tenant/user quotas and explicit routing requirements per generation.
-2. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
-3. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-4. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
-5. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, routing/fallback decisions, retries, cancellations, and end-to-end turn latency.
+1. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
+2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
+3. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
+4. Add observability around time-to-first-token, tokens/sec, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
 
 ## Build
 

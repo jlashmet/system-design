@@ -10,11 +10,13 @@ import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
+import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryFixedWindowInferenceQuota;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryInferenceJobQueue;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +24,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -47,6 +50,12 @@ public class ConversationConfiguration {
     InferenceJobQueue inferenceJobQueue(
             @Value("${chatgpt.inference.queue-capacity:1024}") int capacity) {
         return new InMemoryInferenceJobQueue(capacity);
+    }
+
+    @Bean
+    InferenceQuota inferenceQuota(
+            @Value("${chatgpt.inference.requests-per-minute:60}") int maxRequests) {
+        return new InMemoryFixedWindowInferenceQuota(maxRequests, Duration.ofMinutes(1));
     }
 
     @Bean
@@ -105,9 +114,11 @@ public class ConversationConfiguration {
             ConversationRepository repository,
             TurnRepository turnRepository,
             InferenceJobQueue inferenceJobQueue,
+            InferenceQuota inferenceQuota,
             Supplier<UUID> idGenerator,
             Clock clock) {
-        return new SendMessageHandler(repository, turnRepository, inferenceJobQueue, idGenerator, clock);
+        return new SendMessageHandler(
+                repository, turnRepository, inferenceJobQueue, inferenceQuota, idGenerator, clock);
     }
 
     @Bean

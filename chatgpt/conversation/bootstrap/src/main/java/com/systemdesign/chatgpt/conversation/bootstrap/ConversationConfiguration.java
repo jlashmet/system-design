@@ -20,6 +20,7 @@ import com.systemdesign.chatgpt.conversation.domain.ConversationMessagePageStore
 import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
+import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryDeltaStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.GenerationContinuationStore;
@@ -56,9 +57,12 @@ public class ConversationConfiguration {
         return new ExtractiveConversationSummarizer(maxCharacters);
     }
     @Bean ConversationSummaryRefresher conversationSummaryRefresher(ConversationSummaryStore store,
-            ConversationSummarizer summarizer, @Value("${chatgpt.context.summary-refresh-messages:6}") int minUnsummarizedMessages,
+            ConversationSummaryDeltaStore deltaStore, ConversationSummarizer summarizer,
+            @Value("${chatgpt.context.summary-refresh-messages:6}") int minUnsummarizedMessages,
+            @Value("${chatgpt.context.summary-catchup-messages:200}") int maxCatchupMessages,
             Supplier<UUID> idGenerator, Clock clock) {
-        return new ConversationSummaryRefresher(store, summarizer, minUnsummarizedMessages, idGenerator, clock);
+        return new ConversationSummaryRefresher(store, deltaStore, summarizer,
+                minUnsummarizedMessages, maxCatchupMessages, idGenerator, clock);
     }
     @Bean ContextSource conversationSummaryContextSource(ConversationSummaryStore store,
             @Value("${chatgpt.context.summary-priority:10}") int priority) { return new ConversationSummaryContextSource(store, priority); }

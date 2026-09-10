@@ -2,7 +2,7 @@
 
 This directory contains a Java 21 / Spring Boot implementation prototype for the ChatGPT-style system design.
 
-The implementation follows the repository's Clean Architecture / DDD rules: the domain is framework-free, application code depends only on the domain, input adapters own HTTP concerns, and output adapters implement storage/model-provider gateways.
+The implementation follows the repository's Clean Architecture / DDD rules and the same module/testing conventions used by the Ticketmaster implementation: the domain is framework-free, application code depends only on the domain, input adapters own HTTP concerns, output adapters implement storage/model-provider gateways, and infrastructure `*IT` tests run through Maven Failsafe against Floci/Testcontainers when AWS behavior is involved.
 
 ## Target architecture
 
@@ -36,7 +36,7 @@ The conversation service owns durable conversational truth. Model providers, ret
 - `conversation-application`: create/get/send-message handlers.
 - `conversation-api`: transport DTOs with no internal dependencies.
 - `conversation-infrastructure-input`: REST endpoints and error mapping.
-- `conversation-infrastructure-output`: in-memory conversation store and deterministic development model adapter.
+- `conversation-infrastructure-output`: storage/model-provider adapters.
 - `conversation-bootstrap`: Spring Boot composition root.
 - `conversation-architecture`: ArchUnit dependency-rule tests.
 
@@ -72,15 +72,36 @@ New generations are admitted through an `InferenceQuota` port before durable tur
 
 The worker no longer sends the whole conversation directly to the model. A `ContextAssembler` owns the inference context, with a `TokenEstimator` port separating model-token accounting from context policy.
 
-`BudgetedContextAssembler` anchors the context at the generation's own durable user message, so a delayed asynchronous worker never sees messages submitted after that generation. It reserves system context first, then fills the remaining input budget with a contiguous suffix of the most recent eligible non-system messages. The current input budget is configurable with `chatgpt.context.max-input-tokens` (default `8192`). If required system context or the current user message alone cannot fit, context assembly fails explicitly instead of silently truncating required input.
+`BudgetedContextAssembler` anchors the context at the generation's own durable user message, so a delayed asynchronous worker never sees messages submitted after that generation. It reserves system context first, then fills the remaining input budget with prioritized external context and a contiguous suffix of recent eligible history. The current input budget is configurable with `chatgpt.context.max-input-tokens` (default `8192`). If required system context or the current user message alone cannot fit, context assembly fails explicitly instead of silently truncating required input.
 
 ### 9. Prioritized summary, retrieval, and memory sources
 
 `ContextSource` is an explicit port for non-conversation context and identifies each source as `SUMMARY`, `RETRIEVAL`, or `LONG_TERM_MEMORY`, with a declared priority. Spring discovers context-source implementations and injects them into `BudgetedContextAssembler` without changing the worker or model-provider boundary.
 
-Required system context and the generation's current user turn remain non-droppable. The assembler then admits source messages in priority order within the remaining token budget before filling unused capacity with recent raw conversation history. This makes source precedence deterministic and gives future summary stores, vector retrieval, and memory services independent adapters rather than embedding those concerns in the model gateway.
+Required system context and the generation's current user turn remain non-droppable. The assembler admits source messages in priority order within the remaining token budget before filling unused capacity with recent raw conversation history. If an admitted summary reports that it covers older raw messages, those messages are not redundantly sent to the model.
 
-The development `HeuristicTokenEstimator` remains deliberately simple; production model-family tokenizers and production context-source adapters can replace the development implementations behind the same ports.
+### 10. Concrete context stores and refresh policy
+
+Context persistence is split by responsibility:
+
+- `ConversationSummaryStore` keeps the latest summary snapshot and its `throughMessageId`.
+- `RetrievalStore` returns user-scoped snippets ranked for the current query.
+- `LongTermMemoryStore` owns user-scoped durable memories.
+- `ConversationSummaryRefresher` incrementally advances a summary only after enough unsummarized messages accumulate.
+
+In-memory adapters keep local development runnable. `DynamoConversationSummaryStore` is the first production-style AWS adapter and uses a conditional write so a delayed/stale refresh cannot replace a newer summary.
+
+## Testing
+
+The testing layout intentionally follows Ticketmaster:
+
+- domain/application tests remain fast and do not require AWS;
+- infrastructure integration tests live with the infrastructure module and use `*IT` names;
+- AWS integration tests use `io.floci:testcontainers-floci` with JUnit/Testcontainers;
+- each integration test creates isolated emulated AWS resources and points AWS SDK clients at the `FlociContainer` endpoint;
+- `maven-failsafe-plugin` runs `integration-test` + `verify`, so `mvn verify` exercises the Floci tests in CI.
+
+`DynamoConversationSummaryStoreIT` currently verifies real DynamoDB round-trip behavior and stale-summary fencing against Floci. Retrieval stays in-memory until an actual search/vector backend is introduced rather than pretending a generic container smoke test validates retrieval semantics.
 
 ### HTTP endpoints
 
@@ -95,13 +116,11 @@ GET  /v1/conversations/{conversationId}/generations/{generationId}/events
 POST /v1/conversations/{conversationId}/generations/{generationId}/cancel
 ```
 
-The development composition uses in-memory storage, quota, queue/event adapters, a heuristic token estimator, and a deterministic model so the vertical slices remain runnable without external credentials.
-
 ## Next implementation slices
 
-1. Add concrete summary/retrieval/memory persistence and refresh policies behind the context-source ports.
+1. Wire concrete context refresh/update flows and add production adapters only where the backing technology is defined.
 2. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.
-3. Replace the development store with durable conversation/message persistence plus cache/read models where they materially improve latency.
+3. Replace the development conversation/turn store with durable persistence plus cache/read models where they materially improve latency.
 4. Add observability around time-to-first-token, tokens/sec, context-token composition, queue delay, provider latency, routing/fallback decisions, quota rejection, retries, cancellations, and end-to-end turn latency.
 
 ## Build

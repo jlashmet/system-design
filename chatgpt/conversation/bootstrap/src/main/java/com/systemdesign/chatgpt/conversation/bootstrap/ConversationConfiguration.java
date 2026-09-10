@@ -6,6 +6,7 @@ import com.systemdesign.chatgpt.conversation.application.ConversationSummaryCont
 import com.systemdesign.chatgpt.conversation.application.ConversationSummaryRefresher;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
+import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.LongTermMemoryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
@@ -15,6 +16,7 @@ import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.application.ToolExecutor;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
 import com.systemdesign.chatgpt.conversation.domain.ContextSource;
+import com.systemdesign.chatgpt.conversation.domain.ConversationMessagePageStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.domain.ConversationSummaryStore;
@@ -77,6 +79,10 @@ public class ConversationConfiguration {
         return new CreateConversationHandler(repository, ids, clock);
     }
     @Bean GetConversationHandler getConversationHandler(ConversationRepository repository) { return new GetConversationHandler(repository); }
+    @Bean GetConversationMessagesHandler getConversationMessagesHandler(ConversationMessagePageStore store,
+            @Value("${chatgpt.api.max-message-page-size:200}") int maxPageSize) {
+        return new GetConversationMessagesHandler(store, maxPageSize);
+    }
     @Bean GetGenerationHandler getGenerationHandler(TurnRepository repository) { return new GetGenerationHandler(repository); }
     @Bean CancelGenerationHandler cancelGenerationHandler(TurnRepository repository, GenerationEventBus events, Clock clock) {
         return new CancelGenerationHandler(repository, events, clock);

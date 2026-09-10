@@ -4,12 +4,14 @@ import com.systemdesign.chatgpt.conversation.api.ConversationResponse;
 import com.systemdesign.chatgpt.conversation.api.CreateConversationRequest;
 import com.systemdesign.chatgpt.conversation.api.CreateConversationResponse;
 import com.systemdesign.chatgpt.conversation.api.GenerationResponse;
+import com.systemdesign.chatgpt.conversation.api.MessagePageResponse;
 import com.systemdesign.chatgpt.conversation.api.MessageResponse;
 import com.systemdesign.chatgpt.conversation.api.SendMessageRequest;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationCommand;
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
+import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageCommand;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
@@ -28,6 +30,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -44,6 +47,7 @@ import java.util.stream.Collectors;
 public final class ConversationController {
     private final CreateConversationHandler createConversationHandler;
     private final GetConversationHandler getConversationHandler;
+    private final GetConversationMessagesHandler getConversationMessagesHandler;
     private final GetGenerationHandler getGenerationHandler;
     private final CancelGenerationHandler cancelGenerationHandler;
     private final SendMessageHandler sendMessageHandler;
@@ -52,12 +56,14 @@ public final class ConversationController {
     public ConversationController(
             CreateConversationHandler createConversationHandler,
             GetConversationHandler getConversationHandler,
+            GetConversationMessagesHandler getConversationMessagesHandler,
             GetGenerationHandler getGenerationHandler,
             CancelGenerationHandler cancelGenerationHandler,
             SendMessageHandler sendMessageHandler,
             ReplayableGenerationEventBus generationEventBus) {
         this.createConversationHandler = createConversationHandler;
         this.getConversationHandler = getConversationHandler;
+        this.getConversationMessagesHandler = getConversationMessagesHandler;
         this.getGenerationHandler = getGenerationHandler;
         this.cancelGenerationHandler = cancelGenerationHandler;
         this.sendMessageHandler = sendMessageHandler;
@@ -74,6 +80,15 @@ public final class ConversationController {
     @GetMapping("/{conversationId}")
     public ConversationResponse get(@PathVariable UUID conversationId) {
         return toResponse(getConversationHandler.handle(conversationId));
+    }
+
+    @GetMapping("/{conversationId}/messages")
+    public MessagePageResponse getMessages(
+            @PathVariable UUID conversationId,
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) String cursor) {
+        var page = getConversationMessagesHandler.handle(conversationId, limit, cursor);
+        return new MessagePageResponse(page.messages().stream().map(this::toResponse).toList(), page.nextCursor());
     }
 
     @PostMapping("/{conversationId}/messages")
@@ -157,13 +172,9 @@ public final class ConversationController {
     }
 
     private long parseLastEventId(String lastEventId) {
-        if (lastEventId == null || lastEventId.isBlank()) {
-            return 0L;
-        }
+        if (lastEventId == null || lastEventId.isBlank()) return 0L;
         long value = Long.parseLong(lastEventId);
-        if (value < 0) {
-            throw new IllegalArgumentException("Last-Event-ID must be >= 0");
-        }
+        if (value < 0) throw new IllegalArgumentException("Last-Event-ID must be >= 0");
         return value;
     }
 
@@ -188,9 +199,7 @@ public final class ConversationController {
 
     private void close(AtomicReference<GenerationEventBus.Subscription> subscriptionRef) {
         GenerationEventBus.Subscription subscription = subscriptionRef.getAndSet(null);
-        if (subscription != null) {
-            subscription.close();
-        }
+        if (subscription != null) subscription.close();
     }
 
     private ConversationResponse toResponse(Conversation conversation) {

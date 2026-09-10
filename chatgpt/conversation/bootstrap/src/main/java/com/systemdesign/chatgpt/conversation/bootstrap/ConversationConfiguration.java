@@ -9,6 +9,7 @@ import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandle
 import com.systemdesign.chatgpt.conversation.application.RoutingModelGateway;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ContextAssembler;
+import com.systemdesign.chatgpt.conversation.domain.ContextSource;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
@@ -75,8 +76,9 @@ public class ConversationConfiguration {
     @Bean
     ContextAssembler contextAssembler(
             TokenEstimator tokenEstimator,
+            List<ContextSource> contextSources,
             @Value("${chatgpt.context.max-input-tokens:8192}") int maxInputTokens) {
-        return new BudgetedContextAssembler(tokenEstimator, maxInputTokens);
+        return new BudgetedContextAssembler(tokenEstimator, maxInputTokens, contextSources);
     }
 
     @Bean

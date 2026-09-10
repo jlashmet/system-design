@@ -2,6 +2,7 @@ package com.systemdesign.chatgpt.conversation.bootstrap;
 
 import com.systemdesign.chatgpt.conversation.application.CreateConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
+import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
@@ -66,6 +67,11 @@ public class ConversationConfiguration {
     @Bean
     GetConversationHandler getConversationHandler(ConversationRepository repository) {
         return new GetConversationHandler(repository);
+    }
+
+    @Bean
+    GetGenerationHandler getGenerationHandler(TurnRepository turnRepository) {
+        return new GetGenerationHandler(turnRepository);
     }
 
     @Bean

@@ -9,6 +9,8 @@ import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 
 public final class ConversationSummaryContextSource implements ContextSource {
     private final ConversationSummaryStore store;
@@ -31,14 +33,25 @@ public final class ConversationSummaryContextSource implements ContextSource {
 
     @Override
     public List<Message> load(Conversation conversation, Generation generation) {
-        return store.find(conversation.id())
-                .filter(summary -> isVisibleToGeneration(conversation, generation, summary))
+        return visibleSummary(conversation, generation)
                 .map(summary -> List.of(new Message(
                         summary.id(),
                         MessageRole.SYSTEM,
                         "Conversation summary:\n" + summary.content(),
                         summary.updatedAt())))
                 .orElseGet(List::of);
+    }
+
+    @Override
+    public Optional<UUID> replacesHistoryThrough(Conversation conversation, Generation generation) {
+        return visibleSummary(conversation, generation).map(ConversationSummaryStore.Summary::throughMessageId);
+    }
+
+    private Optional<ConversationSummaryStore.Summary> visibleSummary(
+            Conversation conversation,
+            Generation generation) {
+        return store.find(conversation.id())
+                .filter(summary -> isVisibleToGeneration(conversation, generation, summary));
     }
 
     private boolean isVisibleToGeneration(
@@ -51,7 +64,7 @@ public final class ConversationSummaryContextSource implements ContextSource {
         return summaryIndex >= 0 && targetIndex >= 0 && summaryIndex <= targetIndex;
     }
 
-    private int indexOf(List<Message> messages, java.util.UUID messageId) {
+    private int indexOf(List<Message> messages, UUID messageId) {
         for (int index = 0; index < messages.size(); index++) {
             if (messages.get(index).id().equals(messageId)) {
                 return index;

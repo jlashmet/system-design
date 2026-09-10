@@ -46,19 +46,19 @@ public class StorageConfiguration {
         }
 
         @Bean
-        DynamoConversationTurnStore conversationStore(DynamoDbClient client,
+        DynamoConversationTurnStore conversationStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoConversationTurnStore(client, tableName);
+            return new DynamoConversationTurnStore(conversationDynamoDbClient, tableName);
         }
         @Bean ConversationRepository conversationRepository(DynamoConversationTurnStore store) { return store; }
         @Bean TurnRepository turnRepository(DynamoConversationTurnStore store) { return store; }
-        @Bean RunningMessageStore runningMessageStore(DynamoDbClient client,
+        @Bean RunningMessageStore runningMessageStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoRunningMessageStore(client, tableName);
+            return new DynamoRunningMessageStore(conversationDynamoDbClient, tableName);
         }
-        @Bean ToolInvocationStore toolInvocationStore(DynamoDbClient client,
+        @Bean ToolInvocationStore toolInvocationStore(DynamoDbClient conversationDynamoDbClient,
                 @Value("${chatgpt.storage.dynamo.table-name:chatgpt-conversations}") String tableName) {
-            return new DynamoToolInvocationStore(client, tableName);
+            return new DynamoToolInvocationStore(conversationDynamoDbClient, tableName);
         }
     }
 }

@@ -48,17 +48,24 @@ public final class BudgetedContextAssembler implements ContextAssembler {
 
         List<Message> messages = conversation.messages();
         int targetIndex = indexOf(messages, generation.userMessageId());
-        List<Message> eligible = messages.subList(0, targetIndex + 1);
+        List<Message> history = messages.subList(0, targetIndex + 1);
+        List<Message> continuation = messages.subList(targetIndex + 1, messages.size()).stream()
+                .filter(message -> message.belongsToGeneration(generation.id()))
+                .toList();
 
-        List<Message> systemMessages = eligible.stream().filter(message -> message.role() == MessageRole.SYSTEM).toList();
+        List<Message> systemMessages = history.stream()
+                .filter(message -> message.role() == MessageRole.SYSTEM)
+                .toList();
         int systemTokens = tokenCount(systemMessages);
-        int usedTokens = systemTokens;
-        if (usedTokens > maxInputTokens) throw new ContextWindowExceededException("system context exceeds model input budget");
+        int continuationTokens = tokenCount(continuation);
+        int usedTokens = systemTokens + continuationTokens;
+        if (usedTokens > maxInputTokens)
+            throw new ContextWindowExceededException("required system and generation continuation context exceeds model input budget");
 
-        Message target = eligible.get(targetIndex);
+        Message target = history.get(targetIndex);
         int targetTokens = tokenEstimator.estimateTokens(target);
         if (target.role() != MessageRole.SYSTEM && usedTokens + targetTokens > maxInputTokens)
-            throw new ContextWindowExceededException("current user message exceeds model input budget");
+            throw new ContextWindowExceededException("current user message and generation continuation exceed model input budget");
 
         List<Message> sourcedContext = new ArrayList<>();
         int sourceTokenLimit = maxInputTokens - usedTokens - (target.role() == MessageRole.SYSTEM ? 0 : targetTokens);
@@ -80,7 +87,7 @@ public final class BudgetedContextAssembler implements ContextAssembler {
             if (admittedAny) {
                 historyFloorIndex = Math.max(historyFloorIndex,
                         source.replacesHistoryThrough(conversation, generation)
-                                .map(messageId -> historyFloorAfter(eligible, messageId, targetIndex)).orElse(0));
+                                .map(messageId -> historyFloorAfter(history, messageId, targetIndex)).orElse(0));
             }
         }
         usedTokens += sourceTokens;
@@ -88,7 +95,7 @@ public final class BudgetedContextAssembler implements ContextAssembler {
         List<Message> recent = new ArrayList<>();
         int historyTokens = 0;
         for (int index = targetIndex; index >= historyFloorIndex; index--) {
-            Message message = eligible.get(index);
+            Message message = history.get(index);
             if (message.role() == MessageRole.SYSTEM) continue;
             int tokens = tokenEstimator.estimateTokens(message);
             if (usedTokens + tokens > maxInputTokens) break;
@@ -100,11 +107,14 @@ public final class BudgetedContextAssembler implements ContextAssembler {
 
         if (systemTokens > 0) telemetry.contextTokens("system", systemTokens);
         if (historyTokens > 0) telemetry.contextTokens("history", historyTokens);
+        if (continuationTokens > 0) telemetry.contextTokens("generation_continuation", continuationTokens);
 
-        List<Message> assembled = new ArrayList<>(systemMessages.size() + sourcedContext.size() + recent.size());
+        List<Message> assembled = new ArrayList<>(
+                systemMessages.size() + sourcedContext.size() + recent.size() + continuation.size());
         assembled.addAll(systemMessages);
         assembled.addAll(sourcedContext);
         assembled.addAll(recent);
+        assembled.addAll(continuation);
         return List.copyOf(assembled);
     }
 

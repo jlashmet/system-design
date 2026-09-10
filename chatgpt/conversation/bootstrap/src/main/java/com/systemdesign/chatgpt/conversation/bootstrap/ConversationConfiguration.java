@@ -23,6 +23,7 @@ import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.ReplayableGenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.RetrievalContextStore;
 import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
@@ -53,7 +54,7 @@ public class ConversationConfiguration {
     }
 
     @Bean
-    GenerationEventBus generationEventBus() {
+    ReplayableGenerationEventBus generationEventBus() {
         return new InMemoryGenerationEventBus();
     }
 

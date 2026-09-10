@@ -26,6 +26,8 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +41,7 @@ class DynamoInferenceOutboxIT {
 
     private DynamoDbClient dynamoDb;
     private DynamoConversationTurnStore conversationStore;
+    private DynamoGenerationLeaseTurnRepository leased;
     private DynamoOutboxTurnRepository store;
     private String tableName;
 
@@ -62,7 +65,7 @@ class DynamoInferenceOutboxIT {
                         KeySchemaElement.builder().attributeName("sk").keyType(KeyType.RANGE).build())
                 .build());
         conversationStore = new DynamoConversationTurnStore(dynamoDb, tableName);
-        var leased = new DynamoGenerationLeaseTurnRepository(conversationStore, dynamoDb, tableName);
+        leased = new DynamoGenerationLeaseTurnRepository(conversationStore, dynamoDb, tableName);
         store = new DynamoOutboxTurnRepository(leased, dynamoDb, tableName);
     }
 
@@ -111,6 +114,29 @@ class DynamoInferenceOutboxIT {
         assertThat(second.claimToken()).isNotEqualTo(first.claimToken());
         assertThat(store.markDispatched(generation.id(), first.claimToken(), NOW.plusSeconds(7))).isFalse();
         assertThat(store.markDispatched(generation.id(), second.claimToken(), NOW.plusSeconds(8))).isTrue();
+    }
+
+    @Test
+    void paginatesPastTwentyActivelyClaimedRowsInOneShard() {
+        DynamoOutboxTurnRepository singleShard = new DynamoOutboxTurnRepository(leased, dynamoDb, tableName, 1);
+        UUID conversationId = UUID.randomUUID();
+        conversationStore.save(Conversation.start(conversationId, "user-1", NOW));
+        Set<UUID> expected = new HashSet<>();
+        for (int i = 0; i < 21; i++) {
+            Conversation conversation = conversationWithUserMessage(conversationId, "message-" + i);
+            Generation generation = pending(conversationId, conversation.messages().getFirst(), "request-" + i, "message-" + i);
+            singleShard.begin(conversation, generation);
+            expected.add(generation.id());
+        }
+
+        Set<UUID> claimed = new HashSet<>();
+        for (int i = 0; i < 21; i++) {
+            InferenceOutbox.Entry entry = singleShard.claimNext(NOW.plusSeconds(2), NOW.plusSeconds(300)).orElseThrow();
+            claimed.add(entry.generationId());
+        }
+
+        assertThat(claimed).containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(singleShard.claimNext(NOW.plusSeconds(3), NOW.plusSeconds(303))).isEmpty();
     }
 
     private Conversation conversationWithUserMessage(UUID conversationId, String content) {

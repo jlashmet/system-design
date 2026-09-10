@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class InMemoryConversationRepository implements ConversationRepository, TurnRepository {
     private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
     private final Map<TurnKey, Generation> generations = new ConcurrentHashMap<>();
+    private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
 
     @Override
     public Optional<Conversation> findById(UUID conversationId) {
@@ -22,6 +23,11 @@ public final class InMemoryConversationRepository implements ConversationReposit
     @Override
     public void save(Conversation conversation) {
         conversations.put(conversation.id(), copy(conversation));
+    }
+
+    @Override
+    public Optional<Generation> findById(UUID generationId) {
+        return Optional.ofNullable(generationsById.get(generationId));
     }
 
     @Override
@@ -38,19 +44,24 @@ public final class InMemoryConversationRepository implements ConversationReposit
         }
 
         conversations.put(conversation.id(), copy(conversation));
-        generations.put(key, generation);
+        putGeneration(generation);
         return new BeginResult(generation, true);
     }
 
     @Override
     public synchronized void complete(Conversation conversation, Generation generation) {
         conversations.put(conversation.id(), copy(conversation));
-        generations.put(new TurnKey(generation.conversationId(), generation.idempotencyKey()), generation);
+        putGeneration(generation);
     }
 
     @Override
     public void fail(Generation generation) {
+        putGeneration(generation);
+    }
+
+    private void putGeneration(Generation generation) {
         generations.put(new TurnKey(generation.conversationId(), generation.idempotencyKey()), generation);
+        generationsById.put(generation.id(), generation);
     }
 
     private Conversation copy(Conversation conversation) {

@@ -4,9 +4,9 @@ import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
+import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
-import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 
 import java.time.Clock;
@@ -19,19 +19,19 @@ import java.util.function.Supplier;
 public final class SendMessageHandler {
     private final ConversationRepository repository;
     private final TurnRepository turnRepository;
-    private final ModelGateway modelGateway;
+    private final InferenceJobQueue inferenceJobQueue;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
 
     public SendMessageHandler(
             ConversationRepository repository,
             TurnRepository turnRepository,
-            ModelGateway modelGateway,
+            InferenceJobQueue inferenceJobQueue,
             Supplier<UUID> idGenerator,
             Clock clock) {
         this.repository = Objects.requireNonNull(repository, "repository");
         this.turnRepository = Objects.requireNonNull(turnRepository, "turnRepository");
-        this.modelGateway = Objects.requireNonNull(modelGateway, "modelGateway");
+        this.inferenceJobQueue = Objects.requireNonNull(inferenceJobQueue, "inferenceJobQueue");
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -43,13 +43,12 @@ public final class SendMessageHandler {
         Generation generation = turnRepository
                 .findByIdempotencyKey(command.conversationId(), command.idempotencyKey())
                 .orElse(null);
-
         if (generation != null) {
             validateReplay(generation, command.content());
-            if (generation.status() == GenerationStatus.COMPLETED) {
-                return completedResult(conversation, generation);
+            if (generation.status() != GenerationStatus.COMPLETED) {
+                inferenceJobQueue.enqueue(generation.id());
             }
-            return generate(conversation, generation);
+            return new SendMessageResult(conversation, findMessage(conversation, generation.userMessageId()), generation);
         }
 
         Instant createdAt = Instant.now(clock);
@@ -64,43 +63,18 @@ public final class SendMessageHandler {
                 createdAt);
 
         TurnRepository.BeginResult begin = turnRepository.begin(conversation, candidate);
+        Generation persisted = begin.generation();
         if (!begin.created()) {
-            Generation existing = begin.generation();
-            validateReplay(existing, command.content());
-            Conversation persisted = loadConversation(command.conversationId());
-            if (existing.status() == GenerationStatus.COMPLETED) {
-                return completedResult(persisted, existing);
+            validateReplay(persisted, command.content());
+            Conversation reloaded = loadConversation(command.conversationId());
+            if (persisted.status() != GenerationStatus.COMPLETED) {
+                inferenceJobQueue.enqueue(persisted.id());
             }
-            return generate(persisted, existing);
+            return new SendMessageResult(reloaded, findMessage(reloaded, persisted.userMessageId()), persisted);
         }
 
-        return generate(conversation, candidate);
-    }
-
-    private SendMessageResult generate(Conversation conversation, Generation generation) {
-        Message userMessage = findMessage(conversation, generation.userMessageId());
-        try {
-            ModelGateway.Completion completion = modelGateway.complete(conversation.messages());
-            Instant completedAt = Instant.now(clock);
-            Message assistantMessage = new Message(
-                    idGenerator.get(),
-                    MessageRole.ASSISTANT,
-                    completion.content(),
-                    completedAt);
-            conversation.append(assistantMessage);
-            Generation completed = generation.completed(assistantMessage.id(), completedAt);
-            turnRepository.complete(conversation, completed);
-            return new SendMessageResult(conversation, userMessage, assistantMessage);
-        } catch (RuntimeException exception) {
-            turnRepository.fail(generation.failed(Instant.now(clock)));
-            throw exception;
-        }
-    }
-
-    private SendMessageResult completedResult(Conversation conversation, Generation generation) {
-        Message userMessage = findMessage(conversation, generation.userMessageId());
-        Message assistantMessage = findMessage(conversation, generation.assistantMessageId());
-        return new SendMessageResult(conversation, userMessage, assistantMessage);
+        inferenceJobQueue.enqueue(candidate.id());
+        return new SendMessageResult(conversation, userMessage, candidate);
     }
 
     private void validateReplay(Generation generation, String content) {

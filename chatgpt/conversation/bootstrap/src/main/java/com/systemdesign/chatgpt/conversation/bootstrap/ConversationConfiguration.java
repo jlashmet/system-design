@@ -5,10 +5,12 @@ import com.systemdesign.chatgpt.conversation.application.CreateConversationHandl
 import com.systemdesign.chatgpt.conversation.application.GetConversationHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.RoutingModelGateway;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
+import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
@@ -20,6 +22,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -52,8 +55,13 @@ public class ConversationConfiguration {
     }
 
     @Bean
-    ModelGateway modelGateway() {
+    ModelEndpoint deterministicModelEndpoint() {
         return new DeterministicModelGateway();
+    }
+
+    @Bean
+    ModelGateway modelGateway(List<ModelEndpoint> endpoints) {
+        return new RoutingModelGateway(endpoints);
     }
 
     @Bean

@@ -2,16 +2,35 @@ package com.systemdesign.chatgpt.conversation.infrastructure.output;
 
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
-import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
+import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
+import com.systemdesign.chatgpt.conversation.domain.ModelProfile;
 
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
-public final class DeterministicModelGateway implements ModelGateway {
+public final class DeterministicModelGateway implements ModelEndpoint {
+    private static final ModelProfile PROFILE = new ModelProfile(
+            "local-deterministic",
+            Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING),
+            0,
+            0);
+
+    @Override
+    public ModelProfile profile() {
+        return PROFILE;
+    }
+
+    @Override
+    public boolean healthy() {
+        return true;
+    }
+
     @Override
     public Completion complete(List<Message> messages) {
         String userContent = latestUserContent(messages);
-        return new Completion("local-deterministic", "assistant: " + userContent);
+        return new Completion(PROFILE.model(), "assistant: " + userContent);
     }
 
     @Override

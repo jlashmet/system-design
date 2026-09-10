@@ -157,7 +157,10 @@ class ProcessGenerationHandlerTest {
         @Override
         public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
             Generation current = generations.get(generationId);
-            if (current == null || current.status() == GenerationStatus.RUNNING || current.status() == GenerationStatus.COMPLETED) {
+            if (current == null
+                    || current.status() == GenerationStatus.RUNNING
+                    || current.status() == GenerationStatus.COMPLETED
+                    || current.status() == GenerationStatus.CANCELLED) {
                 return Optional.empty();
             }
             Generation running = current.running(startedAt);
@@ -166,14 +169,32 @@ class ProcessGenerationHandlerTest {
         }
 
         @Override
+        public synchronized Optional<Generation> cancel(UUID generationId, Instant cancelledAt) {
+            Generation current = generations.get(generationId);
+            if (current == null) {
+                return Optional.empty();
+            }
+            Generation cancelled = current.cancelled(cancelledAt);
+            generations.put(generationId, cancelled);
+            return Optional.of(cancelled);
+        }
+
+        @Override
         public void complete(Conversation conversation, Generation generation) {
+            Generation current = generations.get(generation.id());
+            if (current != null && current.status() == GenerationStatus.CANCELLED) {
+                return;
+            }
             conversations.put(conversation.id(), conversation);
             generations.put(generation.id(), generation);
         }
 
         @Override
         public void fail(Generation generation) {
-            generations.put(generation.id(), generation);
+            Generation current = generations.get(generation.id());
+            if (current == null || current.status() != GenerationStatus.CANCELLED) {
+                generations.put(generation.id(), generation);
+            }
         }
     }
 }

@@ -134,6 +134,17 @@ class SendMessageHandlerTest {
         }
 
         @Override
+        public synchronized Optional<Generation> claim(UUID generationId, Instant startedAt) {
+            Generation current = generationsById.get(generationId);
+            if (current == null) {
+                return Optional.empty();
+            }
+            Generation running = current.running(startedAt);
+            put(running);
+            return Optional.of(running);
+        }
+
+        @Override
         public synchronized void complete(Conversation conversation, Generation generation) {
             conversations.put(conversation.id(), conversation);
             put(generation);

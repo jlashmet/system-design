@@ -1,6 +1,7 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.output;
 
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
+import com.systemdesign.chatgpt.conversation.domain.ConversationListStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationMetadataStore;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
@@ -10,7 +11,10 @@ import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,7 +22,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class InMemoryConversationRepository implements ConversationRepository, ConversationMetadataStore,
-        TurnRepository, RunningMessageStore, GenerationContinuationStore {
+        ConversationListStore, TurnRepository, RunningMessageStore, GenerationContinuationStore {
     private final Map<UUID, Conversation> conversations = new ConcurrentHashMap<>();
     private final Map<TurnKey, Generation> generations = new ConcurrentHashMap<>();
     private final Map<UUID, Generation> generationsById = new ConcurrentHashMap<>();
@@ -31,6 +35,24 @@ public final class InMemoryConversationRepository implements ConversationReposit
         Conversation conversation = conversations.get(conversationId);
         return conversation == null ? Optional.empty()
                 : Optional.of(new Metadata(conversation.id(), conversation.userId(), conversation.createdAt()));
+    }
+    @Override public Page list(String subjectId, int limit, String cursor) {
+        if (subjectId == null || subjectId.isBlank()) throw new IllegalArgumentException("subjectId must not be blank");
+        if (limit < 1) throw new IllegalArgumentException("limit must be >= 1");
+        Cursor after = decodeCursor(cursor);
+        List<Conversation> ordered = conversations.values().stream()
+                .filter(conversation -> subjectId.equals(conversation.userId()))
+                .sorted(Comparator.comparing(Conversation::createdAt).reversed()
+                        .thenComparing(conversation -> conversation.id().toString(), Comparator.reverseOrder()))
+                .filter(conversation -> after == null || before(conversation, after))
+                .limit(limit + 1L)
+                .toList();
+        boolean hasMore = ordered.size() > limit;
+        List<Metadata> page = ordered.stream().limit(limit)
+                .map(conversation -> new Metadata(conversation.id(), conversation.userId(), conversation.createdAt()))
+                .toList();
+        String next = hasMore && !page.isEmpty() ? encodeCursor(page.getLast()) : null;
+        return new Page(page, next);
     }
     @Override public void save(Conversation conversation) { conversations.put(conversation.id(), copy(conversation)); }
     @Override public Optional<Generation> findGenerationById(UUID generationId) { return Optional.ofNullable(generationsById.get(generationId)); }
@@ -107,6 +129,26 @@ public final class InMemoryConversationRepository implements ConversationReposit
         putGeneration(generation);
     }
 
+    private boolean before(Conversation conversation, Cursor cursor) {
+        int time = conversation.createdAt().compareTo(cursor.createdAt());
+        return time < 0 || (time == 0 && conversation.id().toString().compareTo(cursor.conversationId().toString()) < 0);
+    }
+    private String encodeCursor(Metadata metadata) {
+        String raw = metadata.createdAt().toEpochMilli() + ":" + metadata.conversationId();
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+    private Cursor decodeCursor(String cursor) {
+        if (cursor == null || cursor.isBlank()) return null;
+        try {
+            String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+            int separator = raw.indexOf(':');
+            if (separator <= 0) throw new IllegalArgumentException("invalid conversation cursor");
+            return new Cursor(Instant.ofEpochMilli(Long.parseLong(raw.substring(0, separator))),
+                    UUID.fromString(raw.substring(separator + 1)));
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("invalid conversation cursor", exception);
+        }
+    }
     private List<Message> concat(List<Message> current, List<Message> added) {
         java.util.ArrayList<Message> result = new java.util.ArrayList<>(current.size() + added.size());
         result.addAll(current); result.addAll(added); return List.copyOf(result);
@@ -118,5 +160,6 @@ public final class InMemoryConversationRepository implements ConversationReposit
     private Conversation copy(Conversation conversation) {
         return Conversation.rehydrate(conversation.id(), conversation.userId(), conversation.createdAt(), conversation.messages());
     }
+    private record Cursor(Instant createdAt, UUID conversationId) { }
     private record TurnKey(UUID conversationId, String idempotencyKey) { }
 }

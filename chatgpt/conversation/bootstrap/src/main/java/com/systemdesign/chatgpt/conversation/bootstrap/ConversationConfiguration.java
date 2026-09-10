@@ -6,11 +6,13 @@ import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.SendMessageHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
+import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.DeterministicModelGateway;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryConversationRepository;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryGenerationEventBus;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryInferenceJobQueue;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,6 +41,11 @@ public class ConversationConfiguration {
     @Bean
     InferenceJobQueue inferenceJobQueue() {
         return new InMemoryInferenceJobQueue();
+    }
+
+    @Bean
+    GenerationEventBus generationEventBus() {
+        return new InMemoryGenerationEventBus();
     }
 
     @Bean
@@ -89,8 +96,10 @@ public class ConversationConfiguration {
             ConversationRepository repository,
             TurnRepository turnRepository,
             ModelGateway modelGateway,
+            GenerationEventBus generationEventBus,
             Supplier<UUID> idGenerator,
             Clock clock) {
-        return new ProcessGenerationHandler(repository, turnRepository, modelGateway, idGenerator, clock);
+        return new ProcessGenerationHandler(
+                repository, turnRepository, modelGateway, generationEventBus, idGenerator, clock);
     }
 }

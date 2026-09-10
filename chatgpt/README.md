@@ -65,7 +65,7 @@ GET /v1/conversations/{conversationId}/generations/{generationId}/events
     Accept: text/event-stream
 ```
 
-The SSE endpoint currently emits generation lifecycle changes (`pending`, `running`, `completed`, `failed`). Token-delta streaming is the next increment and will sit on the same generation resource.
+The model gateway now has a streaming callback in addition to whole-completion inference. `ProcessGenerationHandler` publishes each model delta through a `GenerationEventBus`, and the SSE endpoint subscribes directly to those events. This removes the previous status-polling loop from the streaming edge and allows clients to receive `delta`, `completed`, and `failed` events as inference happens.
 
 ### HTTP endpoints
 
@@ -78,7 +78,7 @@ GET  /v1/conversations/{conversationId}/generations/{generationId}
 GET  /v1/conversations/{conversationId}/generations/{generationId}/events
 ```
 
-The model adapter is intentionally deterministic so the vertical slices remain runnable without external credentials.
+The model adapter is intentionally deterministic so the vertical slices remain runnable without external credentials; its streaming implementation emits multiple chunks so the SSE path is testable locally.
 
 ## Why these slices first
 
@@ -86,7 +86,7 @@ The key boundary is not a particular LLM vendor or datastore. It is the contract
 
 ## Next implementation slices
 
-1. Complete the async inference slice: token-delta streaming, cancellation, queue admission control/backpressure, and worker retry/dead-letter policy.
+1. Complete the async inference slice: cancellation, queue admission control/backpressure, and worker retry/dead-letter policy.
 2. Add model routing: model capability/cost policy, provider health, fallback policy, and per-tenant/user quotas.
 3. Add context assembly: token budgeting, recent-turn windowing, summaries, retrieval, and long-term memory as explicit context sources.
 4. Add tools: typed tool calls, isolated execution, authorization, deadlines, result persistence, and continuation of the same turn.

@@ -3,6 +3,7 @@ package com.systemdesign.chatgpt.conversation.application;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
@@ -19,6 +20,7 @@ public final class ProcessGenerationHandler {
     private final ConversationRepository conversationRepository;
     private final TurnRepository turnRepository;
     private final ModelGateway modelGateway;
+    private final GenerationEventBus eventBus;
     private final Supplier<UUID> idGenerator;
     private final Clock clock;
 
@@ -26,11 +28,13 @@ public final class ProcessGenerationHandler {
             ConversationRepository conversationRepository,
             TurnRepository turnRepository,
             ModelGateway modelGateway,
+            GenerationEventBus eventBus,
             Supplier<UUID> idGenerator,
             Clock clock) {
         this.conversationRepository = Objects.requireNonNull(conversationRepository, "conversationRepository");
         this.turnRepository = Objects.requireNonNull(turnRepository, "turnRepository");
         this.modelGateway = Objects.requireNonNull(modelGateway, "modelGateway");
+        this.eventBus = Objects.requireNonNull(eventBus, "eventBus");
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -49,7 +53,9 @@ public final class ProcessGenerationHandler {
                 .orElseThrow(() -> new NoSuchElementException("conversation not found: " + generation.conversationId()));
 
         try {
-            ModelGateway.Completion completion = modelGateway.complete(conversation.messages());
+            ModelGateway.Completion completion = modelGateway.stream(
+                    conversation.messages(),
+                    delta -> eventBus.publish(generation.id(), GenerationEventBus.Event.delta(delta)));
             Instant completedAt = Instant.now(clock);
             Message assistantMessage = new Message(
                     idGenerator.get(),
@@ -58,8 +64,10 @@ public final class ProcessGenerationHandler {
                     completedAt);
             conversation.append(assistantMessage);
             turnRepository.complete(conversation, generation.completed(assistantMessage.id(), completedAt));
+            eventBus.publish(generation.id(), GenerationEventBus.Event.completed());
         } catch (RuntimeException exception) {
             turnRepository.fail(generation.failed(Instant.now(clock)));
+            eventBus.publish(generation.id(), GenerationEventBus.Event.failed(exception.getMessage()));
             throw exception;
         }
     }

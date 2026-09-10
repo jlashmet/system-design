@@ -3,6 +3,7 @@ package com.systemdesign.chatgpt.conversation.application;
 import com.systemdesign.chatgpt.conversation.domain.Conversation;
 import com.systemdesign.chatgpt.conversation.domain.ConversationRepository;
 import com.systemdesign.chatgpt.conversation.domain.Generation;
+import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.GenerationStatus;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,7 +29,7 @@ class ProcessGenerationHandlerTest {
     private static final Instant NOW = Instant.parse("2026-09-10T12:00:00Z");
 
     @Test
-    void completesQueuedGenerationAndPersistsAssistantMessage() {
+    void completesQueuedGenerationAndPublishesStreamEvents() {
         Fixture fixture = new Fixture(messages -> new ModelGateway.Completion("test-model", "assistant: hello"));
 
         fixture.handler.handle(fixture.generation.id());
@@ -38,6 +41,11 @@ class ProcessGenerationHandlerTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(MessageRole.USER, "hello"),
                         org.assertj.core.groups.Tuple.tuple(MessageRole.ASSISTANT, "assistant: hello"));
+        assertThat(fixture.eventBus.events)
+                .extracting(GenerationEventBus.Event::type, GenerationEventBus.Event::data)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(GenerationEventBus.Type.DELTA, "assistant: hello"),
+                        org.assertj.core.groups.Tuple.tuple(GenerationEventBus.Type.COMPLETED, ""));
     }
 
     @Test
@@ -56,7 +64,7 @@ class ProcessGenerationHandlerTest {
     }
 
     @Test
-    void marksGenerationFailedWhenProviderFails() {
+    void marksGenerationFailedAndPublishesFailureWhenProviderFails() {
         Fixture fixture = new Fixture(messages -> {
             throw new IllegalStateException("provider unavailable");
         });
@@ -66,6 +74,8 @@ class ProcessGenerationHandlerTest {
                 .hasMessage("provider unavailable");
         assertThat(fixture.store.findGenerationById(fixture.generation.id()).orElseThrow().status())
                 .isEqualTo(GenerationStatus.FAILED);
+        assertThat(fixture.eventBus.events.getLast())
+                .isEqualTo(GenerationEventBus.Event.failed("provider unavailable"));
     }
 
     private static final class Fixture {
@@ -73,6 +83,7 @@ class ProcessGenerationHandlerTest {
         private final UUID userMessageId = UUID.randomUUID();
         private final Generation generation;
         private final FakeStore store = new FakeStore();
+        private final FakeEventBus eventBus = new FakeEventBus();
         private final ProcessGenerationHandler handler;
 
         private Fixture(ModelGateway gateway) {
@@ -85,8 +96,23 @@ class ProcessGenerationHandlerTest {
                     store,
                     store,
                     gateway,
+                    eventBus,
                     UUID::randomUUID,
                     Clock.fixed(NOW.plusSeconds(2), ZoneOffset.UTC));
+        }
+    }
+
+    private static final class FakeEventBus implements GenerationEventBus {
+        private final List<Event> events = new ArrayList<>();
+
+        @Override
+        public void publish(UUID generationId, Event event) {
+            events.add(event);
+        }
+
+        @Override
+        public Subscription subscribe(UUID generationId, java.util.function.Consumer<Event> consumer) {
+            return () -> { };
         }
     }
 

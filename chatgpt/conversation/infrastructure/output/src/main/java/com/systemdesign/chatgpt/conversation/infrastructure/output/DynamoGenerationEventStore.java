@@ -5,7 +5,6 @@ import com.systemdesign.chatgpt.conversation.domain.GenerationEventStore;
 import com.systemdesign.chatgpt.conversation.domain.ReplayableGenerationEventBus;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
@@ -81,15 +80,21 @@ public final class DynamoGenerationEventStore implements GenerationEventStore {
     @Override
     public long latestSequence(UUID generationId) {
         Objects.requireNonNull(generationId, "generationId");
-        var item = dynamoDb.getItem(GetItemRequest.builder()
+        var response = dynamoDb.query(QueryRequest.builder()
                 .tableName(tableName)
-                .key(Map.of("pk", string(pk(generationId)), "sk", string(META_SK)))
+                .keyConditionExpression("pk = :pk AND sk BETWEEN :from AND :to")
+                .expressionAttributeValues(Map.of(
+                        ":pk", string(pk(generationId)),
+                        ":from", string(EVENT_PREFIX),
+                        ":to", string(EVENT_UPPER_BOUND)))
+                .scanIndexForward(false)
+                .limit(1)
                 .consistentRead(true)
-                .build()).item();
-        if (item == null || item.isEmpty() || !item.containsKey("nextSequence")) {
+                .build());
+        if (response.items().isEmpty()) {
             return 0L;
         }
-        return Long.parseLong(item.get("nextSequence").n());
+        return Long.parseLong(response.items().getFirst().get("sequence").n());
     }
 
     private long allocateSequence(UUID generationId) {

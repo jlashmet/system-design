@@ -21,6 +21,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,7 +88,7 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
                 .build();
         try {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            requireSuccess(response.statusCode(), response.body());
+            requireSuccess(response, response.body());
             JsonNode root = objectMapper.readTree(response.body());
             String model = root.path("model").asText(profile.model());
             String content = root.path("choices").path(0).path("message").path("content").asText();
@@ -121,7 +125,7 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 String body;
                 try (Stream<String> lines = response.body()) { body = String.join("\n", lines.toList()); }
-                requireSuccess(response.statusCode(), body);
+                requireSuccess(response, body);
             }
             StringBuilder content = new StringBuilder();
             String[] model = {profile.model()};
@@ -283,12 +287,39 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         return builder;
     }
 
-    private void requireSuccess(int statusCode, String body) {
+    private void requireSuccess(HttpResponse<?> response, String body) {
+        int statusCode = response.statusCode();
         if (statusCode >= 200 && statusCode < 300) return;
         String detail = body == null ? "" : body.strip();
         if (detail.length() > 500) detail = detail.substring(0, 500);
         boolean retryable = statusCode == 408 || statusCode == 409 || statusCode == 429 || statusCode >= 500;
-        throw new ModelProviderException("model provider returned HTTP " + statusCode + (detail.isEmpty() ? "" : ": " + detail), retryable, statusCode);
+        Duration retryAfter = retryable
+                ? parseRetryAfter(response.headers().firstValue("Retry-After").orElse(null))
+                : null;
+        throw new ModelProviderException(
+                "model provider returned HTTP " + statusCode + (detail.isEmpty() ? "" : ": " + detail),
+                retryable,
+                statusCode,
+                retryAfter);
+    }
+
+    private Duration parseRetryAfter(String value) {
+        if (value == null || value.isBlank()) return null;
+        String normalized = value.trim();
+        try {
+            long seconds = Long.parseLong(normalized);
+            if (seconds < 0) return null;
+            return Duration.ofSeconds(seconds);
+        } catch (NumberFormatException ignored) {
+            // Retry-After also permits an HTTP-date.
+        }
+        try {
+            Instant retryAt = ZonedDateTime.parse(normalized, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
+            Duration delay = Duration.between(Instant.now(), retryAt);
+            return delay.isNegative() ? Duration.ZERO : delay;
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private static final class ToolCallAccumulator {

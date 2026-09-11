@@ -13,6 +13,7 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.SqsClientBuilder;
 
 import java.net.URI;
+import java.time.Clock;
 
 @Configuration(proxyBeanMethods = false)
 public class InferenceQueueConfiguration {
@@ -21,9 +22,9 @@ public class InferenceQueueConfiguration {
     @ConditionalOnProperty(name = "chatgpt.inference.queue-mode", havingValue = "memory", matchIfMissing = true)
     static class InMemoryQueueConfiguration {
         @Bean
-        InferenceJobQueue inferenceJobQueue(
+        InferenceJobQueue inferenceJobQueue(Clock clock,
                 @Value("${chatgpt.inference.queue-capacity:1024}") int capacity) {
-            return new InMemoryInferenceJobQueue(capacity);
+            return new InMemoryInferenceJobQueue(capacity, clock);
         }
     }
 

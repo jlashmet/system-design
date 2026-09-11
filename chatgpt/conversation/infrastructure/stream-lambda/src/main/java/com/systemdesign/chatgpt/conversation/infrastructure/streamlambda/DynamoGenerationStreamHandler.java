@@ -4,12 +4,16 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent;
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent.DynamodbStreamRecord;
+import com.amazonaws.services.lambda.runtime.events.StreamsEventResponse;
+import com.amazonaws.services.lambda.runtime.events.StreamsEventResponse.BatchItemFailure;
 import com.amazonaws.services.lambda.runtime.events.models.dynamodb.AttributeValue;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
 import com.systemdesign.chatgpt.conversation.infrastructure.common.InferenceJobCodec;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -17,12 +21,12 @@ import java.util.UUID;
 /**
  * DynamoDB Streams Lambda that turns newly inserted PENDING generation records into SQS inference jobs.
  *
- * <p>The event source mapping should filter to INSERT records for generation items. The handler repeats
- * the same checks defensively so a configuration mistake cannot enqueue updates such as RUNNING or COMPLETED.
- * Any SQS exception is allowed to escape so Lambda retries the stream batch. Duplicate SQS jobs are safe
+ * <p>The event source mapping filters to INSERT records for generation items. The handler repeats those
+ * checks defensively and reports failed stream records by sequence number through Lambda's partial-batch
+ * response contract. Successful records are not reported for retry. Duplicate deliveries remain safe
  * because generation workers use leased/fenced claims.</p>
  */
-public final class DynamoGenerationStreamHandler implements RequestHandler<DynamodbEvent, Void> {
+public final class DynamoGenerationStreamHandler implements RequestHandler<DynamodbEvent, StreamsEventResponse> {
     static final String QUEUE_URL_ENV = "INFERENCE_QUEUE_URL";
 
     @FunctionalInterface
@@ -55,13 +59,21 @@ public final class DynamoGenerationStreamHandler implements RequestHandler<Dynam
     }
 
     @Override
-    public Void handleRequest(DynamodbEvent event, Context context) {
+    public StreamsEventResponse handleRequest(DynamodbEvent event, Context context) {
         Objects.requireNonNull(event, "event");
-        if (event.getRecords() == null) return null;
-        for (DynamodbStreamRecord record : event.getRecords()) {
-            enqueueIfPendingGenerationInsert(record);
+        if (event.getRecords() == null || event.getRecords().isEmpty()) {
+            return new StreamsEventResponse(List.of());
         }
-        return null;
+
+        List<BatchItemFailure> failures = new ArrayList<>();
+        for (DynamodbStreamRecord record : event.getRecords()) {
+            try {
+                enqueueIfPendingGenerationInsert(record);
+            } catch (RuntimeException exception) {
+                failures.add(new BatchItemFailure(sequenceNumber(record)));
+            }
+        }
+        return new StreamsEventResponse(failures);
     }
 
     boolean enqueueIfPendingGenerationInsert(DynamodbStreamRecord record) {
@@ -79,6 +91,15 @@ public final class DynamoGenerationStreamHandler implements RequestHandler<Dynam
 
         jobSink.send(InferenceJobQueue.Job.firstAttempt(UUID.fromString(generationId)));
         return true;
+    }
+
+    private String sequenceNumber(DynamodbStreamRecord record) {
+        if (record == null || record.getDynamodb() == null
+                || record.getDynamodb().getSequenceNumber() == null
+                || record.getDynamodb().getSequenceNumber().isBlank()) {
+            throw new IllegalStateException("failed stream record is missing sequence number");
+        }
+        return record.getDynamodb().getSequenceNumber();
     }
 
     private static boolean hasString(Map<String, AttributeValue> image, String name, String expected) {

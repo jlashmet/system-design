@@ -58,6 +58,24 @@ class InferenceWorkerFailureSemanticsTest {
     }
 
     @Test
+    void retryJitterSpreadsRetriesWithoutSchedulingEarlierThanExponentialBackoff() {
+        InferenceJobQueue queue = mock(InferenceJobQueue.class);
+        ProcessGenerationHandler handler = mock(ProcessGenerationHandler.class);
+        ConversationTelemetry telemetry = mock(ConversationTelemetry.class);
+        InferenceJobQueue.Job job = new InferenceJobQueue.Job(UUID.randomUUID(), 2);
+        InferenceJobQueue.Delivery delivery = new InferenceJobQueue.Delivery(job, "receipt");
+        Duration jitteredDelay = Duration.ofMillis(2500);
+        when(queue.poll()).thenReturn(Optional.of(delivery));
+        when(queue.tryEnqueue(job.nextAttempt(), jitteredDelay)).thenReturn(true);
+        when(handler.handle(any(UUID.class), any(Runnable.class)))
+                .thenThrow(new ModelUnavailableException("rate limited", true, null));
+
+        new InferenceWorker(queue, handler, telemetry, 4, 1000, 30000, 0.5, () -> 0.5).drain();
+
+        verify(queue).tryEnqueue(job.nextAttempt(), jitteredDelay);
+    }
+
+    @Test
     void providerRetryAfterWinsWhenLongerThanExponentialDelay() {
         InferenceJobQueue queue = mock(InferenceJobQueue.class);
         ProcessGenerationHandler handler = mock(ProcessGenerationHandler.class);

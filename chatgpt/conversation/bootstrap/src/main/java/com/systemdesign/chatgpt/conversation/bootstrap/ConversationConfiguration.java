@@ -103,7 +103,8 @@ public class ConversationConfiguration {
             @Value("${chatgpt.model.openai-compatible.request-timeout-ms:120000}") long requestTimeoutMs) {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(connectTimeoutMs)).build();
         ModelProfile profile = new ModelProfile(model,
-                Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING), inputCost, outputCost);
+                Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING, ModelCapability.TOOL_CALLING),
+                inputCost, outputCost);
         return new OpenAiCompatibleModelEndpoint(client, objectMapper, baseUri, apiKey, profile,
                 Duration.ofMillis(requestTimeoutMs));
     }

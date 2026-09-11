@@ -12,14 +12,21 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 import java.net.URI;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,5 +107,34 @@ class DynamoGenerationEventStoreIT {
         assertThat(store.listAfter(second, 0L, 100))
                 .extracting(recorded -> recorded.event().data())
                 .containsExactly("b1");
+    }
+
+    @Test
+    void writesRetentionTtlToEventAndSequenceCounter() {
+        UUID generationId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-10T20:00:00Z");
+        long expectedExpiry = now.plus(Duration.ofHours(2)).getEpochSecond();
+        store = new DynamoGenerationEventStore(
+                dynamoDb,
+                tableName,
+                Duration.ofHours(2),
+                Clock.fixed(now, ZoneOffset.UTC));
+
+        store.append(generationId, GenerationEventBus.Event.delta("one"));
+
+        Map<String, AttributeValue> meta = item(generationId, "META");
+        Map<String, AttributeValue> event = item(generationId, "EVENT#00000000000000000001");
+        assertThat(Long.parseLong(meta.get("expiresAt").n())).isEqualTo(expectedExpiry);
+        assertThat(Long.parseLong(event.get("expiresAt").n())).isEqualTo(expectedExpiry);
+    }
+
+    private Map<String, AttributeValue> item(UUID generationId, String sk) {
+        return dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .consistentRead(true)
+                .key(Map.of(
+                        "pk", AttributeValue.builder().s("GENERATION#" + generationId).build(),
+                        "sk", AttributeValue.builder().s(sk).build()))
+                .build()).item();
     }
 }

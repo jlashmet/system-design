@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.infrastructure.output;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.MessageRole;
@@ -10,6 +11,7 @@ import com.systemdesign.chatgpt.conversation.domain.ModelGateway.ToolRequests;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway.TurnResult;
 import com.systemdesign.chatgpt.conversation.domain.ModelProfile;
 import com.systemdesign.chatgpt.conversation.domain.ToolCall;
+import com.systemdesign.chatgpt.conversation.domain.ToolCallTranscript;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -102,6 +104,7 @@ class OpenAiCompatibleModelEndpointTest {
         });
         server.start();
 
+        ObjectMapper mapper = new ObjectMapper();
         ModelProfile profile = new ModelProfile("configured-model",
                 Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING, ModelCapability.TOOL_CALLING), 10, 20);
         OpenAiCompatibleModelEndpoint endpoint = endpoint(profile);
@@ -122,7 +125,7 @@ class OpenAiCompatibleModelEndpointTest {
         assertThat(call.arguments().get("metric")).isEqualTo(new ToolCall.BooleanValue(true));
 
         Message assistantToolRequest = new Message(UUID.randomUUID(), MessageRole.ASSISTANT,
-                "Tool requests:\n" + normalizedId + ":get_weather", Instant.now());
+                ToolCallTranscript.format(List.of(call)), Instant.now());
         Message toolResult = new Message(UUID.randomUUID(), MessageRole.TOOL,
                 "tool_call_id=" + normalizedId + "\ntool=get_weather\nstatus=success\nresult=sunny", Instant.now());
         List<String> deltas = new ArrayList<>();
@@ -137,12 +140,17 @@ class OpenAiCompatibleModelEndpointTest {
                 .contains("\"required\":[\"city\"]")
                 .contains("\"additionalProperties\":false")
                 .contains("\"tool_choice\":\"auto\"");
-        assertThat(requestBodies.getLast())
-                .contains("\"role\":\"assistant\"")
-                .contains("\"tool_calls\"")
-                .contains("\"id\":\"" + normalizedId + "\"")
-                .contains("\"role\":\"tool\"")
-                .contains("\"tool_call_id\":\"" + normalizedId + "\"");
+
+        JsonNode continuation = mapper.readTree(requestBodies.getLast());
+        JsonNode assistantCall = continuation.path("messages").path(1).path("tool_calls").path(0);
+        assertThat(assistantCall.path("id").asText()).isEqualTo(normalizedId.toString());
+        assertThat(assistantCall.path("function").path("name").asText()).isEqualTo("get_weather");
+        JsonNode replayedArguments = mapper.readTree(assistantCall.path("function").path("arguments").asText());
+        assertThat(replayedArguments.path("city").asText()).isEqualTo("Moorpark");
+        assertThat(replayedArguments.path("days").asLong()).isEqualTo(2);
+        assertThat(replayedArguments.path("metric").asBoolean()).isTrue();
+        assertThat(continuation.path("messages").path(2).path("tool_call_id").asText())
+                .isEqualTo(normalizedId.toString());
     }
 
     private OpenAiCompatibleModelEndpoint endpoint(ModelProfile profile) {

@@ -16,7 +16,9 @@ POST /messages
 
 The Lambda accepts only DynamoDB Stream `INSERT` records whose new image has `entityType=GENERATION` and `status=PENDING`. The CloudFormation event-source mapping applies the same filter so unrelated conversation-table changes normally never invoke the function.
 
-Delivery is intentionally at-least-once. If Lambda sends to SQS and then the stream batch retries, SQS can contain duplicate generation jobs. That is safe because generation processing uses leased/fenced claims; only the active claim may append tool transcript, complete, or fail the generation.
+Delivery is intentionally at-least-once. The event-source mapping enables `ReportBatchItemFailures`, and the handler returns failed DynamoDB Stream sequence numbers instead of failing the whole invocation when one SQS publication fails. Successful records are omitted from the failure response and can advance the stream checkpoint. DynamoDB Streams ordering still means records at or after the earliest reported failure may be replayed by Lambda; therefore duplicate SQS jobs remain expected and safe because generation processing uses leased/fenced claims.
+
+A failed target record without a DynamoDB Stream sequence number cannot be identified safely in a partial-batch response, so the handler fails the invocation in that malformed case rather than acknowledging work it cannot name for retry.
 
 ## DynamoDB table requirement
 
@@ -38,9 +40,9 @@ com.systemdesign.chatgpt.conversation.infrastructure.streamlambda.DynamoGenerati
 
 Runtime: Java 21.
 
-The Lambda requires environment variable `INFERENCE_QUEUE_URL` and IAM permission to read the DynamoDB Stream and call `sqs:SendMessage` on the inference queue. `template.yaml` defines the function, role, filter, and event-source mapping while keeping the existing stream, queue, and artifact bucket external parameters.
+The Lambda requires environment variable `INFERENCE_QUEUE_URL` and IAM permission to read the DynamoDB Stream and call `sqs:SendMessage` on the inference queue. `template.yaml` defines the function, role, filter, partial-batch response mode, and event-source mapping while keeping the existing stream, queue, and artifact bucket external parameters.
 
-`TRIM_HORIZON` is the template default when first attaching the consumer so retained stream records are not skipped. `LATEST` is available as an explicit deployment choice. DynamoDB Streams retention is finite, so production monitoring should alert on Lambda iterator age, errors/throttles, and SQS backlog before retained records can expire.
+`TRIM_HORIZON` is the template default when first attaching the consumer so retained stream records are not skipped. `LATEST` is available as an explicit deployment choice. DynamoDB Streams retention is finite, so production monitoring should alert on Lambda iterator age, errors/throttles, partial-batch failures, and SQS backlog before retained records can expire.
 
 ## Local development
 
@@ -48,4 +50,4 @@ Memory storage mode has no DynamoDB Stream, so `InferenceDispatch` is implemente
 
 ## Tests
 
-The unit test verifies defensive event filtering. `DynamoGenerationStreamHandlerIT` uses Floci/Testcontainers and a real emulated SQS queue, invokes the real handler with a synthetic DynamoDB Stream record, then decodes the resulting message with the same `InferenceJobCodec` used by `SqsInferenceJobQueue`.
+The unit tests verify defensive event filtering, per-record SQS failure reporting, continued processing after an individual failure, and malformed-record behavior. `DynamoGenerationStreamHandlerIT` uses Floci/Testcontainers and a real emulated SQS queue, invokes the real handler with a synthetic DynamoDB Stream record, then decodes the resulting message with the same `InferenceJobCodec` used by `SqsInferenceJobQueue`.

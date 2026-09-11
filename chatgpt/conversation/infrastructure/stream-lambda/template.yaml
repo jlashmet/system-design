@@ -11,6 +11,9 @@ Parameters:
   InferenceQueueArn:
     Type: String
     Description: ARN of the existing inference SQS queue.
+  StreamFailureQueueArn:
+    Type: String
+    Description: ARN of the SQS queue that receives exhausted DynamoDB Streams invocation records for diagnosis/replay.
   LambdaCodeBucket:
     Type: String
     Description: S3 bucket containing the shaded stream-lambda artifact.
@@ -22,6 +25,18 @@ Parameters:
     Default: TRIM_HORIZON
     AllowedValues: [TRIM_HORIZON, LATEST]
     Description: DynamoDB Streams starting position. TRIM_HORIZON is safer for a newly attached consumer within stream retention.
+  MaximumRetryAttempts:
+    Type: Number
+    Default: 10
+    MinValue: 0
+    MaxValue: 10000
+    Description: Maximum retries for a failed stream batch/record before sending failure metadata to StreamFailureQueueArn.
+  MaximumRecordAgeInSeconds:
+    Type: Number
+    Default: 21600
+    MinValue: 60
+    MaxValue: 604800
+    Description: Maximum age of a stream record before it is sent to the failure destination. Default is six hours.
 
 Resources:
   InferenceStreamLambdaRole:
@@ -54,7 +69,9 @@ Resources:
               - Effect: Allow
                 Action:
                   - sqs:SendMessage
-                Resource: !Ref InferenceQueueArn
+                Resource:
+                  - !Ref InferenceQueueArn
+                  - !Ref StreamFailureQueueArn
 
   InferenceStreamLambda:
     Type: AWS::Lambda::Function
@@ -82,8 +99,11 @@ Resources:
       BisectBatchOnFunctionError: true
       FunctionResponseTypes:
         - ReportBatchItemFailures
-      MaximumRecordAgeInSeconds: 86400
-      MaximumRetryAttempts: -1
+      MaximumRecordAgeInSeconds: !Ref MaximumRecordAgeInSeconds
+      MaximumRetryAttempts: !Ref MaximumRetryAttempts
+      DestinationConfig:
+        OnFailure:
+          Destination: !Ref StreamFailureQueueArn
       FilterCriteria:
         Filters:
           - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"entityType":{"S":["GENERATION"]},"status":{"S":["PENDING"]}}}}'

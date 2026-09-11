@@ -63,6 +63,17 @@ class SqsInferenceJobQueueIT {
     }
 
     @Test
+    void delayedEnqueueIsNotImmediatelyVisible() throws Exception {
+        InferenceJobQueue.Job expected = InferenceJobQueue.Job.firstAttempt(UUID.randomUUID());
+        assertThat(queue.tryEnqueue(expected, Duration.ofSeconds(1))).isTrue();
+        assertThat(queue.poll()).isEmpty();
+        Thread.sleep(Duration.ofMillis(1200));
+        InferenceJobQueue.Delivery delivery = queue.poll().orElseThrow();
+        assertThat(delivery.job()).isEqualTo(expected);
+        queue.acknowledge(delivery);
+    }
+
+    @Test
     void unacknowledgedDeliveryBecomesVisibleAgainAfterVisibilityTimeout() throws Exception {
         InferenceJobQueue.Job expected = InferenceJobQueue.Job.firstAttempt(UUID.randomUUID());
         queue.tryEnqueue(expected);

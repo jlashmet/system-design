@@ -10,10 +10,12 @@ import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SqsException;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 
 public final class SqsInferenceJobQueue implements InferenceJobQueue {
+    private static final int MAX_DELAY_SECONDS = 900;
     private final SqsClient sqs;
     private final String queueUrl;
     private final String deadLetterQueueUrl;
@@ -38,10 +40,22 @@ public final class SqsInferenceJobQueue implements InferenceJobQueue {
 
     @Override
     public boolean tryEnqueue(Job job) {
+        return tryEnqueue(job, Duration.ZERO);
+    }
+
+    @Override
+    public boolean tryEnqueue(Job job, Duration delay) {
         Objects.requireNonNull(job, "job");
+        Objects.requireNonNull(delay, "delay");
+        if (delay.isNegative()) throw new IllegalArgumentException("delay must not be negative");
+        long millis = delay.toMillis();
+        long delaySeconds = millis == 0 ? 0 : Math.max(1, (millis + 999) / 1000);
+        if (delaySeconds > MAX_DELAY_SECONDS) throw new IllegalArgumentException("SQS delay must not exceed 900 seconds");
         try {
             sqs.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl)
-                    .messageBody(InferenceJobCodec.encode(job)).build());
+                    .messageBody(InferenceJobCodec.encode(job))
+                    .delaySeconds((int) delaySeconds)
+                    .build());
             return true;
         } catch (SqsException exception) {
             return false;

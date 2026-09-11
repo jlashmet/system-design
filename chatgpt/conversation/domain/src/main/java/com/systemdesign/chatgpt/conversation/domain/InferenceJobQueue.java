@@ -1,11 +1,19 @@
 package com.systemdesign.chatgpt.conversation.domain;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface InferenceJobQueue {
     boolean tryEnqueue(Job job);
+
+    default boolean tryEnqueue(Job job, Duration delay) {
+        Objects.requireNonNull(delay, "delay");
+        if (delay.isNegative()) throw new IllegalArgumentException("delay must not be negative");
+        if (!delay.isZero()) throw new UnsupportedOperationException("delayed enqueue is not supported");
+        return tryEnqueue(job);
+    }
 
     Optional<Delivery> poll();
 

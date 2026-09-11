@@ -15,6 +15,7 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClientBuilder;
 
 import java.net.URI;
+import java.time.Clock;
 import java.time.Duration;
 
 @Configuration(proxyBeanMethods = false)
@@ -48,8 +49,14 @@ public class GenerationEventConfiguration {
         @Bean
         GenerationEventStore generationEventStore(
                 DynamoDbClient generationEventDynamoDbClient,
-                @Value("${chatgpt.events.dynamo.table-name:chatgpt-generation-events}") String tableName) {
-            return new DynamoGenerationEventStore(generationEventDynamoDbClient, tableName);
+                @Value("${chatgpt.events.dynamo.table-name:chatgpt-generation-events}") String tableName,
+                @Value("${chatgpt.events.retention-seconds:86400}") long retentionSeconds,
+                Clock clock) {
+            return new DynamoGenerationEventStore(
+                    generationEventDynamoDbClient,
+                    tableName,
+                    Duration.ofSeconds(retentionSeconds),
+                    clock);
         }
 
         @Bean

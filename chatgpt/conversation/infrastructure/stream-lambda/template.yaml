@@ -80,6 +80,8 @@ Resources:
       BatchSize: 100
       MaximumBatchingWindowInSeconds: 1
       BisectBatchOnFunctionError: true
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
       MaximumRecordAgeInSeconds: 86400
       MaximumRetryAttempts: -1
       FilterCriteria:

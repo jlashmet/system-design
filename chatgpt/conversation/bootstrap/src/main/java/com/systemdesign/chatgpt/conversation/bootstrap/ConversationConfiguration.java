@@ -10,6 +10,7 @@ import com.systemdesign.chatgpt.conversation.application.CreateConversationHandl
 import com.systemdesign.chatgpt.conversation.application.GetConversationMetadataHandler;
 import com.systemdesign.chatgpt.conversation.application.GetConversationMessagesHandler;
 import com.systemdesign.chatgpt.conversation.application.GetGenerationHandler;
+import com.systemdesign.chatgpt.conversation.application.HealthCachingModelEndpoint;
 import com.systemdesign.chatgpt.conversation.application.ListConversationsHandler;
 import com.systemdesign.chatgpt.conversation.application.LongTermMemoryContextSource;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
@@ -93,20 +94,22 @@ public class ConversationConfiguration {
     ModelEndpoint deterministicModelEndpoint() { return new DeterministicModelGateway(); }
     @Bean
     @ConditionalOnProperty(name = "chatgpt.model.provider", havingValue = "openai-compatible")
-    ModelEndpoint openAiCompatibleModelEndpoint(ObjectMapper objectMapper,
+    ModelEndpoint openAiCompatibleModelEndpoint(ObjectMapper objectMapper, Clock clock,
             @Value("${chatgpt.model.openai-compatible.base-url:https://api.openai.com}") URI baseUri,
             @Value("${chatgpt.model.openai-compatible.api-key:${OPENAI_API_KEY:}}") String apiKey,
             @Value("${chatgpt.model.openai-compatible.model:gpt-5.6}") String model,
             @Value("${chatgpt.model.openai-compatible.input-cost-micros-per-million-tokens:0}") long inputCost,
             @Value("${chatgpt.model.openai-compatible.output-cost-micros-per-million-tokens:0}") long outputCost,
             @Value("${chatgpt.model.openai-compatible.connect-timeout-ms:5000}") long connectTimeoutMs,
-            @Value("${chatgpt.model.openai-compatible.request-timeout-ms:120000}") long requestTimeoutMs) {
+            @Value("${chatgpt.model.openai-compatible.request-timeout-ms:120000}") long requestTimeoutMs,
+            @Value("${chatgpt.model.openai-compatible.health-cache-ms:5000}") long healthCacheMs) {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(connectTimeoutMs)).build();
         ModelProfile profile = new ModelProfile(model,
                 Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING, ModelCapability.TOOL_CALLING),
                 inputCost, outputCost);
-        return new OpenAiCompatibleModelEndpoint(client, objectMapper, baseUri, apiKey, profile,
+        ModelEndpoint endpoint = new OpenAiCompatibleModelEndpoint(client, objectMapper, baseUri, apiKey, profile,
                 Duration.ofMillis(requestTimeoutMs));
+        return new HealthCachingModelEndpoint(endpoint, Duration.ofMillis(healthCacheMs), clock);
     }
     @Bean ModelGateway modelGateway(List<ModelEndpoint> endpoints, ConversationTelemetry telemetry) {
         return new RoutingModelGateway(endpoints, telemetry);

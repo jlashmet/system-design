@@ -14,6 +14,7 @@ import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.ToolCall;
+import com.systemdesign.chatgpt.conversation.domain.ToolCallTranscript;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
 import com.systemdesign.chatgpt.conversation.domain.ToolResult;
 import com.systemdesign.chatgpt.conversation.domain.TurnRepository;
@@ -229,8 +230,7 @@ public final class ProcessGenerationHandler {
     }
 
     private String formatToolRequests(List<ToolCall> calls) {
-        return "Tool requests:\n" + calls.stream().map(call -> call.id() + ":" + call.name())
-                .collect(java.util.stream.Collectors.joining("\n"));
+        return ToolCallTranscript.format(calls);
     }
     private String formatToolResult(ToolCall call, ToolResult result) {
         return "tool_call_id=" + call.id() + "\ntool=" + call.name() + "\nstatus="

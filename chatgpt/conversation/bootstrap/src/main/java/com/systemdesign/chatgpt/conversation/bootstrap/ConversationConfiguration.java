@@ -1,5 +1,6 @@
 package com.systemdesign.chatgpt.conversation.bootstrap;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.systemdesign.chatgpt.conversation.application.BudgetedContextAssembler;
 import com.systemdesign.chatgpt.conversation.application.CancelGenerationHandler;
 import com.systemdesign.chatgpt.conversation.application.ConversationAccessGuard;
@@ -32,8 +33,10 @@ import com.systemdesign.chatgpt.conversation.domain.GenerationEventBus;
 import com.systemdesign.chatgpt.conversation.domain.InferenceDispatch;
 import com.systemdesign.chatgpt.conversation.domain.InferenceQuota;
 import com.systemdesign.chatgpt.conversation.domain.LongTermMemoryStore;
+import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.ModelProfile;
 import com.systemdesign.chatgpt.conversation.domain.RetrievalContextStore;
 import com.systemdesign.chatgpt.conversation.domain.RunningMessageStore;
 import com.systemdesign.chatgpt.conversation.domain.TokenEstimator;
@@ -42,13 +45,18 @@ import com.systemdesign.chatgpt.conversation.infrastructure.output.Deterministic
 import com.systemdesign.chatgpt.conversation.infrastructure.output.ExtractiveConversationSummarizer;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.HeuristicTokenEstimator;
 import com.systemdesign.chatgpt.conversation.infrastructure.output.InMemoryRetrievalContextStore;
+import com.systemdesign.chatgpt.conversation.infrastructure.output.OpenAiCompatibleModelEndpoint;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.net.URI;
+import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -80,7 +88,25 @@ public class ConversationConfiguration {
             @Value("${chatgpt.context.max-input-tokens:8192}") int maxInputTokens) {
         return new BudgetedContextAssembler(estimator, maxInputTokens, sources, continuationStore, telemetry);
     }
-    @Bean ModelEndpoint deterministicModelEndpoint() { return new DeterministicModelGateway(); }
+    @Bean
+    @ConditionalOnProperty(name = "chatgpt.model.provider", havingValue = "deterministic", matchIfMissing = true)
+    ModelEndpoint deterministicModelEndpoint() { return new DeterministicModelGateway(); }
+    @Bean
+    @ConditionalOnProperty(name = "chatgpt.model.provider", havingValue = "openai-compatible")
+    ModelEndpoint openAiCompatibleModelEndpoint(ObjectMapper objectMapper,
+            @Value("${chatgpt.model.openai-compatible.base-url:https://api.openai.com}") URI baseUri,
+            @Value("${chatgpt.model.openai-compatible.api-key:${OPENAI_API_KEY:}}") String apiKey,
+            @Value("${chatgpt.model.openai-compatible.model:gpt-5.6}") String model,
+            @Value("${chatgpt.model.openai-compatible.input-cost-micros-per-million-tokens:0}") long inputCost,
+            @Value("${chatgpt.model.openai-compatible.output-cost-micros-per-million-tokens:0}") long outputCost,
+            @Value("${chatgpt.model.openai-compatible.connect-timeout-ms:5000}") long connectTimeoutMs,
+            @Value("${chatgpt.model.openai-compatible.request-timeout-ms:120000}") long requestTimeoutMs) {
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(connectTimeoutMs)).build();
+        ModelProfile profile = new ModelProfile(model,
+                Set.of(ModelCapability.TEXT_GENERATION, ModelCapability.STREAMING), inputCost, outputCost);
+        return new OpenAiCompatibleModelEndpoint(client, objectMapper, baseUri, apiKey, profile,
+                Duration.ofMillis(requestTimeoutMs));
+    }
     @Bean ModelGateway modelGateway(List<ModelEndpoint> endpoints, ConversationTelemetry telemetry) {
         return new RoutingModelGateway(endpoints, telemetry);
     }

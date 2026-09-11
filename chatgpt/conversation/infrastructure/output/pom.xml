@@ -6,6 +6,7 @@
     <dependencies>
         <dependency><groupId>com.systemdesign.chatgpt</groupId><artifactId>conversation-domain</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.systemdesign.chatgpt</groupId><artifactId>conversation-infrastructure-common</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>software.amazon.awssdk</groupId><artifactId>dynamodb</artifactId></dependency>
         <dependency><groupId>software.amazon.awssdk</groupId><artifactId>sqs</artifactId></dependency>
         <dependency><groupId>io.floci</groupId><artifactId>testcontainers-floci</artifactId><version>${floci.testcontainers.version}</version><scope>test</scope></dependency>

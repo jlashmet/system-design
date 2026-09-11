@@ -8,6 +8,7 @@ import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
 import com.systemdesign.chatgpt.conversation.domain.ModelProviderException;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
 
+import java.time.Duration;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -38,6 +39,7 @@ public final class RoutingModelGateway implements ModelGateway {
     public Completion complete(List<Message> messages, Set<ModelCapability> requiredCapabilities) {
         RuntimeException lastFailure = null;
         boolean retryable = false;
+        Duration retryAfter = null;
         for (ModelEndpoint endpoint : candidates(withBase(COMPLETE_CAPABILITIES, requiredCapabilities))) {
             String model = endpoint.profile().model();
             try {
@@ -47,10 +49,11 @@ public final class RoutingModelGateway implements ModelGateway {
             } catch (RuntimeException exception) {
                 telemetry.routingDecision(model, "failed_before_output");
                 retryable |= retryable(exception);
+                retryAfter = later(retryAfter, retryAfter(exception));
                 lastFailure = exception;
             }
         }
-        throw unavailable(lastFailure, retryable);
+        throw unavailable(lastFailure, retryable, retryAfter);
     }
 
     @Override public Completion stream(List<Message> messages, Consumer<String> deltaConsumer) { return stream(messages, Set.of(), deltaConsumer); }
@@ -73,6 +76,7 @@ public final class RoutingModelGateway implements ModelGateway {
 
         RuntimeException lastFailure = null;
         boolean retryable = false;
+        Duration retryAfter = null;
         for (ModelEndpoint endpoint : candidates(Set.copyOf(capabilities))) {
             AtomicBoolean emitted = new AtomicBoolean();
             String model = endpoint.profile().model();
@@ -90,10 +94,11 @@ public final class RoutingModelGateway implements ModelGateway {
                 }
                 telemetry.routingDecision(model, "failed_before_output");
                 retryable |= retryable(exception);
+                retryAfter = later(retryAfter, retryAfter(exception));
                 lastFailure = exception;
             }
         }
-        throw unavailable(lastFailure, retryable);
+        throw unavailable(lastFailure, retryable, retryAfter);
     }
 
     private Set<ModelCapability> withBase(Set<ModelCapability> base, Set<ModelCapability> requiredCapabilities) {
@@ -107,14 +112,26 @@ public final class RoutingModelGateway implements ModelGateway {
                 .sorted(Comparator.comparingLong(endpoint -> endpoint.profile().relativeCost())).toList();
     }
 
-    private RuntimeException unavailable(RuntimeException lastFailure, boolean retryable) {
+    private RuntimeException unavailable(RuntimeException lastFailure, boolean retryable, Duration retryAfter) {
         if (lastFailure == null) return new ModelUnavailableException("no healthy model supports the required capabilities", true, null);
-        return new ModelUnavailableException("all eligible model providers failed", retryable, lastFailure);
+        return new ModelUnavailableException("all eligible model providers failed", retryable, retryAfter, lastFailure);
     }
 
     private boolean retryable(RuntimeException failure) {
         if (failure instanceof ModelProviderException providerFailure) return providerFailure.retryable();
         if (failure instanceof ModelUnavailableException unavailable) return unavailable.retryable();
         return true;
+    }
+
+    private Duration retryAfter(RuntimeException failure) {
+        if (failure instanceof ModelProviderException providerFailure) return providerFailure.retryAfter();
+        if (failure instanceof ModelUnavailableException unavailable) return unavailable.retryAfter();
+        return null;
+    }
+
+    private Duration later(Duration first, Duration second) {
+        if (first == null) return second;
+        if (second == null) return first;
+        return first.compareTo(second) >= 0 ? first : second;
     }
 }

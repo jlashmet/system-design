@@ -58,6 +58,41 @@ class InferenceWorkerFailureSemanticsTest {
     }
 
     @Test
+    void providerRetryAfterWinsWhenLongerThanExponentialDelay() {
+        InferenceJobQueue queue = mock(InferenceJobQueue.class);
+        ProcessGenerationHandler handler = mock(ProcessGenerationHandler.class);
+        ConversationTelemetry telemetry = mock(ConversationTelemetry.class);
+        InferenceJobQueue.Job job = InferenceJobQueue.Job.firstAttempt(UUID.randomUUID());
+        InferenceJobQueue.Delivery delivery = new InferenceJobQueue.Delivery(job, "receipt");
+        Duration providerDelay = Duration.ofSeconds(20);
+        when(queue.poll()).thenReturn(Optional.of(delivery));
+        when(queue.tryEnqueue(job.nextAttempt(), providerDelay)).thenReturn(true);
+        when(handler.handle(any(UUID.class), any(Runnable.class)))
+                .thenThrow(new ModelUnavailableException("rate limited", true, providerDelay, null));
+
+        new InferenceWorker(queue, handler, telemetry, 4).drain();
+
+        verify(queue).tryEnqueue(job.nextAttempt(), providerDelay);
+    }
+
+    @Test
+    void exponentialDelayWinsWhenProviderHintIsShorter() {
+        InferenceJobQueue queue = mock(InferenceJobQueue.class);
+        ProcessGenerationHandler handler = mock(ProcessGenerationHandler.class);
+        ConversationTelemetry telemetry = mock(ConversationTelemetry.class);
+        InferenceJobQueue.Job job = new InferenceJobQueue.Job(UUID.randomUUID(), 3);
+        InferenceJobQueue.Delivery delivery = new InferenceJobQueue.Delivery(job, "receipt");
+        when(queue.poll()).thenReturn(Optional.of(delivery));
+        when(queue.tryEnqueue(job.nextAttempt(), Duration.ofSeconds(4))).thenReturn(true);
+        when(handler.handle(any(UUID.class), any(Runnable.class)))
+                .thenThrow(new ModelUnavailableException("server unavailable", true, Duration.ofSeconds(1), null));
+
+        new InferenceWorker(queue, handler, telemetry, 4).drain();
+
+        verify(queue).tryEnqueue(job.nextAttempt(), Duration.ofSeconds(4));
+    }
+
+    @Test
     void retryDelayClampsAtConfiguredMaximum() {
         InferenceJobQueue queue = mock(InferenceJobQueue.class);
         ProcessGenerationHandler handler = mock(ProcessGenerationHandler.class);

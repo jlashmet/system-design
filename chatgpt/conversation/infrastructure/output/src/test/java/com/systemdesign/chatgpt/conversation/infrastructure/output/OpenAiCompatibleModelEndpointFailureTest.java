@@ -34,20 +34,34 @@ class OpenAiCompatibleModelEndpointFailureTest {
 
     @Test
     void classifiesClientAndAuthErrorsAsPermanent() throws Exception {
-        assertFailure(401, false);
+        assertFailure(401, false, null, null);
     }
 
     @Test
     void classifiesCapacityAndServerErrorsAsRetryable() throws Exception {
-        assertFailure(429, true);
+        assertFailure(429, true, null, null);
         stopServer();
         server = null;
-        assertFailure(503, true);
+        assertFailure(503, true, null, null);
     }
 
-    private void assertFailure(int status, boolean retryable) throws Exception {
+    @Test
+    void capturesDeltaSecondsRetryAfterOnRetryableFailure() throws Exception {
+        assertFailure(429, true, "7", Duration.ofSeconds(7));
+    }
+
+    @Test
+    void ignoresMalformedRetryAfterHeader() throws Exception {
+        assertFailure(503, true, "not-a-delay", null);
+    }
+
+    private void assertFailure(int status, boolean retryable, String retryAfterHeader, Duration expectedRetryAfter)
+            throws Exception {
         server = HttpServer.create(new InetSocketAddress(0), 0);
-        server.createContext("/v1/chat/completions", exchange -> respond(exchange, status, "provider failure"));
+        server.createContext("/v1/chat/completions", exchange -> {
+            if (retryAfterHeader != null) exchange.getResponseHeaders().add("Retry-After", retryAfterHeader);
+            respond(exchange, status, "provider failure");
+        });
         server.start();
         OpenAiCompatibleModelEndpoint endpoint = new OpenAiCompatibleModelEndpoint(
                 HttpClient.newHttpClient(), new ObjectMapper(),
@@ -61,6 +75,7 @@ class OpenAiCompatibleModelEndpointFailureTest {
                     ModelProviderException provider = (ModelProviderException) error;
                     org.assertj.core.api.Assertions.assertThat(provider.retryable()).isEqualTo(retryable);
                     org.assertj.core.api.Assertions.assertThat(provider.statusCode()).isEqualTo(status);
+                    org.assertj.core.api.Assertions.assertThat(provider.retryAfter()).isEqualTo(expectedRetryAfter);
                 });
     }
 

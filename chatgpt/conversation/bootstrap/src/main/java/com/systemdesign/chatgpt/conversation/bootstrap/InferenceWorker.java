@@ -14,6 +14,8 @@ import java.time.Duration;
 
 @Component
 public final class InferenceWorker {
+    private static final Duration MAX_QUEUE_DELAY = Duration.ofMinutes(15);
+
     private final InferenceJobQueue queue;
     private final ProcessGenerationHandler handler;
     private final ConversationTelemetry telemetry;
@@ -35,7 +37,7 @@ public final class InferenceWorker {
         if (retryBackoffBaseMs < 1) throw new IllegalArgumentException("retryBackoffBaseMs must be >= 1");
         if (retryBackoffMaxMs < retryBackoffBaseMs)
             throw new IllegalArgumentException("retryBackoffMaxMs must be >= retryBackoffBaseMs");
-        if (retryBackoffMaxMs > Duration.ofMinutes(15).toMillis())
+        if (retryBackoffMaxMs > MAX_QUEUE_DELAY.toMillis())
             throw new IllegalArgumentException("retryBackoffMaxMs must be <= 900000 for SQS compatibility");
         this.queue = queue;
         this.handler = handler;
@@ -74,7 +76,7 @@ public final class InferenceWorker {
                 return;
             }
             InferenceJobQueue.Job retry = job.nextAttempt();
-            if (queue.tryEnqueue(retry, retryDelay(job.attempt()))) {
+            if (queue.tryEnqueue(retry, retryDelay(job.attempt(), exception))) {
                 queue.acknowledge(delivery);
                 telemetry.inferenceDelivery(job.attempt(), "retried");
                 return;
@@ -85,7 +87,14 @@ public final class InferenceWorker {
         }
     }
 
-    private Duration retryDelay(int failedAttempt) {
+    private Duration retryDelay(int failedAttempt, RuntimeException exception) {
+        Duration exponential = exponentialDelay(failedAttempt);
+        Duration providerHint = retryAfter(exception);
+        if (providerHint == null || providerHint.compareTo(exponential) <= 0) return exponential;
+        return providerHint.compareTo(MAX_QUEUE_DELAY) > 0 ? MAX_QUEUE_DELAY : providerHint;
+    }
+
+    private Duration exponentialDelay(int failedAttempt) {
         long delay = retryBackoffBase.toMillis();
         long max = retryBackoffMax.toMillis();
         for (int attempt = 1; attempt < failedAttempt && delay < max; attempt++) {
@@ -98,5 +107,11 @@ public final class InferenceWorker {
         if (exception instanceof ModelProviderException providerFailure) return providerFailure.retryable();
         if (exception instanceof ModelUnavailableException unavailable) return unavailable.retryable();
         return true;
+    }
+
+    private Duration retryAfter(RuntimeException exception) {
+        if (exception instanceof ModelProviderException providerFailure) return providerFailure.retryAfter();
+        if (exception instanceof ModelUnavailableException unavailable) return unavailable.retryAfter();
+        return null;
     }
 }

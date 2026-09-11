@@ -9,6 +9,7 @@ import com.systemdesign.chatgpt.conversation.domain.MessageRole;
 import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelProfile;
+import com.systemdesign.chatgpt.conversation.domain.ModelProviderException;
 import com.systemdesign.chatgpt.conversation.domain.ToolCall;
 import com.systemdesign.chatgpt.conversation.domain.ToolCallTranscript;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
@@ -59,10 +60,7 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         this.modelsUri = URI.create(base + MODELS_PATH);
     }
 
-    @Override
-    public ModelProfile profile() {
-        return profile;
-    }
+    @Override public ModelProfile profile() { return profile; }
 
     @Override
     public boolean healthy() {
@@ -90,13 +88,13 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
             JsonNode root = objectMapper.readTree(response.body());
             String model = root.path("model").asText(profile.model());
             String content = root.path("choices").path(0).path("message").path("content").asText();
-            if (content.isBlank()) throw new IllegalStateException("model response did not contain assistant content");
+            if (content.isBlank()) throw new ModelProviderException("model response did not contain assistant content", false);
             return new Completion(model, content);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("model request interrupted", exception);
+            throw new ModelProviderException("model request interrupted", true, exception);
         } catch (IOException exception) {
-            throw new IllegalStateException("model request failed", exception);
+            throw new ModelProviderException("model request failed", true, exception);
         }
     }
 
@@ -104,7 +102,7 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
     public Completion stream(List<Message> messages, Consumer<String> deltaConsumer) {
         TurnResult result = streamTurn(messages, Set.of(), List.of(), deltaConsumer);
         if (result instanceof FinalResponse finalResponse) return finalResponse.completion();
-        throw new IllegalStateException("model requested a tool during text-only completion");
+        throw new ModelProviderException("model requested a tool during text-only completion", false);
     }
 
     @Override
@@ -134,16 +132,14 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
                         .filter(data -> !data.isEmpty() && !"[DONE]".equals(data))
                         .forEach(data -> appendDelta(data, model, content, toolCalls, deltaConsumer));
             }
-            if (!toolCalls.isEmpty()) {
-                return new ToolRequests(model[0], toolCalls.values().stream().map(this::toToolCall).toList());
-            }
-            if (content.isEmpty()) throw new IllegalStateException("model stream did not contain assistant content or tool calls");
+            if (!toolCalls.isEmpty()) return new ToolRequests(model[0], toolCalls.values().stream().map(this::toToolCall).toList());
+            if (content.isEmpty()) throw new ModelProviderException("model stream did not contain assistant content or tool calls", false);
             return new FinalResponse(new Completion(model[0], content.toString()));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("model stream interrupted", exception);
+            throw new ModelProviderException("model stream interrupted", true, exception);
         } catch (IOException exception) {
-            throw new IllegalStateException("model stream failed", exception);
+            throw new ModelProviderException("model stream failed", true, exception);
         }
     }
 
@@ -167,36 +163,31 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
                 if (function.hasNonNull("arguments")) accumulator.arguments.append(function.path("arguments").asText());
             }
         } catch (IOException exception) {
-            throw new IllegalStateException("invalid model stream event", exception);
+            throw new ModelProviderException("invalid model stream event", false, exception);
         }
     }
 
     private ToolCall toToolCall(ToolCallAccumulator accumulator) {
-        if (accumulator.providerId == null || accumulator.providerId.isBlank()) {
-            throw new IllegalStateException("provider tool call did not contain an id");
-        }
-        if (accumulator.name.isEmpty()) throw new IllegalStateException("provider tool call did not contain a function name");
+        if (accumulator.providerId == null || accumulator.providerId.isBlank()) throw new ModelProviderException("provider tool call did not contain an id", false);
+        if (accumulator.name.isEmpty()) throw new ModelProviderException("provider tool call did not contain a function name", false);
         UUID id = normalizedToolCallId(accumulator.providerId);
         return new ToolCall(id, accumulator.name.toString(), parseArguments(accumulator.arguments.toString()));
     }
 
     private UUID normalizedToolCallId(String providerId) {
-        try {
-            return UUID.fromString(providerId);
-        } catch (IllegalArgumentException ignored) {
-            return UUID.nameUUIDFromBytes(providerId.getBytes(StandardCharsets.UTF_8));
-        }
+        try { return UUID.fromString(providerId); }
+        catch (IllegalArgumentException ignored) { return UUID.nameUUIDFromBytes(providerId.getBytes(StandardCharsets.UTF_8)); }
     }
 
     private Map<String, ToolCall.Value> parseArguments(String argumentsJson) {
         try {
             JsonNode root = objectMapper.readTree(argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson);
-            if (!root.isObject()) throw new IllegalStateException("tool arguments must be a JSON object");
+            if (!root.isObject()) throw new ModelProviderException("tool arguments must be a JSON object", false);
             Map<String, ToolCall.Value> arguments = new LinkedHashMap<>();
             root.fields().forEachRemaining(entry -> arguments.put(entry.getKey(), toToolValue(entry.getValue())));
             return Map.copyOf(arguments);
         } catch (IOException exception) {
-            throw new IllegalStateException("provider returned invalid tool arguments", exception);
+            throw new ModelProviderException("provider returned invalid tool arguments", false, exception);
         }
     }
 
@@ -205,16 +196,14 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         if (value.isIntegralNumber()) return new ToolCall.IntegerValue(value.longValue());
         if (value.isFloatingPointNumber()) return new ToolCall.NumberValue(value.doubleValue());
         if (value.isBoolean()) return new ToolCall.BooleanValue(value.booleanValue());
-        throw new IllegalStateException("tool arguments only support primitive string, integer, number, and boolean values");
+        throw new ModelProviderException("tool arguments only support primitive string, integer, number, and boolean values", false);
     }
 
     private String requestBody(List<Message> messages, boolean stream, List<ToolDefinition> tools) {
-        Objects.requireNonNull(messages, "messages");
-        Objects.requireNonNull(tools, "tools");
+        Objects.requireNonNull(messages, "messages"); Objects.requireNonNull(tools, "tools");
         if (messages.isEmpty()) throw new IllegalArgumentException("messages must not be empty");
         ObjectNode root = objectMapper.createObjectNode();
-        root.put("model", profile.model());
-        root.put("stream", stream);
+        root.put("model", profile.model()); root.put("stream", stream);
         ArrayNode requestMessages = root.putArray("messages");
         for (Message message : messages) appendProviderMessage(requestMessages, message);
         if (!tools.isEmpty()) {
@@ -222,28 +211,19 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
             for (ToolDefinition tool : tools) appendToolDefinition(requestTools, tool);
             root.put("tool_choice", "auto");
         }
-        try {
-            return objectMapper.writeValueAsString(root);
-        } catch (IOException exception) {
-            throw new IllegalStateException("could not serialize model request", exception);
-        }
+        try { return objectMapper.writeValueAsString(root); }
+        catch (IOException exception) { throw new IllegalStateException("could not serialize model request", exception); }
     }
 
     private void appendProviderMessage(ArrayNode requestMessages, Message message) {
         if (message.role() == MessageRole.ASSISTANT) {
             List<ToolCall> storedRequests = ToolCallTranscript.parse(message.content());
             if (!storedRequests.isEmpty()) {
-                ObjectNode providerMessage = requestMessages.addObject();
-                providerMessage.put("role", "assistant");
-                providerMessage.putNull("content");
+                ObjectNode providerMessage = requestMessages.addObject(); providerMessage.put("role", "assistant"); providerMessage.putNull("content");
                 ArrayNode calls = providerMessage.putArray("tool_calls");
                 for (ToolCall stored : storedRequests) {
-                    ObjectNode call = calls.addObject();
-                    call.put("id", stored.id().toString());
-                    call.put("type", "function");
-                    ObjectNode function = call.putObject("function");
-                    function.put("name", stored.name());
-                    function.put("arguments", toolArgumentsJson(stored.arguments()));
+                    ObjectNode call = calls.addObject(); call.put("id", stored.id().toString()); call.put("type", "function");
+                    ObjectNode function = call.putObject("function"); function.put("name", stored.name()); function.put("arguments", toolArgumentsJson(stored.arguments()));
                 }
                 return;
             }
@@ -251,16 +231,11 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         if (message.role() == MessageRole.TOOL) {
             UUID callId = parseStoredToolCallId(message.content());
             if (callId != null) {
-                ObjectNode providerMessage = requestMessages.addObject();
-                providerMessage.put("role", "tool");
-                providerMessage.put("tool_call_id", callId.toString());
-                providerMessage.put("content", message.content());
-                return;
+                ObjectNode providerMessage = requestMessages.addObject(); providerMessage.put("role", "tool");
+                providerMessage.put("tool_call_id", callId.toString()); providerMessage.put("content", message.content()); return;
             }
         }
-        ObjectNode providerMessage = requestMessages.addObject();
-        providerMessage.put("role", message.role().name().toLowerCase());
-        providerMessage.put("content", message.content());
+        ObjectNode providerMessage = requestMessages.addObject(); providerMessage.put("role", message.role().name().toLowerCase()); providerMessage.put("content", message.content());
     }
 
     private String toolArgumentsJson(Map<String, ToolCall.Value> arguments) {
@@ -273,51 +248,33 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
             else if (value instanceof ToolCall.BooleanValue bool) root.put(entry.getKey(), bool.value());
             else throw new IllegalArgumentException("unsupported tool argument value: " + value.getClass().getName());
         });
-        try {
-            return objectMapper.writeValueAsString(root);
-        } catch (IOException exception) {
-            throw new IllegalStateException("could not serialize persisted tool arguments", exception);
-        }
+        try { return objectMapper.writeValueAsString(root); }
+        catch (IOException exception) { throw new IllegalStateException("could not serialize persisted tool arguments", exception); }
     }
 
     private UUID parseStoredToolCallId(String content) {
         for (String line : content.split("\\R")) {
             if (!line.startsWith(TOOL_CALL_ID_PREFIX)) continue;
-            try {
-                return UUID.fromString(line.substring(TOOL_CALL_ID_PREFIX.length()));
-            } catch (IllegalArgumentException ignored) {
-                return null;
-            }
+            try { return UUID.fromString(line.substring(TOOL_CALL_ID_PREFIX.length())); }
+            catch (IllegalArgumentException ignored) { return null; }
         }
         return null;
     }
 
     private void appendToolDefinition(ArrayNode requestTools, ToolDefinition tool) {
-        ObjectNode providerTool = requestTools.addObject();
-        providerTool.put("type", "function");
-        ObjectNode function = providerTool.putObject("function");
-        function.put("name", tool.name());
-        function.put("description", tool.description());
-        ObjectNode parameters = function.putObject("parameters");
-        parameters.put("type", "object");
-        ObjectNode properties = parameters.putObject("properties");
-        ArrayNode required = parameters.putArray("required");
+        ObjectNode providerTool = requestTools.addObject(); providerTool.put("type", "function");
+        ObjectNode function = providerTool.putObject("function"); function.put("name", tool.name()); function.put("description", tool.description());
+        ObjectNode parameters = function.putObject("parameters"); parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties"); ArrayNode required = parameters.putArray("required");
         for (ToolDefinition.Parameter parameter : tool.parameters()) {
-            ObjectNode property = properties.putObject(parameter.name());
-            property.put("type", jsonType(parameter.type()));
-            property.put("description", parameter.description());
+            ObjectNode property = properties.putObject(parameter.name()); property.put("type", jsonType(parameter.type())); property.put("description", parameter.description());
             if (parameter.required()) required.add(parameter.name());
         }
         parameters.put("additionalProperties", false);
     }
 
     private String jsonType(ToolDefinition.Type type) {
-        return switch (type) {
-            case STRING -> "string";
-            case INTEGER -> "integer";
-            case NUMBER -> "number";
-            case BOOLEAN -> "boolean";
-        };
+        return switch (type) { case STRING -> "string"; case INTEGER -> "integer"; case NUMBER -> "number"; case BOOLEAN -> "boolean"; };
     }
 
     private HttpRequest.Builder requestBuilder(URI uri) {
@@ -330,7 +287,8 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         if (statusCode >= 200 && statusCode < 300) return;
         String detail = body == null ? "" : body.strip();
         if (detail.length() > 500) detail = detail.substring(0, 500);
-        throw new IllegalStateException("model provider returned HTTP " + statusCode + (detail.isEmpty() ? "" : ": " + detail));
+        boolean retryable = statusCode == 408 || statusCode == 409 || statusCode == 429 || statusCode >= 500;
+        throw new ModelProviderException("model provider returned HTTP " + statusCode + (detail.isEmpty() ? "" : ": " + detail), retryable, statusCode);
     }
 
     private static final class ToolCallAccumulator {

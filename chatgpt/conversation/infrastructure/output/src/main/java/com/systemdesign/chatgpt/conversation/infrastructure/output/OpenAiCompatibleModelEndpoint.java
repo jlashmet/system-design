@@ -10,6 +10,7 @@ import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelProfile;
 import com.systemdesign.chatgpt.conversation.domain.ToolCall;
+import com.systemdesign.chatgpt.conversation.domain.ToolCallTranscript;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
 
 import java.io.IOException;
@@ -19,7 +20,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,7 +33,6 @@ import java.util.stream.Stream;
 public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
     private static final String CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
     private static final String MODELS_PATH = "/v1/models";
-    private static final String TOOL_REQUEST_PREFIX = "Tool requests:\n";
     private static final String TOOL_CALL_ID_PREFIX = "tool_call_id=";
 
     private final HttpClient httpClient;
@@ -232,19 +231,19 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
 
     private void appendProviderMessage(ArrayNode requestMessages, Message message) {
         if (message.role() == MessageRole.ASSISTANT) {
-            List<StoredToolRequest> storedRequests = parseStoredToolRequests(message.content());
+            List<ToolCall> storedRequests = ToolCallTranscript.parse(message.content());
             if (!storedRequests.isEmpty()) {
                 ObjectNode providerMessage = requestMessages.addObject();
                 providerMessage.put("role", "assistant");
                 providerMessage.putNull("content");
                 ArrayNode calls = providerMessage.putArray("tool_calls");
-                for (StoredToolRequest stored : storedRequests) {
+                for (ToolCall stored : storedRequests) {
                     ObjectNode call = calls.addObject();
                     call.put("id", stored.id().toString());
                     call.put("type", "function");
                     ObjectNode function = call.putObject("function");
                     function.put("name", stored.name());
-                    function.put("arguments", "{}");
+                    function.put("arguments", toolArgumentsJson(stored.arguments()));
                 }
                 return;
             }
@@ -264,21 +263,21 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         providerMessage.put("content", message.content());
     }
 
-    private List<StoredToolRequest> parseStoredToolRequests(String content) {
-        if (!content.startsWith(TOOL_REQUEST_PREFIX)) return List.of();
-        String[] lines = content.substring(TOOL_REQUEST_PREFIX.length()).split("\\R");
-        List<StoredToolRequest> requests = new ArrayList<>();
+    private String toolArgumentsJson(Map<String, ToolCall.Value> arguments) {
+        ObjectNode root = objectMapper.createObjectNode();
+        arguments.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry -> {
+            ToolCall.Value value = entry.getValue();
+            if (value instanceof ToolCall.StringValue string) root.put(entry.getKey(), string.value());
+            else if (value instanceof ToolCall.IntegerValue integer) root.put(entry.getKey(), integer.value());
+            else if (value instanceof ToolCall.NumberValue number) root.put(entry.getKey(), number.value());
+            else if (value instanceof ToolCall.BooleanValue bool) root.put(entry.getKey(), bool.value());
+            else throw new IllegalArgumentException("unsupported tool argument value: " + value.getClass().getName());
+        });
         try {
-            for (String line : lines) {
-                if (line.isBlank()) continue;
-                int separator = line.indexOf(':');
-                if (separator <= 0 || separator == line.length() - 1) return List.of();
-                requests.add(new StoredToolRequest(UUID.fromString(line.substring(0, separator)), line.substring(separator + 1)));
-            }
-        } catch (IllegalArgumentException exception) {
-            return List.of();
+            return objectMapper.writeValueAsString(root);
+        } catch (IOException exception) {
+            throw new IllegalStateException("could not serialize persisted tool arguments", exception);
         }
-        return List.copyOf(requests);
     }
 
     private UUID parseStoredToolCallId(String content) {
@@ -339,6 +338,4 @@ public final class OpenAiCompatibleModelEndpoint implements ModelEndpoint {
         private final StringBuilder name = new StringBuilder();
         private final StringBuilder arguments = new StringBuilder();
     }
-
-    private record StoredToolRequest(UUID id, String name) { }
 }

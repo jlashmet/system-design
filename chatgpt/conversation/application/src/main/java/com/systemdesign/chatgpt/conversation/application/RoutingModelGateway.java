@@ -5,6 +5,7 @@ import com.systemdesign.chatgpt.conversation.domain.Message;
 import com.systemdesign.chatgpt.conversation.domain.ModelCapability;
 import com.systemdesign.chatgpt.conversation.domain.ModelEndpoint;
 import com.systemdesign.chatgpt.conversation.domain.ModelGateway;
+import com.systemdesign.chatgpt.conversation.domain.ModelProviderException;
 import com.systemdesign.chatgpt.conversation.domain.ToolDefinition;
 
 import java.util.Comparator;
@@ -36,6 +37,7 @@ public final class RoutingModelGateway implements ModelGateway {
     @Override
     public Completion complete(List<Message> messages, Set<ModelCapability> requiredCapabilities) {
         RuntimeException lastFailure = null;
+        boolean retryable = false;
         for (ModelEndpoint endpoint : candidates(withBase(COMPLETE_CAPABILITIES, requiredCapabilities))) {
             String model = endpoint.profile().model();
             try {
@@ -44,10 +46,11 @@ public final class RoutingModelGateway implements ModelGateway {
                 return completion;
             } catch (RuntimeException exception) {
                 telemetry.routingDecision(model, "failed_before_output");
+                retryable |= retryable(exception);
                 lastFailure = exception;
             }
         }
-        throw unavailable(lastFailure);
+        throw unavailable(lastFailure, retryable);
     }
 
     @Override public Completion stream(List<Message> messages, Consumer<String> deltaConsumer) { return stream(messages, Set.of(), deltaConsumer); }
@@ -56,7 +59,7 @@ public final class RoutingModelGateway implements ModelGateway {
     public Completion stream(List<Message> messages, Set<ModelCapability> requiredCapabilities, Consumer<String> deltaConsumer) {
         TurnResult result = streamTurn(messages, requiredCapabilities, List.of(), deltaConsumer);
         if (result instanceof FinalResponse finalResponse) return finalResponse.completion();
-        throw new ModelUnavailableException("model requested tools when no tools were available");
+        throw new ModelUnavailableException("model requested tools when no tools were available", false, null);
     }
 
     @Override
@@ -69,6 +72,7 @@ public final class RoutingModelGateway implements ModelGateway {
         if (!tools.isEmpty()) capabilities.add(ModelCapability.TOOL_CALLING);
 
         RuntimeException lastFailure = null;
+        boolean retryable = false;
         for (ModelEndpoint endpoint : candidates(Set.copyOf(capabilities))) {
             AtomicBoolean emitted = new AtomicBoolean();
             String model = endpoint.profile().model();
@@ -85,10 +89,11 @@ public final class RoutingModelGateway implements ModelGateway {
                     throw exception;
                 }
                 telemetry.routingDecision(model, "failed_before_output");
+                retryable |= retryable(exception);
                 lastFailure = exception;
             }
         }
-        throw unavailable(lastFailure);
+        throw unavailable(lastFailure, retryable);
     }
 
     private Set<ModelCapability> withBase(Set<ModelCapability> base, Set<ModelCapability> requiredCapabilities) {
@@ -102,8 +107,14 @@ public final class RoutingModelGateway implements ModelGateway {
                 .sorted(Comparator.comparingLong(endpoint -> endpoint.profile().relativeCost())).toList();
     }
 
-    private RuntimeException unavailable(RuntimeException lastFailure) {
-        if (lastFailure == null) return new ModelUnavailableException("no healthy model supports the required capabilities");
-        return new ModelUnavailableException("all eligible model providers failed", lastFailure);
+    private RuntimeException unavailable(RuntimeException lastFailure, boolean retryable) {
+        if (lastFailure == null) return new ModelUnavailableException("no healthy model supports the required capabilities", true, null);
+        return new ModelUnavailableException("all eligible model providers failed", retryable, lastFailure);
+    }
+
+    private boolean retryable(RuntimeException failure) {
+        if (failure instanceof ModelProviderException providerFailure) return providerFailure.retryable();
+        if (failure instanceof ModelUnavailableException unavailable) return unavailable.retryable();
+        return true;
     }
 }

@@ -8,6 +8,7 @@ import com.systemdesign.chatgpt.conversation.domain.ModelProfile;
 import com.systemdesign.chatgpt.conversation.domain.ModelProviderException;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -41,6 +42,18 @@ class RoutingModelGatewayFailureSemanticsTest {
                 .isInstanceOf(ModelUnavailableException.class)
                 .satisfies(error -> org.assertj.core.api.Assertions.assertThat(
                         ((ModelUnavailableException) error).retryable()).isTrue());
+    }
+
+    @Test
+    void exhaustedRouteKeepsLongestProviderRetryAfter() {
+        RoutingModelGateway router = new RoutingModelGateway(List.of(
+                failing("one", 1, new ModelProviderException("rate limited", true, 429, Duration.ofSeconds(5))),
+                failing("two", 2, new ModelProviderException("overloaded", true, 503, Duration.ofSeconds(30)))));
+
+        assertThatThrownBy(() -> router.complete(messages))
+                .isInstanceOf(ModelUnavailableException.class)
+                .satisfies(error -> org.assertj.core.api.Assertions.assertThat(
+                        ((ModelUnavailableException) error).retryAfter()).isEqualTo(Duration.ofSeconds(30)));
     }
 
     private static ModelEndpoint failing(String model, long cost, RuntimeException failure) {

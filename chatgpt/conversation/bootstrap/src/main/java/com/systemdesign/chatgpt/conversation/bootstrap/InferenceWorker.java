@@ -1,8 +1,10 @@
 package com.systemdesign.chatgpt.conversation.bootstrap;
 
+import com.systemdesign.chatgpt.conversation.application.ModelUnavailableException;
 import com.systemdesign.chatgpt.conversation.application.ProcessGenerationHandler;
 import com.systemdesign.chatgpt.conversation.domain.ConversationTelemetry;
 import com.systemdesign.chatgpt.conversation.domain.InferenceJobQueue;
+import com.systemdesign.chatgpt.conversation.domain.ModelProviderException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -39,6 +41,12 @@ public final class InferenceWorker {
             telemetry.inferenceDelivery(job.attempt(),
                     result == ProcessGenerationHandler.ProcessResult.TERMINAL ? "terminal" : "completed");
         } catch (RuntimeException exception) {
+            if (!retryable(exception)) {
+                queue.deadLetter(job, exception.getMessage());
+                queue.acknowledge(delivery);
+                telemetry.inferenceDelivery(job.attempt(), "permanent_dead_lettered");
+                return;
+            }
             if (job.attempt() >= maxAttempts) {
                 queue.deadLetter(job, exception.getMessage());
                 queue.acknowledge(delivery);
@@ -55,5 +63,11 @@ public final class InferenceWorker {
             queue.acknowledge(delivery);
             telemetry.inferenceDelivery(job.attempt(), "retry_saturated");
         }
+    }
+
+    private boolean retryable(RuntimeException exception) {
+        if (exception instanceof ModelProviderException providerFailure) return providerFailure.retryable();
+        if (exception instanceof ModelUnavailableException unavailable) return unavailable.retryable();
+        return true;
     }
 }
